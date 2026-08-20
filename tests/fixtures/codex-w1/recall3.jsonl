@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"01a01eac-71a4-7752-9989-44fa2b5073cc"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Code Mode is unavailable because failed to spawn code-mode host C:\\Users\\Administrator\\.codex\\.sandbox-bin\\codex-code-mode-host.exe: host executable was not found. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`."}}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"ALPHA-77"}}
+{"type":"turn.completed","usage":{"input_tokens":38455,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":51,"reasoning_output_tokens":34}}

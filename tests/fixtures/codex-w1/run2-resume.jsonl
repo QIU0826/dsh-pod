@@ -1,0 +1,13 @@
+codex.exe : Reading additional input from stdin...
+At line:1 char:177
++ ... \codex-w1"; & "C:\Users\Administrator\.codex\.sandbox-bin\codex.exe"  ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Reading additional input from stdin...:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+{"type":"thread.started","thread_id":"01a01ea8-430e-74c0-b916-144378f29ba7"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Code Mode is unavailable because failed to spawn code-mode host C:\\Users\\Administrator\\.codex\\.sandbox-bin\\codex-code-mode-host.exe: host executable was not found. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`."}}
+{"type":"item.completed","item":{"id":"item_1","type":"error","message":"Exceeded skills context budget. All skill descriptions were removed and 11 additional skills were not included in the model-visible skills list."}}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"</multi_agent_mode>"}}
+{"type":"turn.completed","usage":{"input_tokens":11393,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":0}}

@@ -281,7 +281,19 @@ export interface WorkerBackend {
     session_tiers: SessionTier[]
     error?: string
   }>
-  start(slot: AgentSlot, task: Task, worktree: string): Promise<WorkerHandle>
+  /**
+   * 启动一次任务进程。进度事件从进程首行即开始订阅（进程式 worker 无法事后补订）。
+   * 完成信号 = 进程退出码 + 结构化输出判定（不猜；result.is_error 优先于退出码）。
+   */
+  start(
+    slot: AgentSlot,
+    task: Task,
+    worktree: string,
+    callbacks?: {
+      onProgress?(event: WorkerProgressEvent): void
+      onExit?(completion: WorkerCompletion): void
+    },
+  ): Promise<WorkerHandle>
   kill(handle: WorkerHandle): Promise<void>
 }
 

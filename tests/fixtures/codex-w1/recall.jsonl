@@ -1,0 +1,13 @@
+codex.exe : error: unexpected argument '--color' found
+At line:1 char:625
++ ... EAD: $tid"; & "C:\Users\Administrator\.codex\.sandbox-bin\codex.exe"  ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (error: unexpect...'--color' found:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+  tip: a similar argument exists: '--yolo'
+
+Usage: codex exec resume --json --dangerously-bypass-approvals-and-sandbox <SESSION_ID> <PROMPT>
+
+For more information, try '--help'.

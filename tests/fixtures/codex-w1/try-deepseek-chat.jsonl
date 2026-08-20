@@ -1,0 +1,7 @@
+claude.exe : Error: When using --print, --output-format=stream-json requires --verbose
+At D:\nodejs\claude.ps1:14 char:3
++   & "$basedir/node_modules/@anthropic-ai/claude-code/bin/claude.exe"  ...
++   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Error: When usi...uires --verbose:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
