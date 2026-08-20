@@ -18,8 +18,8 @@ import {
   InvalidTransitionError,
   NotFoundError,
   VerificationError,
-} from './errors'
-import type { PodStore } from './store'
+} from './errors.js'
+import type { PodStore } from './store.js'
 import type {
   AgentSlot,
   FaultKind,
@@ -27,8 +27,8 @@ import type {
   PodEvent,
   Task,
   TaskStatus,
-} from './types'
-import { RATE_LIMIT_BACKOFF_BASE_MS, RATE_LIMIT_BACKOFF_MAX_MS } from './types'
+} from './types.js'
+import { RATE_LIMIT_BACKOFF_BASE_MS, RATE_LIMIT_BACKOFF_MAX_MS } from './types.js'
 
 export interface FaultInfo {
   kind: FaultKind

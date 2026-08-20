@@ -265,8 +265,13 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
   const isRepo = exists(join(cwd, '.git')) || (await runner.run('git', ['rev-parse', '--is-inside-work-tree'], { cwd })).code === 0
   add('git-repo', '目标 cwd 是 git 仓库（可建 worktree）', isRepo ? 'ok' : 'fail', isRepo ? cwd : `${cwd} is not a git repo (guide git init or disable Pod)`)
 
-  // [7] 磁盘空间 > 1GB
-  const free = freeBytes(cwd)
+  // [7] 磁盘空间 > 1GB。磁盘读取本质可失败（含注入源），异常一律兜底为 0 → fail，绝不击穿探测。
+  let free: number
+  try {
+    free = freeBytes(cwd)
+  } catch {
+    free = 0
+  }
   add('disk', '磁盘空间 > 1GB（worktree 余量）', free > MIN_FREE_BYTES ? 'ok' : 'fail', `${(free / 1024 ** 3).toFixed(1)} GB free`)
 
   // [8] 换行符策略（D4/3.7：.gitattributes + core.autocrlf）

@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { HandoffValidationError, NotFoundError } from '../src/core/errors'
-import { JsonStore } from '../src/core/store'
-import { buildHandoff, planDelivery, validateHandoffPayload } from '../src/core/handoff'
-import type { AgentSlot, HandoffPayload, Mission, Task } from '../src/core/types'
+import { HandoffValidationError, NotFoundError } from '../src/core/errors.js'
+import { JsonStore } from '../src/core/store.js'
+import { buildHandoff, planDelivery, validateHandoffPayload } from '../src/core/handoff.js'
+import type { AgentSlot, HandoffPayload, Mission, Task } from '../src/core/types.js'
 
 let root: string
 let store: JsonStore

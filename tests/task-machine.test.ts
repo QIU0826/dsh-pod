@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { InvalidTransitionError, InvalidReportError, NotFoundError } from '../src/core/errors'
-import { JsonStore } from '../src/core/store'
-import { TaskMachine, classifyFault } from '../src/core/task-machine'
-import type { TaskVerifyFn } from '../src/core/task-machine'
-import type { AgentSlot, Mission, MissionReport, Task } from '../src/core/types'
+import { InvalidTransitionError, InvalidReportError, NotFoundError } from '../src/core/errors.js'
+import { JsonStore } from '../src/core/store.js'
+import { TaskMachine, classifyFault } from '../src/core/task-machine.js'
+import type { TaskVerifyFn } from '../src/core/task-machine.js'
+import type { AgentSlot, Mission, MissionReport, Task } from '../src/core/types.js'
 
 let root: string
 let store: JsonStore

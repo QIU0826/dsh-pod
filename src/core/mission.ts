@@ -14,10 +14,10 @@
  * DoD-11：recover 从磁盘重建 mission + pending 审批卡，跨重启无内存态依赖。
  */
 
-import { InvalidTransitionError, NotFoundError } from './errors'
-import type { ApprovalEngine } from './approvals'
-import type { PodStore } from './store'
-import type { ApprovalRequest, Mission, MissionStatus } from './types'
+import { InvalidTransitionError, NotFoundError } from './errors.js'
+import type { ApprovalEngine } from './approvals.js'
+import type { PodStore } from './store.js'
+import type { ApprovalRequest, Mission, MissionStatus } from './types.js'
 
 export interface MissionMachineOptions {
   clock?: () => number

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { Watchdog } from '../src/core/watchdog'
+import { Watchdog } from '../src/core/watchdog.js'
 
 const T0 = 1_700_000_000_000
 
@@ -54,5 +54,24 @@ describe('Watchdog（3.3 节 commander 健康 + 3.4 节任务空闲/墙钟，纯
     const instance = new Watchdog({ clock: () => T0 })
     expect(instance.thresholdMs('commander')).toBe(5 * 60_000)
     expect(instance.thresholdMs('task-idle')).toBe(15 * 60_000)
+  })
+
+  it('pauseAll 幂等；未挂起时 resumeAll 是安全 no-op；tick 按 deadline 排序返回', () => {
+    let current = T0
+    const watchdog = new Watchdog({ clock: () => current })
+    watchdog.pauseAll()
+    watchdog.pauseAll() // 幂等：不重复累计挂起时长
+    current = T0 + 1000
+    watchdog.resumeAll()
+    watchdog.resumeAll() // 未挂起时 no-op
+    watchdog.arm({ key: 'b', kind: 'task-idle', mission_id: 'M-1', task_id: 'T-b', deadline: T0 + 2000 })
+    watchdog.arm({ key: 'a', kind: 'task-wall-clock', mission_id: 'M-1', task_id: 'T-a', deadline: T0 + 1500 })
+    const fired = watchdog.tick(T0 + 3000)
+    expect(fired.map((f) => f.key)).toEqual(['a', 'b'])
+  })
+
+  it('faultFor：空闲 → idle_timeout，墙钟 → wall_clock（3.4 节故障表映射）', () => {
+    expect(Watchdog.faultFor('task-idle')).toBe('idle_timeout')
+    expect(Watchdog.faultFor('task-wall-clock')).toBe('wall_clock')
   })
 })

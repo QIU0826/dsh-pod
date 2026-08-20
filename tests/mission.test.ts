@@ -2,12 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { InvalidTransitionError, NotFoundError } from '../src/core/errors'
-import { ApprovalEngine } from '../src/core/approvals'
-import { JsonStore } from '../src/core/store'
-import { MissionMachine } from '../src/core/mission'
-import type { AgentSlot, Mission, Task } from '../src/core/types'
-import { APPROVAL_STALE_MS } from '../src/core/types'
+import { InvalidTransitionError, NotFoundError } from '../src/core/errors.js'
+import { ApprovalEngine } from '../src/core/approvals.js'
+import { JsonStore } from '../src/core/store.js'
+import { MissionMachine } from '../src/core/mission.js'
+import type { AgentSlot, Mission, Task } from '../src/core/types.js'
+import { APPROVAL_STALE_MS } from '../src/core/types.js'
 
 let root: string
 let store: JsonStore

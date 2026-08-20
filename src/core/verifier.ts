@@ -13,10 +13,10 @@
 
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { isAbsolute, join } from 'node:path'
+import { isAbsolute, join, normalize, sep } from 'node:path'
 import { promisify } from 'node:util'
-import type { TaskVerifyResult } from './task-machine'
-import type { MissionReport, Task } from './types'
+import type { TaskVerifyResult } from './task-machine.js'
+import type { MissionReport, Task } from './types.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -57,14 +57,19 @@ export function execGitClient(): GitClient {
 
 /**
  * 路径白名单：只允许白名单根（worktree 根）之内的相对路径。
- * 拒绝 ..、绝对路径、盘符路径（Windows 专项）。
+ * 语法层拒绝 ..、绝对路径、盘符路径（Windows 专项）；
+ * 解析层纵深防御：join+normalize 后必须仍在根内（防拼接绕过）。
  */
 export function makePathWhitelist(worktreeRoot: string): (relPath: string) => boolean {
+  const rootResolved = normalize(worktreeRoot)
   return (relPath: string): boolean => {
     if (relPath.includes('..')) return false
     if (relPath.startsWith('/') || relPath.startsWith('\\')) return false
     if (/^[a-zA-Z]:/.test(relPath)) return false
-    return relPath.length > 0
+    if (relPath.length === 0) return false
+    const resolved = normalize(join(rootResolved, relPath))
+    if (resolved !== rootResolved && !resolved.startsWith(rootResolved + sep)) return false
+    return true
   }
 }
 

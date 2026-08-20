@@ -10,9 +10,9 @@
  * （transient|per-mission|auto-reset）→ planDelivery 的六种确定性动作。
  */
 
-import { HandoffValidationError, NotFoundError } from './errors'
-import type { PodStore } from './store'
-import type { AgentSlot, Handoff, HandoffMode, HandoffPayload, SessionTier } from './types'
+import { HandoffValidationError, NotFoundError } from './errors.js'
+import type { PodStore } from './store.js'
+import type { AgentSlot, Handoff, HandoffMode, HandoffPayload, SessionTier } from './types.js'
 
 /** 已知可检查物清单（附录 B verify 字段；未知检查项 fail-closed）。 */
 export const KNOWN_VERIFY_CHECKS: ReadonlySet<string> = new Set([

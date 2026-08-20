@@ -10,8 +10,8 @@ import {
   makePathWhitelist,
   verifyTaskArtifacts,
   verifyToolCalls,
-} from '../src/core/verifier'
-import type { MissionReport, Task } from '../src/core/types'
+} from '../src/core/verifier.js'
+import type { MissionReport, Task } from '../src/core/types.js'
 
 const now = 1_700_000_000_000
 

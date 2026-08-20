@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { JsonStore } from '../src/core/store'
-import { routeTask } from '../src/core/dispatcher'
-import { buildResetSummary, estimateCtxUsage, needsAutoReset, tierDefaults } from '../src/core/session-tiers'
-import type { AgentSlot, Task } from '../src/core/types'
-import { CTX_RESET_THRESHOLD_PCT } from '../src/core/types'
+import { JsonStore } from '../src/core/store.js'
+import { routeTask } from '../src/core/dispatcher.js'
+import { buildResetSummary, estimateCtxUsage, needsAutoReset, tierDefaults } from '../src/core/session-tiers.js'
+import type { AgentSlot, Task } from '../src/core/types.js'
+import { CTX_RESET_THRESHOLD_PCT } from '../src/core/types.js'
 
 const now = 1_700_000_000_000
 

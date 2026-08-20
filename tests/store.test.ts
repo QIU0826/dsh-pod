@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DuplicateIdError, NotFoundError, StoreCorruptError } from '../src/core/errors'
-import { JsonStore } from '../src/core/store'
-import type { Mission } from '../src/core/types'
+import { DuplicateIdError, NotFoundError, StoreCorruptError } from '../src/core/errors.js'
+import { JsonStore } from '../src/core/store.js'
+import type { Mission } from '../src/core/types.js'
 
 let root: string
 let clockNow: number

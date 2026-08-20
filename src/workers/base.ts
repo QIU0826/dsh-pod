@@ -10,4 +10,4 @@ export type {
   WorkerExit,
   WorkerHandle,
   WorkerProgressEvent,
-} from '../core/types'
+} from '../core/types.js'

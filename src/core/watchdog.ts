@@ -11,8 +11,8 @@
  * 挂起期间的时间不计入 deadline（顺延）。
  */
 
-import type { FaultKind } from './types'
-import { COMMANDER_WATCHDOG_MS, DEFAULT_MAX_WALL_CLOCK_MS, TASK_IDLE_WATCHDOG_MS } from './types'
+import type { FaultKind } from './types.js'
+import { COMMANDER_WATCHDOG_MS, DEFAULT_MAX_WALL_CLOCK_MS, TASK_IDLE_WATCHDOG_MS } from './types.js'
 
 export type WatchdogKind = 'commander' | 'task-idle' | 'task-wall-clock'
 

@@ -11,10 +11,10 @@
  * CR-01-7：审批卡有处理期限（默认 7 天），超期标记 stale，由 mission 层自动 pause。
  */
 
-import { ApprovalConflictError, NotFoundError, UnsupportedError } from './errors'
-import type { PodStore } from './store'
-import type { ApprovalRequest, Mission } from './types'
-import { APPROVAL_STALE_MS } from './types'
+import { ApprovalConflictError, NotFoundError, UnsupportedError } from './errors.js'
+import type { PodStore } from './store.js'
+import type { ApprovalRequest, Mission } from './types.js'
+import { APPROVAL_STALE_MS } from './types.js'
 
 export interface ApprovalPatch {
   slot_id: string

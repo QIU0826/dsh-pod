@@ -1,0 +1,11 @@
+# dsh-pod bundle patch: inserts the dual-face plugin row into the profile
+# roster. Applied as a profile bundle layer (the `dsh.bundle.patch` manifest
+# field); activate with `dsh plugin --profile <name> add link:<path-to-dsh-pod>`.
+#
+# The row is a bare plugin by package name: the node half (exports ".") runs
+# in the host process (Pod runtime, /api/dsh-pod routes, later pod_* tools),
+# and the `dsh.client` declaration in package.json makes the browser half
+# (exports "./client", served at /plugins/<id>/client.js) load in the web GUI.
+- insert:
+    - id: pod
+      name: 'dsh-pod'

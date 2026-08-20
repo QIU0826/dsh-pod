@@ -9,9 +9,9 @@
  * 原始对话永不持久化进 commander 上下文：任务层原始日志只落磁盘与 Canvas。
  */
 
-import type { PodStore } from './store'
-import type { AgentSlot, SessionTier, Vendor } from './types'
-import { CTX_RESET_THRESHOLD_PCT } from './types'
+import type { PodStore } from './store.js'
+import type { AgentSlot, SessionTier, Vendor } from './types.js'
+import { CTX_RESET_THRESHOLD_PCT } from './types.js'
 
 /** 默认档位（2.3 节⑤ / O7）。 */
 export function tierDefaults(vendor: Vendor): SessionTier {

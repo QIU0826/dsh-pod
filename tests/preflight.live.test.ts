@@ -5,7 +5,7 @@
  * 常规 CI/单测不运行（不依赖机器环境，保持确定性）。
  */
 import { describe, expect, it } from 'vitest'
-import { execCommandRunner, runPreflight } from '../src/workers/preflight'
+import { execCommandRunner, runPreflight } from '../src/workers/preflight.js'
 
 const live = process.env.POD_LIVE_PREFLIGHT === '1'
 

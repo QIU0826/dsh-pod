@@ -8,7 +8,7 @@
  * 故障态槽位（error/stopped/rate_limited/waiting_approval）不可路由（3.4 节）。
  */
 
-import type { AgentSlot, Task } from './types'
+import type { AgentSlot, Task } from './types.js'
 
 /** 不可接受新任务的槽位状态。 */
 const UNAVAILABLE_STATUSES: ReadonlySet<AgentSlot['status']> = new Set([

@@ -4,7 +4,7 @@
  * DSH 重启时孤儿进程扫描清理（孤儿判定见 3.2 节）。
  */
 
-import { PodError } from '../core/errors'
+import { PodError } from '../core/errors.js'
 
 export interface RegistryEntry {
   pid: number

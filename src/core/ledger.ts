@@ -10,9 +10,9 @@
  * 二次价值：token 异常消耗 = 任务切分不当/agent 打转信号，进 Debrief。
  */
 
-import { BudgetExceededError, NotFoundError, PodError } from './errors'
-import type { PodStore } from './store'
-import type { LedgerEntry, Mission, UsageSource } from './types'
+import { BudgetExceededError, NotFoundError, PodError } from './errors.js'
+import type { PodStore } from './store.js'
+import type { LedgerEntry, Mission, UsageSource } from './types.js'
 
 export interface PriceTable {
   version: string

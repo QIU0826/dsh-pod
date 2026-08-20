@@ -19,7 +19,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { join } from 'node:path'
-import { DuplicateIdError, NotFoundError, StoreCorruptError } from './errors'
+import { DuplicateIdError, NotFoundError, StoreCorruptError } from './errors.js'
 import type {
   AgentSlot,
   ApprovalRequest,
@@ -28,7 +28,7 @@ import type {
   Mission,
   PodEvent,
   Task,
-} from './types'
+} from './types.js'
 
 export const SCHEMA_VERSION = 1
 

@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ApprovalConflictError, NotFoundError, UnsupportedError } from '../src/core/errors'
-import { JsonStore } from '../src/core/store'
-import { ApprovalEngine } from '../src/core/approvals'
-import type { Mission } from '../src/core/types'
-import { APPROVAL_STALE_MS } from '../src/core/types'
+import { ApprovalConflictError, NotFoundError, UnsupportedError } from '../src/core/errors.js'
+import { JsonStore } from '../src/core/store.js'
+import { ApprovalEngine } from '../src/core/approvals.js'
+import type { Mission } from '../src/core/types.js'
+import { APPROVAL_STALE_MS } from '../src/core/types.js'
 
 let root: string
 let store: JsonStore

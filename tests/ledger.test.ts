@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { BudgetExceededError, PodError } from '../src/core/errors'
-import { JsonStore } from '../src/core/store'
-import { DEFAULT_PRICE_TABLE, Ledger } from '../src/core/ledger'
-import type { Mission, PriceTable } from '../src/core/ledger'
-import type { UsageSource } from '../src/core/types'
+import { BudgetExceededError, PodError } from '../src/core/errors.js'
+import { JsonStore } from '../src/core/store.js'
+import { DEFAULT_PRICE_TABLE, Ledger } from '../src/core/ledger.js'
+import type { PriceTable } from '../src/core/ledger.js'
+import type { Mission, UsageSource } from '../src/core/types.js'
 
 let root: string
 let store: JsonStore
