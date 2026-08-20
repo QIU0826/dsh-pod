@@ -1,0 +1,5 @@
+# CRLF 治理（方案书 D4/3.7 节）：worktree 级 .gitattributes，防止 Windows 换行符造成虚假 diff
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
