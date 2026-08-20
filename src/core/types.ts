@@ -182,10 +182,12 @@ export interface LedgerEntry {
   ts: number
   tokens_in: number
   tokens_out: number
-  /** 等效美元（估算）。 */
+  /** 等效美元（估算）。价目表无该模型时为 0，UI 依据 price_known 标注「无价目」。 */
   equiv_usd: number
   /** 价目表版本号（D7：估算必须标注版本）。 */
   price_table_version: string
+  /** 该模型在价目表中有条目（诚实化：未知模型不编造价格）。 */
+  price_known: boolean
   usage_source: UsageSource
 }
 
