@@ -11,9 +11,12 @@
 | 切片 | 状态 | 产物 |
 |---|---|---|
 | W0 仓库骨架 + 插件注册 + Store 决策（JSON 原子写回退） | ✅ | 本仓库；`/api/dsh-pod/ping` 健康路由 |
-| W1 WorkerBackend 抽象 + codex 验证 + claude 打通 | 🔶 抽象就绪 | codex 本机未安装（CR-01-0），CLI 打通待装后补测 |
+| W1 WorkerBackend 抽象 + codex 验证 + claude 打通 | ✅ 机制层 | `src/workers/claude-headless.ts` / `codex-headless.ts`；codex exec resume 跨进程记忆实证（夹具留档）；claude stream-json/报告/故障分类（result.is_error 优先于退出码）；CR-02 见方案书 |
 | W2 交接协议 + Task 状态机 + Verifier + 核心域层全量 | ✅ | `src/core/*`，全量单测 |
 | W3 Team Builder / W4 Canvas / W5 审批+worktree+账本 UI / W6 Bake-off | ⬜ | 待开发（界面切片） |
+
+> 环境注意（CR-02-6）：本机 claude 的第三方路由模型目录与 settings.json 配置不匹配（实测 404），
+> claude 真实任务运行需先确认可用模型名；codex 已装已登录可直接用（CR-02-1/2）。
 
 ## 安装与挂载（沿 dsh-ssh 实证模式，零源码改动）
 
