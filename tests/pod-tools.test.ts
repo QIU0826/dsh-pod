@@ -9,7 +9,7 @@ function fakeService() {
     status: vi.fn(() => ({ tasks: [], pendingApprovals: [] })),
     dispatchNext: vi.fn(async () => true),
     steer: vi.fn(),
-    approve: vi.fn(),
+    approve: vi.fn(async () => ({ ok: true, mergeCommit: 'abc123456789' })),
     deny: vi.fn(),
     abort: vi.fn(),
     waitRun: vi.fn(() => undefined),
@@ -87,14 +87,30 @@ describe('工具薄壳行为（副作用全部走 PodService）', () => {
     expect(service.deny).not.toHaveBeenCalled()
   })
 
-  it('pod_approve approve → 调用服务（合并属 W5 的提示如实返回）', async () => {
+  it('pod_approve approve → 调用服务并回报合并结果（W5 合并已接入）', async () => {
     const service = fakeService()
     const { tools } = makePodTools(service)
     const approve = tools[5]!
     const result = await run(approve, { approval_id: 'A-1', decision: 'approve' })
     expect(result.decided).toBe(true)
     expect(service.approve).toHaveBeenCalledWith('A-1', 'user')
-    expect(result.message).toContain('W5')
+    expect(result.message).toContain('合并回主树')
+    expect(result.message).toContain('abc12345')
+  })
+
+  it('pod_approve 合并冲突 → decided=false 且主树未动提示', async () => {
+    const service = fakeService()
+    ;(service.approve as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: false,
+      conflict: true,
+      message: 'CONFLICT (content): Merge conflict in a.txt',
+    })
+    const { tools } = makePodTools(service)
+    const approve = tools[5]!
+    const result = await run(approve, { approval_id: 'A-1', decision: 'approve' })
+    expect(result.decided).toBe(false)
+    expect(result.message).toContain('主树未动')
+    expect(result.message).toContain('a.txt')
   })
 
   it('pod_steer 排队指令；pod_dispatch 手动派发；pod_abort 透传原因', async () => {

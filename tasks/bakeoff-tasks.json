@@ -1,0 +1,42 @@
+{
+  "small-1": {
+    "title": "pod-demo-repo：新增 multiply 工具函数",
+    "repo": "D:/玩具/pod-demo-repo",
+    "spec": "在 src/util.ts 新增导出函数 multiply(a: number, b: number): number（纯乘法），并在 example.md 补充用法示例。完成后 git commit（message 含 task-T-1）并输出 MISSION_REPORT。",
+    "skill_tags": ["编码"],
+    "size": "small",
+    "est_minutes": 30
+  },
+  "small-2": {
+    "title": "dsh-pod：SessionTier 三档的文档注释与常量测试",
+    "repo": "D:/玩具/dsh-pod",
+    "spec": "为 src/core/types.ts 中 SessionTier 类型与 DEFAULT_SESSION_TIERS 常量补充准确的中文文档注释，并新增 tests/session-tiers-doc.test.ts 验证三档语义（transient/per-mission/auto-reset）的常量断言。运行 npm test 后提交（message 含 task-T-1）。",
+    "skill_tags": ["编码", "测试"],
+    "size": "small",
+    "est_minutes": 30
+  },
+  "medium-1": {
+    "title": "dsh-pod：账本汇总按任务维度聚合",
+    "repo": "D:/玩具/dsh-pod",
+    "spec": "扩展 src/core/ledger.ts 的 summary()：新增 byTask 聚合（每个 task_id 的 tokens/equiv_usd/entries），补全单测覆盖按任务聚合与空账本边界，npm test 全绿后提交（message 含 task-T-1）。",
+    "skill_tags": ["编码", "测试"],
+    "size": "medium",
+    "est_minutes": 90
+  },
+  "medium-2": {
+    "title": "dsh-pod：dispatcher 路由因子补全（历史成功率位）",
+    "repo": "D:/玩具/dsh-pod",
+    "spec": "src/core/dispatcher.ts 的路由因子目前为能力>负载>成本。新增第四个因子「历史成功率」（读取 slot 的历史 done/attempts 统计，缺省视为 0.5），保持现有测试全绿并新增覆盖新因子的路由单测，提交（message 含 task-T-1）。",
+    "skill_tags": ["编码"],
+    "size": "medium",
+    "est_minutes": 90
+  },
+  "long-1": {
+    "title": "dsh-pod：Store 的 SQLite 适配器（可替换实现验证）",
+    "repo": "D:/玩具/dsh-pod",
+    "spec": "按方案书 3.9 节 O12：实现 PodStore 接口的 SQLite 实现（node:sqlite），MIGRATIONS 迁移表接入 v1 JSON 数据，全量 store 测试参数化跑双后端（JSON + SQLite），README 记录切换方式。任务可拆分为：A 接口对齐+建表 / B 迁移逻辑 / C 测试参数化 / D 文档（本任务为拆分后的整体目标，单 agent 完成）。",
+    "skill_tags": ["编码", "测试", "文档"],
+    "size": "long",
+    "est_minutes": 180
+  }
+}

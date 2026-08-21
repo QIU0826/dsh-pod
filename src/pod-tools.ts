@@ -286,11 +286,19 @@ export function makePodTools(service: PodService): PodToolBundle {
         }
         try {
           if (args.decision === 'approve') {
-            service.approve(args.approval_id, args.by ?? 'user')
-          } else {
-            service.deny(args.approval_id, args.by ?? 'user', args.reason!)
+            const result = await service.approve(args.approval_id, args.by ?? 'user')
+            if (!result.ok) {
+              return {
+                decided: false,
+                message: result.conflict
+                  ? `合并冲突，主树未动（已 abort）：${result.message.slice(0, 300)}。请解决冲突或驳回后重新派发。`
+                  : `合并失败：${result.message}`,
+              }
+            }
+            return { decided: true, message: `审批卡 ${args.approval_id} 已批准并合并回主树（merge ${result.mergeCommit.slice(0, 8)}）` }
           }
-          return { decided: true, message: `审批卡 ${args.approval_id} 已 ${args.decision === 'approve' ? '批准' : '驳回'}（合并执行属 W5 apply_patch）` }
+          service.deny(args.approval_id, args.by ?? 'user', args.reason!)
+          return { decided: true, message: `审批卡 ${args.approval_id} 已驳回（mission 回到 running，可补任务重跑）` }
         } catch (error) {
           return { decided: false, message: error instanceof Error ? error.message : String(error) }
         }

@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync } from 'node:fs'
 import { ApprovalEngine } from './core/approvals.js'
+import { ApplyPatch, execGitRunner, type ApplyResult } from './core/apply-patch.js'
 import { MissionOrchestrator, type LaunchInput, type PlanTaskInput, type RunSummary } from './core/orchestrator.js'
 import { execGitClient, verifyTaskArtifacts } from './core/verifier.js'
 import type { JsonStore } from './core/store.js'
@@ -155,8 +156,18 @@ export class PodService {
     this.requireOrchestrator().steer(slotId, instruction)
   }
 
-  approve(approvalId: string, by: string): void {
-    this.requireOrchestrator().approve(approvalId, by)
+  approve(approvalId: string, by: string): Promise<ApplyResult> {
+    const orch = this.requireOrchestrator()
+    const approval = this.store.getApproval(approvalId)
+    if (approval === undefined) {
+      return Promise.resolve({ ok: false, conflict: false, message: `approval not found: ${approvalId}` })
+    }
+    // apply_patch 单入口（3.3 节不变量 3）：合并成功才裁决 mission done；冲突保持 awaiting_approval
+    const applyPatch = new ApplyPatch({ store: this.store, git: execGitRunner() })
+    return applyPatch.apply(approval.mission_id, approval).then((result) => {
+      if (result.ok) orch.approve(approvalId, by)
+      return result
+    })
   }
 
   deny(approvalId: string, by: string, reason: string): void {
