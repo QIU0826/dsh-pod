@@ -173,9 +173,9 @@ export interface TaskPromptOptions {
 
 const REPORT_SCHEMA_HINT = `## MISSION_REPORT（必须输出，JSON）
 {
-  "task_id": "<id>", "task_type": "implement", "status": "done | blocked | need_clarify",
+  "task_id": "<id>", "task_type": "<任务类型>", "status": "done | blocked | need_clarify",
   "summary": "≤5 句事实陈述（禁止成功叙事）", "files_changed": ["相对 worktree 根的路径"],
-  "commit_sha": "<40位 sha>", "diff_path": "out/task-<id>.diff", "test_command": "npm test",
+  "commit_sha": "<40位 sha，非写码任务可省略>", "diff_path": "out/task-<id>.diff", "test_command": "npm test",
   "test_result": "pass | fail | not_run", "test_evidence": "12/12 ✓（输出路径 out/task-<id>.testlog）",
   "decisions": [], "blockers": [], "questions": [], "usage": { "tokens_in": 0, "tokens_out": 0 }
 }`
@@ -198,6 +198,8 @@ export function buildTaskPrompt(options: TaskPromptOptions): string {
       '## 审查任务（最小上下文原则）',
       '你只收到 diff（commit 区间）+ 规格 + 测试输出，刻意排除实现者推理叙事。',
       '结论只能是 pass（附一句最关键确认点）或 fail（逐条可复现的 blocking 问题）。',
+      '审查不产生代码变更：不 commit、不改文件；files_changed 填 []，commit_sha 省略。',
+      '报告 status 用 done（结论 pass）或 blocked（结论 fail，blockers 逐条列出）。',
       '',
     )
   }
@@ -217,7 +219,11 @@ export function buildTaskPrompt(options: TaskPromptOptions): string {
       '',
     )
   }
-  parts.push(COMMIT_DISCIPLINE.replace('<task_id>', task.id), '', REPORT_SCHEMA_HINT)
+  parts.push(
+    COMMIT_DISCIPLINE.replace('<task_id>', task.id),
+    '',
+    REPORT_SCHEMA_HINT.replace('<任务类型>', task.type),
+  )
   return parts.filter((line) => line !== undefined).join('\n')
 }
 
@@ -241,6 +247,8 @@ export interface SpawnedClaude {
   onLine(line: string): void
   /** 进程退出（code/signal/timedOut）。 */
   exited: Promise<{ code: number | null; signal: string | null; timedOut: boolean }>
+  /** prompt 经 stdin 注入（短固定 argv，无引号/长度风险）。 */
+  writeStdin(text: string): void
 }
 
 export interface ClaudeBackendOptions {
@@ -255,11 +263,17 @@ export interface ClaudeBackendOptions {
    * 实现「不同员工不同模型/提供商」而不改写全局 settings.json。
    */
   envForSlot?: (slot: AgentSlot) => Record<string, string>
+  /** --allowedTools 进程白名单（3.8 节三道防线之一），每次 start 统一注入。 */
+  allowedTools?: string[]
 }
 
-/** 组装 claude -p 参数（3.2 节后端对照表的 v2 增强全集）。 */
+/**
+ * 组装 claude -p 参数（3.2 节后端对照表的 v2 增强全集）。
+ * prompt 不进 argv：经 stdin 管道注入（Windows 专项：shell:true 下长中文 prompt
+ * 经 cmd /c 引号拼接会被破坏，且 argv 有 8191 字符上限——CR-02 新实证）。
+ */
 export function buildClaudeArgs(options: ClaudeStartOptions): string[] {
-  const args = ['-p', options.prompt, '--output-format', 'stream-json', '--verbose', '--include-partial-messages']
+  const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']
   if (options.model !== undefined) args.push('--model', options.model)
   if (options.sessionTier !== 'transient') {
     if (options.sessionRef !== undefined) args.push('--resume', options.sessionRef)
@@ -279,11 +293,13 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
   private readonly detectRunner: NonNullable<ClaudeBackendOptions['detectRunner']>
   private readonly clock: () => number
   private readonly envForSlot: ((slot: AgentSlot) => Record<string, string>) | undefined
+  private readonly allowedTools: string[] | undefined
 
   constructor(options: ClaudeBackendOptions = {}) {
     this.spawner = options.spawner
     this.clock = options.clock ?? (() => Date.now())
     this.envForSlot = options.envForSlot
+    this.allowedTools = options.allowedTools
     // 默认探测复用 preflight 的 shell-fallback runner（.cmd 包装器兼容）
     this.detectRunner = options.detectRunner ?? execCommandRunner
   }
@@ -325,9 +341,11 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
       sessionRef: slot.session_ref,
       newSessionId: needsNewSession ? randomUUID() : undefined,
       permissionMode: 'acceptEdits',
+      allowedTools: this.allowedTools,
     })
     const env = this.envForSlot !== undefined ? this.envForSlot(slot) : undefined
     const spawned = this.spawnClaude(args, worktree, env)
+    spawned.writeStdin(prompt)
     const handle: WorkerHandle = { pid: spawned.child.pid }
     const session = this.collect(slot, task, spawned, callbacks)
     session.then(({ sessionRef, completion }) => {
@@ -343,16 +361,20 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
       cwd,
       shell: process.platform === 'win32',
       windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
       env: env !== undefined ? { ...process.env, ...env } : process.env,
     })
-    // onLine 通过属性访问器路由进闭包：collect() 的赋值与 stdout 事件读同一个 handler。
+    // onLine 通过属性访问器路由进闭包：collect() 的赋值与 stdout/stderr 事件读同一个 handler。
     let lineHandler: (line: string) => void = () => {}
     const spawned = {
       child,
+      writeStdin(text: string) {
+        child.stdin?.write(text, 'utf8')
+        child.stdin?.end()
+      },
       exited: new Promise<{ code: number | null; signal: string | null; timedOut: boolean }>((resolve) => {
         let buffer = ''
-        child.stdout?.on('data', (chunk: Buffer) => {
+        const consume = (chunk: Buffer): void => {
           buffer += chunk.toString('utf8')
           let index: number
           while ((index = buffer.indexOf('\n')) >= 0) {
@@ -360,7 +382,10 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
             buffer = buffer.slice(index + 1)
             lineHandler(line)
           }
-        })
+        }
+        child.stdout?.on('data', consume)
+        // stderr 同流解析：钩子/提示行可容错跳过，错误行供分类（绝不静默丢弃）
+        child.stderr?.on('data', consume)
         const timer = setTimeout(() => {
           child.kill()
           resolve({ code: null, signal: null, timedOut: true })

@@ -182,7 +182,12 @@ describe('CodexHeadlessBackend（FakeSpawner 集成）', () => {
       spawner: (binary, args) => {
         captured.push(args)
         let sink: (line: string) => void = () => {}
-        const spawned = { pid: 777, kill: () => {}, exited: Promise.resolve({ code: 0, signal: null, timedOut: false }) }
+        const spawned = {
+          pid: 777,
+          kill: () => {},
+          writeStdin() {},
+          exited: Promise.resolve({ code: 0, signal: null, timedOut: false }),
+        }
         Object.defineProperty(spawned, 'onLine', {
           set(fn: (line: string) => void) {
             sink = fn
@@ -207,6 +212,7 @@ describe('CodexHeadlessBackend（FakeSpawner 集成）', () => {
     expect(handle.session_ref).toBe('thread-42')
     const args = captured[0]!
     expect(args[0]).toBe('exec')
+    expect(args[1]).toBe('-') // prompt 走 stdin（Windows 引号/长度专项）
     expect(args).toContain('--json')
     expect(args).toContain('--skip-git-repo-check')
     expect(args).toContain('read-only')
@@ -217,8 +223,9 @@ describe('CodexHeadlessBackend（FakeSpawner 集成）', () => {
     expect(completion?.report?.commit_sha).toBe('abc')
   })
 
-  it('start resume（per-mission + session_ref）：args 为 exec resume --json <thread> <prompt>', async () => {
+  it('start resume（per-mission + session_ref）：args 为 exec resume --json <thread> -（prompt 走 stdin）', async () => {
     const captured: string[][] = []
+    let stdinText = ''
     const backend = new CodexHeadlessBackend({
       clock: () => 1,
       spawner: (binary, args) => {
@@ -228,6 +235,9 @@ describe('CodexHeadlessBackend（FakeSpawner 集成）', () => {
           pid: 1,
           kill: () => {},
           onLine() {},
+          writeStdin: (text: string) => {
+            stdinText = text
+          },
           exited: Promise.resolve({ code: 0, signal: null, timedOut: false }),
         }
       },
@@ -235,12 +245,18 @@ describe('CodexHeadlessBackend（FakeSpawner 集成）', () => {
     const persistent: AgentSlot = { ...slot, session_tier: 'per-mission', session_ref: 'thread-9' }
     await backend.start(persistent, task, 'W')
     const args = captured[0]!
-    expect(args.slice(0, 5)).toEqual(['exec', 'resume', '--json', 'thread-9', expect.any(String)])
+    expect(args.slice(0, 5)).toEqual(['exec', 'resume', '--json', 'thread-9', '-'])
+    expect(stdinText).toContain('T-1')
   })
 
   it('kill 无 pid 的 handle 是安全 no-op', async () => {
     const backend = new CodexHeadlessBackend({
-      spawner: () => ({ kill: () => {}, onLine() {}, exited: Promise.resolve({ code: 0, signal: null, timedOut: false }) }),
+      spawner: () => ({
+        kill: () => {},
+        onLine() {},
+        writeStdin() {},
+        exited: Promise.resolve({ code: 0, signal: null, timedOut: false }),
+      }),
     })
     await expect(backend.kill({})).resolves.toBeUndefined()
   })

@@ -214,6 +214,32 @@ function makeOrchestrator(
   })
 }
 
+function makeOrchestratorWithDiff(
+  fixture: Fixture,
+  script: Record<string, { progress?: WorkerProgressEvent[]; completion?: WorkerCompletion; hang?: boolean }>,
+  missionId = 'M-1',
+) {
+  const backends: Record<string, FakeBackend> = {
+    claude: new FakeBackend('claude', script),
+    codex: new FakeBackend('codex', script),
+  }
+  fixture.backends = backends
+  return new MissionOrchestrator(missionId, {
+    store: fixture.store,
+    backends,
+    worktree: makeWorktreeManager(fixture),
+    clock: () => fixture.clockNow,
+    verify: async (task, report) => ({
+      ok: true,
+      commit_sha: report.commit_sha,
+      parent_sha: `${task.id}-parent`,
+      failures: [],
+      mismatch: false,
+    }),
+    diffProvider: async () => 'diff --git a/x.ts b/x.ts\n+export const add = (a, b) => a + b\n',
+  })
+}
+
 describe('launch（单 active mission / fan-out 上限 / 名册落盘）', () => {
   it('创建 mission 与 slots，事件流可见', () => {
     const orchestrator = makeOrchestrator(fixture, {})
@@ -390,6 +416,16 @@ describe('steer（CR-01-2：运行中指令排队为 micro-task）', () => {
     const started = fixture.backends.claude!.started[0]!
     expect(started.task.spec).toContain('加一层缓存')
     expect(fixture.store.listEvents('M-1').some((e) => e.kind === 'steer_queued')).toBe(true)
+  })
+
+  it('review 任务注入宿主机 diff 内容（CR-03：审查者无需仓库命令权限）', async () => {
+    const orchestrator = makeOrchestratorWithDiff(fixture, {})
+    orchestrator.launch(launchInput({ cwd: fixture.repo }))
+    orchestrator.createTasks(plan())
+    await orchestrator.run()
+    const review = fixture.backends.codex!.started.find((s) => s.task.type === 'review')!
+    expect(review.task.spec).toContain('被审 diff（宿主机注入，勿访问仓库）')
+    expect(review.task.spec).toContain('diff --git a/x.ts b/x.ts')
   })
 })
 

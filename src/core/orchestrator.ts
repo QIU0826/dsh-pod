@@ -97,7 +97,16 @@ export interface OrchestratorDeps {
   clock?: () => number
   verify?: TaskVerifyFn
   maxParallel?: number
+  /**
+   * review 任务的 diff 内容提供者（审查者最小上下文的强化实现，CR-03）：
+   * 宿主机侧读取 diff 并注入审查提示词，审查者无需仓库命令权限即可独立审查。
+   * 未提供时保持指针式交接（审查者自行读取）。
+   */
+  diffProvider?: (task: Task) => Promise<string>
 }
+
+/** 注入审查提示词的 diff 长度上限（超限截断并标注，防窗口爆炸）。 */
+export const MAX_REVIEW_DIFF_CHARS = 120_000
 
 interface WakeLatch {
   fired: boolean
@@ -116,6 +125,7 @@ export class MissionOrchestrator {
   private readonly watchdog: Watchdog
   private readonly missionId: string
   private readonly maxParallel: number
+  private readonly diffProvider: ((task: Task) => Promise<string>) | undefined
   private readonly handles = new Map<string, WorkerHandle>()
   private readonly queuedSteer = new Map<string, string[]>()
   private readonly wakeLatch: WakeLatch = { fired: false }
@@ -128,6 +138,7 @@ export class MissionOrchestrator {
     this.worktree = deps.worktree
     this.clock = deps.clock ?? (() => Date.now())
     this.maxParallel = deps.maxParallel ?? MAX_PARALLEL_TASKS
+    this.diffProvider = deps.diffProvider
     this.approvals = new ApprovalEngine(this.store, { clock: this.clock })
     this.ledger = new Ledger(this.store, { clock: this.clock })
     this.missionMachine = new MissionMachine(this.store, this.approvals, missionId, { clock: this.clock })
@@ -354,7 +365,8 @@ export class MissionOrchestrator {
       this.store.updateSlot(slot.id, { worktree_path: worktreePath })
     }
 
-    // review 最小上下文（2.5 节）：只给 diff 指针 + 规格，无实现者叙事
+    // review 最小上下文（2.5 节）：只给 diff 指针 + 规格，无实现者叙事；
+    // 有 diffProvider 时把 diff 内容直接注入（审查者无需仓库命令权限，CR-03）
     let spec = task.spec
     if (task.type === 'review') {
       const targets = task.depends_on.map((id) => this.store.getTask(id)).filter((t): t is Task => t !== undefined)
@@ -362,6 +374,12 @@ export class MissionOrchestrator {
         .map((t) => `${t.id}（${t.parent_sha ?? '?'}..${t.commit_sha ?? '?'}）`)
         .join('、')
       spec += `\n\n## 审查输入（最小上下文原则）\n审查对象：${diffRanges}\n仅审查该 diff + 规格 + 测试输出，刻意排除实现者推理叙事。\n规格：${targets.map((t) => `${t.id}: ${t.spec}`).join('；')}`
+      if (this.diffProvider !== undefined) {
+        const diffText = await this.diffProvider(task)
+        const truncated = diffText.length > MAX_REVIEW_DIFF_CHARS
+        const bounded = truncated ? diffText.slice(0, MAX_REVIEW_DIFF_CHARS) : diffText
+        spec += `\n\n## 被审 diff（宿主机注入，勿访问仓库）\n\`\`\`diff\n${bounded}\n\`\`\`${truncated ? '\n（diff 超长已截断；如需完整内容请以 need_clarify 说明）' : ''}`
+      }
     }
     // CR-01-2：steer 排队指令，本次派单必带（运行中指令落盘，不打断进程）
     const queued = this.queuedSteer.get(slot.id) ?? []

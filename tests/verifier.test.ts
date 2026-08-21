@@ -87,6 +87,20 @@ describe('checkReportCompleteness（附录 C schema 强制字段）', () => {
     const failures = checkReportCompleteness(doneReport({ test_result: 'not_run', test_evidence: undefined }))
     expect(failures).toEqual([])
   })
+  it('review 任务（非写码）：done 无 commit_sha、files 为空 → 零失败（CR-03 实证修正）', () => {
+    const reviewReport = doneReport({
+      commit_sha: undefined,
+      files_changed: [],
+      test_result: 'not_run',
+      test_evidence: undefined,
+      task_type: 'review',
+    })
+    const completeness = checkReportCompleteness(reviewReport, 'review')
+    expect(completeness).toEqual([])
+    const reviewTask = makeTask({ type: 'review' })
+    const narrative = checkNarrativeMatch(reviewTask, reviewReport)
+    expect(narrative).toEqual([])
+  })
   it('status 非法枚举 → 失败', () => {
     const failures = checkReportCompleteness(
       doneReport({ status: 'whatever' as MissionReport['status'] }),

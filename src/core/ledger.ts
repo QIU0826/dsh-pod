@@ -27,6 +27,8 @@ export const DEFAULT_PRICE_TABLE: PriceTable = {
     'claude-sonnet': { in: 3, out: 15 },
     'claude-opus': { in: 15, out: 75 },
     'deepseek-chat': { in: 0.27, out: 1.1 },
+    // 估算值（本机实测路由无公开价目，供等效成本展示；发布前需按当日公开价刷新版本号）
+    'deepseek-v4-pro': { in: 0.4, out: 1.6 },
     'codex-default': { in: 2.5, out: 10 },
     'unknown': { in: 0, out: 0 },
   },

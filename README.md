@@ -12,10 +12,10 @@
 |---|---|---|
 | W0 仓库骨架 + 插件注册 + Store 决策（JSON 原子写回退） | ✅ | 本仓库；`/api/dsh-pod/ping` 健康路由 |
 | W1 WorkerBackend 抽象 + codex 验证 + claude 打通 | ✅ 全链路 | `src/workers/claude-headless.ts` / `codex-headless.ts`；双后端跨进程会话连续性实证（claude --session-id/-r、codex exec resume，夹具留档 tests/fixtures/）；claude stream-json/报告/故障分类（result.is_error 优先于退出码）；CR-02 见方案书 |
-| W2 交接协议 + Task 状态机 + Verifier + 核心域层全量 | ✅ | `src/core/*`，全量单测 |
+| W2 交接协议 + 状态机 + Verifier + **Commander 编排器 + 最小可演示链** | ✅ | `src/core/orchestrator.ts`；`scripts/demo-chain.mjs` 真实跑通「claude 实现 → codex 独立 review → 审批卡」（CR-03-6） |
 | W3 Team Builder / W4 Canvas / W5 审批+worktree+账本 UI / W6 Bake-off | ⬜ | 待开发（界面切片） |
 
-> 环境注意（CR-02-6 已解除）：claude 已切至 api.deepseek.com/anthropic + deepseek-v4-pro，真实任务可跑；codex 已装已登录（CR-02-1/2）。
+> 环境注意（CR-02/03）：claude 已切至 api.deepseek.com/anthropic + deepseek-v4-pro；本机 codex = ChatGPT 桌面应用内置（模型名留空走默认 gpt-5.6-sol；缺 code-mode host → 审查任务走宿主机 diff 注入）。多模型配置采用 ccswitch 共存方案（进程级 env 覆盖，不改全局 settings.json）。
 
 ## 安装与挂载（沿 dsh-ssh 实证模式，零源码改动）
 

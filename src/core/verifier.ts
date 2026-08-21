@@ -73,8 +73,11 @@ export function makePathWhitelist(worktreeRoot: string): (relPath: string) => bo
   }
 }
 
-/** 附录 C 强制字段校验。 */
-export function checkReportCompleteness(report: MissionReport): { check: string; detail: string }[] {
+/** 附录 C 强制字段校验（review/plan/research/doc 等非写码任务不要求 commit/files）。 */
+export function checkReportCompleteness(
+  report: MissionReport,
+  taskType: Task['type'] = 'implement',
+): { check: string; detail: string }[] {
   const failures: { check: string; detail: string }[] = []
   const fail = (check: string, detail: string): void => {
     failures.push({ check, detail })
@@ -86,7 +89,7 @@ export function checkReportCompleteness(report: MissionReport): { check: string;
   if (!['pass', 'fail', 'not_run'].includes(report.test_result)) {
     fail('test_result', `unknown test_result ${report.test_result}`)
   }
-  if (report.status === 'done' && !report.commit_sha) {
+  if ((taskType === 'implement' || taskType === 'test') && report.status === 'done' && !report.commit_sha) {
     fail('commit_sha', 'done report must carry commit_sha (commit discipline D4)')
   }
   if (report.test_result !== 'not_run' && !report.test_evidence) {
@@ -95,13 +98,14 @@ export function checkReportCompleteness(report: MissionReport): { check: string;
   return failures
 }
 
-/** 叙事与产物一致性（3.4 节 mismatch 判定）。 */
+/** 叙事与产物一致性（3.4 节 mismatch 判定；写码任务才要求产物非空）。 */
 export function checkNarrativeMatch(task: Task, report: MissionReport): { check: string; detail: string }[] {
   const failures: { check: string; detail: string }[] = []
-  if (report.status === 'done' && report.files_changed.length === 0) {
+  const producesArtifacts = task.type === 'implement' || task.type === 'test'
+  if (producesArtifacts && report.status === 'done' && report.files_changed.length === 0) {
     failures.push({ check: 'narrative_match', detail: `task ${task.id} claims done but changed no files` })
   }
-  if (report.status === 'done' && report.test_result === 'fail') {
+  if (producesArtifacts && report.status === 'done' && report.test_result === 'fail') {
     failures.push({ check: 'narrative_match', detail: `task ${task.id} claims done but tests failed` })
   }
   return failures
@@ -138,7 +142,7 @@ export async function verifyTaskArtifacts(
   let mismatch = false
   let parentSha: string | undefined
 
-  failures.push(...checkReportCompleteness(report))
+  failures.push(...checkReportCompleteness(report, task.type))
 
   if (report.status === 'done' && report.commit_sha) {
     const sha = report.commit_sha

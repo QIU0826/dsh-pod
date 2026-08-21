@@ -242,8 +242,9 @@ describe('ClaudeHeadlessBackend.start（FakeSpawner 集成）', () => {
     status: 'idle' as const, tokens_in: 0, tokens_out: 0, ctx_usage_pct: 0, window_tokens: 200_000,
   }
 
-  it('参数组装：stream-json/verbose/permission-mode acceptEdits；档位 B 首派 --session-id', async () => {
+  it('参数组装：stream-json/verbose/permission-mode acceptEdits；档位 B 首派 --session-id；prompt 走 stdin', async () => {
     const captured: string[][] = []
+    let stdinText = ''
     const backend = new ClaudeHeadlessBackend({
       clock: () => now,
       spawner: (_cmd, args) => {
@@ -251,6 +252,9 @@ describe('ClaudeHeadlessBackend.start（FakeSpawner 集成）', () => {
         return {
           child: { pid: 999 } as never,
           onLine() {},
+          writeStdin: (text: string) => {
+            stdinText = text
+          },
           exited: Promise.resolve({ code: 0, signal: null, timedOut: false }),
         }
       },
@@ -261,11 +265,16 @@ describe('ClaudeHeadlessBackend.start（FakeSpawner 集成）', () => {
     })
     const args = captured[0]!
     expect(args[0]).toBe('-p')
+    // prompt 不进 argv（Windows 引号/长度专项）
+    expect(args.some((a) => a.includes('MISSION_REPORT'))).toBe(false)
     expect(args).toContain('--output-format')
     expect(args).toContain('--include-partial-messages')
     expect(args).toContain('--permission-mode')
     expect(args).toContain('acceptEdits')
     expect(args).toContain('--session-id')
+    // prompt 经 stdin 投递
+    expect(stdinText).toContain('T-3')
+    expect(stdinText).toContain('MISSION_REPORT')
   })
 
   it('envForSlot 进程级覆盖（ccswitch 共存方案，CR-03：不改全局 settings.json）', async () => {
@@ -283,6 +292,7 @@ describe('ClaudeHeadlessBackend.start（FakeSpawner 集成）', () => {
         return {
           child: { pid: 999 } as never,
           onLine() {},
+          writeStdin() {},
           exited: Promise.resolve({ code: 0, signal: null, timedOut: false }),
         }
       },
@@ -308,6 +318,7 @@ describe('ClaudeHeadlessBackend.start（FakeSpawner 集成）', () => {
           onLine: (line: string) => {
             sink(line)
           },
+          writeStdin() {},
           exited: Promise.resolve({ code: 0, signal: null, timedOut: false }),
         }
         // collect() 会重新赋值 onLine：用 setter 截获后回放事件流（模拟真实 spawn 的 data 事件）

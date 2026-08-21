@@ -15,7 +15,7 @@
 import { execFile, spawn } from 'node:child_process'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { extractReport } from './claude-headless.js'
+import { extractReport, buildTaskPrompt } from './claude-headless.js'
 import { execCommandRunner } from './preflight.js'
 import type {
   AgentSlot,
@@ -99,6 +99,8 @@ export interface SpawnedCodex {
   pid?: number
   onLine(line: string): void
   exited: Promise<{ code: number | null; signal: string | null; timedOut: boolean }>
+  /** prompt 经 stdin 注入（短固定 argv，无引号/长度风险——Windows 专项）。 */
+  writeStdin(text: string): void
   kill(): void
 }
 
@@ -109,12 +111,15 @@ export interface CodexBackendOptions {
   clock?: () => number
 }
 
-/** 组装 codex exec 参数（W1 实证：resume 的 flag 必须放在 session_id 之前）。 */
-export function buildCodexArgs(mode: CodexLaunchMode, prompt: string, worktree: string, model?: string): string[] {
+/**
+ * 组装 codex exec 参数（W1 实证：resume 的 flag 必须放在 session_id 之前）。
+ * prompt 不进 argv：以 '-' 占位走 stdin（exec 支持 stdin 读指令）。
+ */
+export function buildCodexArgs(mode: CodexLaunchMode, worktree: string, model?: string): string[] {
   if (mode.kind === 'resume') {
-    return ['exec', 'resume', '--json', mode.threadId, prompt]
+    return ['exec', 'resume', '--json', mode.threadId, '-']
   }
-  const args = ['exec', prompt, '--json', '--color', 'never', '--skip-git-repo-check', '-s', 'read-only', '-C', worktree]
+  const args = ['exec', '-', '--json', '--color', 'never', '--skip-git-repo-check', '-s', 'read-only', '-C', worktree]
   if (model !== undefined && model.length > 0) args.push('-m', model)
   return args
 }
@@ -161,9 +166,12 @@ export class CodexHeadlessBackend implements WorkerBackend {
     } = {},
   ): Promise<WorkerHandle> {
     const mode = resolveCodexMode(slot)
-    const prompt = `# 任务 ${task.id}：${task.title}\n${task.spec}\n\n完成后输出 MISSION_REPORT JSON（task_id/status/summary/files_changed/commit_sha/test_command/test_result/test_evidence/decisions/blockers/questions）。commit message 含 task-${task.id}。`
-    const args = buildCodexArgs(mode, prompt, worktree, slot.model !== '' ? slot.model : undefined)
+    // 复用统一任务简报构造（含 MISSION_REPORT schema 与 commit 纪律，CR-03 实证：
+    // 无 schema 提示时模型会自创 status 词，破坏输出契约）
+    const prompt = buildTaskPrompt({ task, worktreePath: worktree })
+    const args = buildCodexArgs(mode, worktree, slot.model !== '' ? slot.model : undefined)
     const spawned = this.spawnCodex(args, worktree)
+    spawned.writeStdin(prompt)
     const handle: WorkerHandle = { pid: spawned.pid }
     const session = this.collect(slot, task, spawned, callbacks)
     session.then(({ threadId, completion }) => {
@@ -175,14 +183,18 @@ export class CodexHeadlessBackend implements WorkerBackend {
 
   private spawnCodex(args: string[], cwd: string): SpawnedCodex {
     if (this.spawner !== undefined) return this.spawner(this.binary, args, { cwd })
-    const child = spawn(this.binary, args, { cwd, shell: process.platform === 'win32', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
-    // onLine 通过属性访问器路由进闭包：collect() 的赋值与 stdout 事件读同一个 handler。
+    const child = spawn(this.binary, args, { cwd, shell: process.platform === 'win32', windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+    // onLine 通过属性访问器路由进闭包：collect() 的赋值与 stdout/stderr 事件读同一个 handler。
     let lineHandler: (line: string) => void = () => {}
     const spawned = {
       pid: child.pid,
+      writeStdin(text: string) {
+        child.stdin?.write(text, 'utf8')
+        child.stdin?.end()
+      },
       exited: new Promise<{ code: number | null; signal: string | null; timedOut: boolean }>((resolve) => {
         let buffer = ''
-        child.stdout?.on('data', (chunk: Buffer) => {
+        const consume = (chunk: Buffer): void => {
           buffer += chunk.toString('utf8')
           let index: number
           while ((index = buffer.indexOf('\n')) >= 0) {
@@ -190,7 +202,9 @@ export class CodexHeadlessBackend implements WorkerBackend {
             buffer = buffer.slice(index + 1)
             lineHandler(line)
           }
-        })
+        }
+        child.stdout?.on('data', consume)
+        child.stderr?.on('data', consume)
         let timedOut = false
         const timer = setTimeout(() => {
           timedOut = true
