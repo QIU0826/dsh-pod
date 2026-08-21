@@ -68,6 +68,7 @@ describe('plugin 宿主契约', () => {
       'pod_steer',
       'pod_approve',
       'pod_abort',
+      'pod_commander_start',
     ])
     expect(mocks.sectionDisposers.length).toBeGreaterThan(0)
     ctx.registry.delete(plugin)
@@ -100,7 +101,7 @@ describe('plugin 宿主契约', () => {
     await ctx.plugin(plugin)
     expect(mocks.section).not.toHaveBeenCalled()
     expect(mocks.register).toHaveBeenCalledTimes(1)
-    expect(mocks.toolNames).toHaveLength(7)
+    expect(mocks.toolNames).toHaveLength(8)
     ctx.registry.delete(plugin)
     rmSync(dataDir, { recursive: true, force: true })
   })

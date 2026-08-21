@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { makePodTools } from '../src/pod-tools.js'
+import { makePodTools, makeCommanderStartTool } from '../src/pod-tools.js'
 import type { PodService } from '../src/pod-service.js'
 
 /** fake PodService：只验证工具薄壳的调用协议，编排逻辑在 orchestrator.test.ts 覆盖。 */
@@ -141,5 +141,27 @@ describe('工具薄壳行为（副作用全部走 PodService）', () => {
     const result = await run(abort, {})
     expect(result.aborted).toBe(false)
     expect(result.message).toContain('INVALID_TRANSITION')
+  })
+})
+
+describe('pod_commander_start（真实宿主的 commander 会话验证入口）', () => {
+  it('透传 goal/cwd/preset 给启动函数并返回 session id', async () => {
+    const launch = vi.fn(async (_goal: string, _cwd: string, _agentPreset?: string) => ({
+      sessionId: `pod-mission-1`,
+      message: 'created',
+    }))
+    const tool = makeCommanderStartTool(launch)
+    const result = await run(tool, { goal: '实现 X', cwd: 'C:\\repo', agent_preset: 'pod-commander' })
+    expect(result.session_id).toBe('pod-mission-1')
+    expect(launch).toHaveBeenCalledWith('实现 X', 'C:\\repo', 'pod-commander')
+  })
+
+  it('启动抛错 → 结构化失败不越界', async () => {
+    const tool = makeCommanderStartTool(async () => {
+      throw new Error('AGENT_FACTORY_UNAVAILABLE')
+    })
+    const result = await run(tool, { goal: 'g', cwd: 'C:\\repo' })
+    expect(result.session_id).toBe('')
+    expect(result.message).toContain('AGENT_FACTORY_UNAVAILABLE')
   })
 })

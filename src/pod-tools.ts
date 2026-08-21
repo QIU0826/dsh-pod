@@ -334,3 +334,45 @@ export function makePodTools(service: PodService): PodToolBundle {
   ]
   return { tools, names: tools.map((tool) => tool.name) }
 }
+
+export interface CommanderLaunch {
+  (goal: string, cwd: string, agentPreset?: string): Promise<{ sessionId: string; message: string }>
+}
+
+/**
+ * pod_commander_start —— 创建 commander 会话（3.3 节）：
+ * 经 ctx.agents.create 建立独立 mission 会话，pod_* 工具只注册在该会话作用域（CR-05-2），
+ * 首条 goal 消息驱动。真实宿主的 commander 行为验证入口（重启后自检用）。
+ */
+export function makeCommanderStartTool(launch: CommanderLaunch) {
+  return defineTool({
+    name: 'pod_commander_start',
+    description:
+      '创建 Commander 独立会话（mission 编排会话，pod_* 工具仅注册于该会话作用域），以 goal 首条消息驱动。' +
+      '触发词：Pod commander / 编排会话 / mission 会话。',
+    parameters: {
+      goal: { type: 'string', required: true, description: 'mission 目标（一句话，可验收）' },
+      cwd: { type: 'string', required: true, description: '目标 git 仓库绝对路径' },
+      agent_preset: { type: 'string', description: '可选 agent preset（如 pod-commander）；缺省走部署默认' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          session_id: { type: 'string', required: true },
+          message: { type: 'string', required: true },
+        },
+      },
+      render: (_args, value: { session_id: string; message: string }) => text(`[${value.session_id}] ${value.message}`),
+    },
+    async execute(args, _exec) {
+      try {
+        const result = await launch(args.goal, args.cwd, args.agent_preset)
+        return { session_id: result.sessionId, message: result.message }
+      } catch (error) {
+        return { session_id: '', message: error instanceof Error ? error.message : String(error) }
+      }
+    },
+  })
+}

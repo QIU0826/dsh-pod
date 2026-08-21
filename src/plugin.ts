@@ -22,8 +22,9 @@ import { ApprovalEngine } from './core/approvals.js'
 import { PodError } from './core/errors.js'
 import { Ledger } from './core/ledger.js'
 import { JsonStore } from './core/store.js'
-import { makePodTools } from './pod-tools.js'
+import { makePodTools, makeCommanderStartTool } from './pod-tools.js'
 import { PodService } from './pod-service.js'
+import { createCommanderSession } from './commander.js'
 
 /** Stable cordis plugin name. */
 export const name = 'pod'
@@ -134,7 +135,21 @@ export function apply(ctx: Context, config?: PodConfig): void {
       () => {
         const service = new PodService({ store: runtime.store, dataDir: runtime.dataDir })
         const { tools } = makePodTools(service)
-        const disposers = tools.map((tool) => ctx.tools.register(tool))
+        // pod_commander_start：真实宿主的 commander 会话验证入口（CR-05-2 官方作用域路径）
+        const commanderTool = makeCommanderStartTool(async (goal, cwd, agentPreset) => {
+          const sessionId = `pod-mission-${Date.now()}`
+          const session = await createCommanderSession({
+            agents: ctx.agents,
+            service,
+            sessionId,
+            cwd,
+            goal,
+            agentPreset,
+          })
+          void session // handle 由插件持有表管理（MVP 单 commander；回收在插件卸载时）
+          return { sessionId, message: 'commander 会话已创建并以 goal 驱动；pod_* 工具仅注册于该会话作用域' }
+        })
+        const disposers = [...tools, commanderTool].map((tool) => ctx.tools.register(tool))
         return () => {
           for (const dispose of disposers) dispose()
         }
