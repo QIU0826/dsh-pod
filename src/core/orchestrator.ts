@@ -52,7 +52,8 @@ export interface SlotInput {
   vendor: Vendor
   role: string
   capabilities: string[]
-  model: string
+  /** 模型名；空串/缺省 = 走该 CLI 的默认模型（codex/ChatGPT 内置约定，CR-03-1）。 */
+  model?: string
   session_tier?: SessionTier
   window_tokens?: number
 }
@@ -182,7 +183,7 @@ export class MissionOrchestrator {
         vendor: slotInput.vendor,
         role: slotInput.role,
         capabilities: slotInput.capabilities,
-        model: slotInput.model,
+        model: slotInput.model ?? '',
         effort: 'medium',
         session_tier: slotInput.session_tier ?? DEFAULT_SESSION_TIERS[slotInput.vendor],
         status: 'idle',
@@ -616,6 +617,12 @@ export class MissionOrchestrator {
 
   deny(approvalId: string, by: string, reason: string): void {
     this.missionMachine.deny(approvalId, by, reason)
+  }
+
+  /** 中止 mission（终态；状态机裁决合法性）。 */
+  abortMission(reason: string): void {
+    this.stopRequested = true
+    this.missionMachine.abort(reason)
   }
 
   /** 由 done 实现任务汇总审批 patch（合并执行属 W5 apply_patch；此处仅生成待批卡）。 */

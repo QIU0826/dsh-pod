@@ -22,6 +22,8 @@ import { ApprovalEngine } from './core/approvals.js'
 import { PodError } from './core/errors.js'
 import { Ledger } from './core/ledger.js'
 import { JsonStore } from './core/store.js'
+import { makePodTools } from './pod-tools.js'
+import { PodService } from './pod-service.js'
 
 /** Stable cordis plugin name. */
 export const name = 'pod'
@@ -32,14 +34,15 @@ export const inject = ['webServer', 'tools', 'systemPrompt']
 /** Announcement section order within the tool-guidance band. */
 const SECTION_ORDER = 140
 
-export const POD_VERSION = '0.1.0-w0'
+export const POD_VERSION = '0.1.0-w2'
 
 export const POD_GUIDANCE =
   '本机已安装 dsh-pod 插件（Pod 鲸群：DSH Web 里的多智能体驾驶舱，DSH 原生）。' +
-  '当前为 v0.1 W0/W2 核心骨架：任务/任务书状态机、审批引擎（模式 1，跨重启恢复）、成本账本（tokens 实测 + 等效美元估算）、交接协议、产物校验层（Verifier）、Watchdog、环境探测均已就绪并有全量单测；' +
-  '状态持久化于 ~/.dsh/pod（磁盘唯一事实源）。' +
-  'Team Builder 与 Mission Canvas 界面、commander 编排、三 worker 后端与 pod_* 工具（pod_launch/pod_status/pod_dispatch/pod_collect/pod_steer/pod_approve/pod_abort）在后续切片开放，当前不可用。' +
-  '用户提到「Pod / 鲸群 / 多智能体 / 组队 / mission / 驾驶舱」时即指本插件；骨架版本请如实说明能力边界。'
+  '核心域层与 Commander 编排器就绪：任务/任务书状态机、审批引擎（模式 1 跨重启恢复）、成本账本（tokens 实测 + 等效美元估算）、交接协议、产物校验层（Verifier）、Watchdog；' +
+  'pod_* 工具已注册：pod_launch（组队开 mission，质量门=合并前独立 review）、pod_status（看板/审批卡/账本）、pod_dispatch（手动派发）、pod_collect（任务产物）、pod_steer（排队指令）、pod_approve（审批卡裁决）、pod_abort（中止）。' +
+  '状态持久化于 ~/.dsh/pod（磁盘唯一事实源）。合并回主树（apply_patch）属 W5 切片，当前审批通过后需手动合并。' +
+  '本机员工：claude（deepseek-v4-pro，走 settings.json 配置）与 codex（ChatGPT 桌面应用内置，模型名留空走其默认 gpt-5.6-sol；缺 code-mode host → 只适合 review 等只读任务，diff 由宿主机注入）。' +
+  '用户提到「Pod / 鲸群 / 多智能体 / 组队 / mission / 驾驶舱」时即指本插件，请据此协作。'
 
 export interface PodConfig {
   /** Master switch for the plugin surfaces. */
@@ -123,6 +126,22 @@ export function apply(ctx: Context, config?: PodConfig): void {
     },
     'dsh-pod: routes',
   )
+
+  // pod_* 工具注册（3.3 节工具作用域清单；MVP 全局注册，作用域细化见 CR-04）。
+  // 运行时损坏时同样注册工具（pod_launch 会如实报错），工具是稳定契约面。
+  if (runtime !== undefined) {
+    ctx.effect(
+      () => {
+        const service = new PodService({ store: runtime.store, dataDir: runtime.dataDir })
+        const { tools } = makePodTools(service)
+        const disposers = tools.map((tool) => ctx.tools.register(tool))
+        return () => {
+          for (const dispose of disposers) dispose()
+        }
+      },
+      'dsh-pod: tools',
+    )
+  }
 
   if (announce) {
     ctx.effect(

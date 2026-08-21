@@ -15,12 +15,14 @@ import { POD_GUIDANCE, createPodRuntime } from '../src/plugin.js'
 interface Mocks {
   section: ReturnType<typeof vi.fn>
   register: ReturnType<typeof vi.fn>
+  toolNames: string[]
   sectionDisposers: ReturnType<typeof vi.fn>[]
 }
 
 function makeContext(): { ctx: Context; mocks: Mocks } {
   const ctx = new Context()
   const sectionDisposers: ReturnType<typeof vi.fn>[] = []
+  const toolNames: string[] = []
   const mocks: Mocks = {
     section: vi.fn(() => {
       const disposer = vi.fn()
@@ -28,18 +30,29 @@ function makeContext(): { ctx: Context; mocks: Mocks } {
       return disposer
     }),
     register: vi.fn(() => () => {}),
+    toolNames,
     sectionDisposers,
   }
   ctx.provide('systemPrompt', { section: mocks.section })
   ctx.provide('webServer', { register: mocks.register })
-  ctx.provide('tools', { register: vi.fn(() => () => {}) })
+  ctx.provide('tools', {
+    register: vi.fn((definition: { name?: string }) => {
+      if (typeof definition.name === 'string') toolNames.push(definition.name)
+      return () => {}
+    }),
+  })
   return { ctx, mocks }
 }
 
 describe('plugin 宿主契约', () => {
-  it('apply 注册 system-prompt 播报段与 ping 路由；fiber 回收时 disposer 全部执行', async () => {
+  it('apply 注册播报段、ping 路由与七个 pod_* 工具；fiber 回收时 disposer 全部执行', async () => {
     const { ctx, mocks } = makeContext()
-    const fiber = ctx.plugin(podPlugin)
+    const dataDir = mkdtempSync(join(tmpdir(), 'pod-plugin-'))
+    const plugin = {
+      ...podPlugin,
+      apply: (c: Context) => podPlugin.apply(c, { dataDir }),
+    }
+    const fiber = ctx.plugin(plugin)
     await fiber
     expect(mocks.section).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'plugin:dsh-pod', text: POD_GUIDANCE }),
@@ -47,11 +60,21 @@ describe('plugin 宿主契约', () => {
     expect(mocks.register).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'exact', path: '/api/dsh-pod/ping' }),
     )
+    expect(mocks.toolNames).toEqual([
+      'pod_launch',
+      'pod_status',
+      'pod_dispatch',
+      'pod_collect',
+      'pod_steer',
+      'pod_approve',
+      'pod_abort',
+    ])
     expect(mocks.sectionDisposers.length).toBeGreaterThan(0)
-    ctx.registry.delete(podPlugin)
+    ctx.registry.delete(plugin)
     // 生命周期可逆（方案书 3.1/生命周期纪律）：fiber 删除 → effect disposer 异步执行
     await new Promise((resolve) => setTimeout(resolve, 10))
     expect(mocks.sectionDisposers.every((d) => d.mock.calls.length === 1)).toBe(true)
+    rmSync(dataDir, { recursive: true, force: true })
   })
 
   it('config.enabled=false 时不注册任何表面', async () => {
@@ -63,19 +86,23 @@ describe('plugin 宿主契约', () => {
     await ctx.plugin(plugin)
     expect(mocks.register).not.toHaveBeenCalled()
     expect(mocks.section).not.toHaveBeenCalled()
+    expect(mocks.toolNames).toEqual([])
     ctx.registry.delete(plugin)
   })
 
-  it('announceToAgent=false 时保留路由但不播报', async () => {
+  it('announceToAgent=false 时保留路由与工具但不播报', async () => {
     const { ctx, mocks } = makeContext()
+    const dataDir = mkdtempSync(join(tmpdir(), 'pod-plugin-'))
     const plugin = {
       ...podPlugin,
-      apply: (c: Context) => podPlugin.apply(c, { enabled: true, announceToAgent: false }),
+      apply: (c: Context) => podPlugin.apply(c, { enabled: true, announceToAgent: false, dataDir }),
     }
     await ctx.plugin(plugin)
     expect(mocks.section).not.toHaveBeenCalled()
     expect(mocks.register).toHaveBeenCalledTimes(1)
+    expect(mocks.toolNames).toHaveLength(7)
     ctx.registry.delete(plugin)
+    rmSync(dataDir, { recursive: true, force: true })
   })
 
   it('运行时数据根损坏 → apply 不抛出（宿主绝不因插件崩溃，R6/R10）', async () => {

@@ -1,0 +1,328 @@
+/**
+ * pod_* 工具定义 —— 方案书 3.3 节工具作用域清单：
+ * pod_launch / pod_status / pod_dispatch / pod_collect / pod_steer / pod_approve / pod_abort。
+ *
+ * 工具 = 薄壳：全部副作用经 PodService → MissionOrchestrator → 状态机裁决
+ * （LLM 提议、代码裁决；审批/收集/合并只走代码入口，无 bash 旁路）。
+ * 输出为结构化 JSON + 文本渲染（沿 dsh-ssh 的 defineTool 模式）。
+ *
+ * 作用域说明（CR-04）：MVP 全局注册——pod_* 的副作用已被状态机与审批门约束，
+ * 任何会话调用均记录事件与 by 来源；commander 会话创建落地后，按官方 agent
+ * scope 机制（dsh-tools「register globally or in the calling agent scope」+
+ * agent.ctx 路径，CR-02-8 实证）切换为会话级注册。
+ */
+
+import { defineTool } from '@deepseek-ai/dsh-tools'
+import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { PodService } from './pod-service.js'
+import type { PlanTaskInput } from './core/orchestrator.js'
+import type { TaskType, Vendor } from './core/types.js'
+
+function text(value: string): ContentBlock[] {
+  return [{ type: 'text', text: value }]
+}
+
+function renderJson(value: unknown): ContentBlock[] {
+  return text(JSON.stringify(value, null, 2))
+}
+
+/** defineTool 的 args 泛型来自 schema，嵌套结构收窄不完整——入口显式收窄（薄壳边界）。 */
+function castArgs<T>(args: unknown): T {
+  return args as T
+}
+
+interface LaunchArgs {
+  name: string
+  goal: string
+  cwd: string
+  budget_usd?: number
+  slots: Array<{
+    id: string
+    vendor: Vendor
+    role: string
+    capabilities: string[]
+    model?: string
+  }>
+  plan?: PlanTaskInput[]
+}
+
+export interface PodToolBundle {
+  tools: ReturnType<typeof defineTool>[]
+  names: string[]
+}
+
+/** 七个 pod_* 工具（PodService 注入，测试用 fake）。 */
+export function makePodTools(service: PodService): PodToolBundle {
+  const tools = [
+    defineTool({
+      name: 'pod_launch',
+      description:
+        '启动一个 Pod mission（多智能体任务书）。创建独立 mission 与员工名册，按计划任务 DAG 后台驱动：' +
+        '派发 → 实现 → 独立 review（质量门）→ 审批卡。触发词：Pod 组队 / 多智能体 / 启动 mission / 一键组队。',
+      parameters: {
+        name: { type: 'string', required: true, description: 'mission 名称' },
+        goal: { type: 'string', required: true, description: '一句话可验收目标' },
+        cwd: { type: 'string', required: true, description: '目标 git 仓库绝对路径（主树）' },
+        budget_usd: { type: 'number', description: '美元预算上限（默认 3）' },
+        slots: {
+          type: 'array',
+          required: true,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              id: { type: 'string', required: true },
+              vendor: { type: 'string', required: true, enum: ['claude', 'codex', 'dsh'] satisfies Vendor[] },
+              role: { type: 'string', required: true, description: 'planner / implementer / reviewer / tester / ...' },
+              capabilities: { type: 'array', items: { type: 'string' }, required: true },
+              model: { type: 'string', description: '模型名；codex（ChatGPT 内置）留空走其默认' },
+            },
+          },
+        },
+        plan: {
+          type: 'array',
+          description: '任务 DAG：每项含 id/title/spec/type/depends_on；review 任务的 depends_on 指向被审任务',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              id: { type: 'string', required: true },
+              title: { type: 'string', required: true },
+              spec: { type: 'string', required: true },
+              type: { type: 'string', required: true, enum: ['implement', 'review', 'plan', 'test', 'doc', 'research'] satisfies TaskType[] },
+              skill_tags: { type: 'array', items: { type: 'string' } },
+              depends_on: { type: 'array', items: { type: 'string' } },
+            },
+          },
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            mission_id: { type: 'string', required: true },
+            status: { type: 'string', required: true },
+            message: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value: { mission_id: string; status: string; message: string }) =>
+          text(`mission ${value.mission_id} 已启动（${value.status}）：${value.message}`),
+      },
+      async execute(args, _exec) {
+        const input = castArgs<LaunchArgs>(args)
+        const mission = service.launch({
+          name: input.name,
+          goal: input.goal,
+          cwd: input.cwd,
+          budgetUsd: input.budget_usd ?? 3,
+          slots: input.slots,
+          plan: input.plan,
+        })
+        return {
+          mission_id: mission.id,
+          status: mission.status,
+          message: `后台驱动中；用 pod_status 查看进度。质量门：合并前必经独立 review（审查者≠实现者）。`,
+        }
+      },
+    }),
+
+    defineTool({
+      name: 'pod_status',
+      description: '查看当前 Pod mission 状态：任务看板（各任务状态/故障/attempts）、员工状态灯、审批卡、成本账本摘要。触发词：Pod 进度 / mission 状态 / 看板。',
+      parameters: {},
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            mission: { type: 'object', additionalProperties: true },
+            tasks: { type: 'array' },
+            pending_approvals: { type: 'array' },
+            budget: { type: 'object', additionalProperties: true },
+            message: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value) => renderJson(value),
+      },
+      async execute() {
+        const snapshot = service.status()
+        if (snapshot.mission === undefined) {
+          return {
+            tasks: [],
+            pending_approvals: [],
+            message: '当前没有 active mission；用 pod_launch 启动一个。',
+          }
+        }
+        const tasks = snapshot.tasks.map((t) => ({
+          id: t.id,
+          title: t.title,
+          type: t.type,
+          status: t.status,
+          fault: t.fault ?? null,
+          attempts: t.attempts,
+          owner: t.owner_slot_id ?? null,
+          commit: t.commit_sha?.slice(0, 8) ?? null,
+        }))
+        return {
+          mission: {
+            id: snapshot.mission.id,
+            status: snapshot.mission.status,
+            goal: snapshot.mission.goal,
+            spent_tokens: snapshot.mission.spent_tokens,
+            spent_equiv_usd: Number(snapshot.mission.spent_equiv_usd.toFixed(4)),
+          },
+          tasks,
+          pending_approvals: snapshot.pendingApprovals.map((a) => ({ id: a.id, summary: a.patch.summary })),
+          budget: { tokens: snapshot.mission.spent_tokens, equiv_usd: snapshot.mission.spent_equiv_usd },
+          message: snapshot.mission.status,
+        }
+      },
+    }),
+
+    defineTool({
+      name: 'pod_dispatch',
+      description: '手动模式（commander 异常降级）：派发下一个就绪任务（拓扑就绪 + 单路并行上限内）。触发词：手动派发 / Pod 接管。',
+      parameters: {},
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            dispatched: { type: 'boolean', required: true },
+            message: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value: { dispatched: boolean; message: string }) => text(`${value.dispatched ? '已派发' : '无可派任务'}：${value.message}`),
+      },
+      async execute() {
+        const dispatched = await service.dispatchNext()
+        return { dispatched, message: dispatched ? '下一就绪任务已派发' : '无就绪任务或已达并行上限' }
+      },
+    }),
+
+    defineTool({
+      name: 'pod_collect',
+      description: '查看/收集任务产物：MISSION_REPORT、commit 区间、事件流尾部。收集不信任叙事，只呈现已校验事实（Verifier 落盘结果）。触发词：Pod 收集 / 任务产物 / 报告。',
+      parameters: {
+        task_id: { type: 'string', description: '任务 id；省略则列出全部任务产物摘要' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            tasks: { type: 'array' },
+            message: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value) => renderJson(value),
+      },
+      async execute(args, _exec) {
+        const snapshot = service.status()
+        const tasks = snapshot.tasks
+          .filter((t) => args.task_id === undefined || t.id === args.task_id)
+          .map((t) => ({
+            id: t.id,
+            status: t.status,
+            fault: t.fault ?? null,
+            last_error: t.last_error ?? null,
+            commit: t.commit_sha?.slice(0, 8) ?? null,
+            parent: t.parent_sha?.slice(0, 8) ?? null,
+            result_ref: t.result_ref ?? null,
+          }))
+        return { tasks, message: tasks.length === 0 ? '无匹配任务' : `共 ${tasks.length} 个任务产物` }
+      },
+    }),
+
+    defineTool({
+      name: 'pod_steer',
+      description: '向员工发指令：运行中指令排队为 micro-task（该员工下次派单必带），不打断进行中的进程（CR-01-2）。触发词：Pod 指令 / steer / 指挥员工。',
+      parameters: {
+        slot_id: { type: 'string', required: true, description: '员工槽位 id' },
+        instruction: { type: 'string', required: true, description: '指令内容（如：加一层缓存）' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            queued: { type: 'boolean', required: true },
+            message: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value: { queued: boolean; message: string }) => text(value.message),
+      },
+      async execute(args, _exec) {
+        service.steer(args.slot_id, args.instruction)
+        return { queued: true, message: `指令已排队给 ${args.slot_id}（下次派单必带）` }
+      },
+    }),
+
+    defineTool({
+      name: 'pod_approve',
+      description:
+        '审批卡裁决：批准合并（mission 进入 done）。这是合并回主树的唯一放行入口；deny 用 reason 参数。触发词：Pod 审批 / 批准合并 / 驳回。',
+      parameters: {
+        approval_id: { type: 'string', required: true, description: 'pod_status 给出的审批卡 id' },
+        decision: { type: 'string', required: true, enum: ['approve', 'deny'] },
+        reason: { type: 'string', description: 'deny 时的原因（必填）' },
+        by: { type: 'string', description: '决定人（默认 user）' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            decided: { type: 'boolean', required: true },
+            message: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value: { decided: boolean; message: string }) => text(value.message),
+      },
+      async execute(args, _exec) {
+        if (args.decision === 'deny' && (args.reason === undefined || args.reason.length === 0)) {
+          return { decided: false, message: 'deny 必须提供 reason' }
+        }
+        try {
+          if (args.decision === 'approve') {
+            service.approve(args.approval_id, args.by ?? 'user')
+          } else {
+            service.deny(args.approval_id, args.by ?? 'user', args.reason!)
+          }
+          return { decided: true, message: `审批卡 ${args.approval_id} 已 ${args.decision === 'approve' ? '批准' : '驳回'}（合并执行属 W5 apply_patch）` }
+        } catch (error) {
+          return { decided: false, message: error instanceof Error ? error.message : String(error) }
+        }
+      },
+    }),
+
+    defineTool({
+      name: 'pod_abort',
+      description: '中止当前 mission（终态，不可恢复）；所有运行中的员工进程会被终止。触发词：Pod 中止 / 终止 mission。',
+      parameters: {
+        reason: { type: 'string', description: '中止原因' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            aborted: { type: 'boolean', required: true },
+            message: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value: { aborted: boolean; message: string }) => text(value.message),
+      },
+      async execute(args, _exec) {
+        try {
+          service.abort(args.reason ?? 'aborted by operator')
+          return { aborted: true, message: 'mission 已中止' }
+        } catch (error) {
+          return { aborted: false, message: error instanceof Error ? error.message : String(error) }
+        }
+      },
+    }),
+  ]
+  return { tools, names: tools.map((tool) => tool.name) }
+}
