@@ -206,6 +206,32 @@ describe('真实夹具验证（W1 本机实证输出，tests/fixtures/claude-w1/
     expect(extractUsage(result)?.source).toBe('measured')
     expect(result.session_id).toMatch(/^[0-9a-f-]{36}$/)
   })
+
+  it('成功夹具 run4-deepseek：POD-OK + 实测 usage（CR-02-6 解除后的打通证据）', () => {
+    const lines = readFileSync(join('tests', 'fixtures', 'claude-w1', 'run4-deepseek.jsonl'), 'utf8').split('\n')
+    const events = lines.map(parseStreamJsonLine).filter((e) => e !== undefined)
+    const result = events.find((e) => e?.type === 'result')!
+    expect(resultErrorInfo(result).isError).toBe(false)
+    expect(result.result).toBe('POD-OK')
+    const usage = extractUsage(result)!
+    expect(usage.source).toBe('measured')
+    expect(usage.tokens_out).toBeGreaterThan(0)
+    expect(classifyClaudeExit(0, null, false, result)).toBeNull()
+  })
+
+  it('会话连续性夹具：--session-id 与 -r 同 session_id + 跨进程召回 ALPHA-77', () => {
+    const plant = readFileSync(join('tests', 'fixtures', 'claude-w1', 'plant-session.jsonl'), 'utf8')
+      .split('\n')
+      .map(parseStreamJsonLine)
+      .find((e) => e?.type === 'result') as Record<string, unknown>
+    const recall = readFileSync(join('tests', 'fixtures', 'claude-w1', 'recall-session.jsonl'), 'utf8')
+      .split('\n')
+      .map(parseStreamJsonLine)
+      .find((e) => e?.type === 'result') as Record<string, unknown>
+    expect(plant.session_id).toBe(recall.session_id)
+    expect(plant.result).toBe('OK')
+    expect(recall.result).toBe('ALPHA-77')
+  })
 })
 
 describe('ClaudeHeadlessBackend.start（FakeSpawner 集成）', () => {
