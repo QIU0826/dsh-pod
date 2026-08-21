@@ -11,10 +11,43 @@
 
 import { execFile } from 'node:child_process'
 import { existsSync, readFileSync, statfsSync } from 'node:fs'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
+
+/**
+ * PATH 修复器（CR-02-4/新实证：宿主进程 PATH 可能被外部程序改写，缺 node/git/claude）。
+ * 把已知工具目录补回 PATH 前缀（幂等；本进程与后续 spawn 子进程均受益）。
+ * 候选目录可由 POD_BIN_DIRS 环境变量追加（分号分隔）。
+ */
+export function repairPath(platform: NodeJS.Platform = process.platform): string[] {
+  if (platform !== 'win32') return []
+  const defaults = [
+    'D:\\nodejs',
+    'D:\\STUDYSOFT\\Git\\bin',
+    'C:\\Program Files\\nodejs',
+    'C:\\Program Files\\Git\\bin',
+    'C:\\Program Files\\Git\\cmd',
+  ]
+  const extra = (process.env.POD_BIN_DIRS ?? '')
+    .split(';')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+  const candidates = [...defaults, ...extra]
+  const entries = (process.env.PATH ?? '').split(delimiter).filter((s) => s.length > 0)
+  const added: string[] = []
+  for (const dir of candidates) {
+    if (entries.includes(dir)) continue
+    const useful = ['node.exe', 'git.exe', 'claude.cmd', 'codex.exe'].some((f) => existsSync(join(dir, f)))
+    if (useful) {
+      entries.unshift(dir)
+      added.push(dir)
+    }
+  }
+  if (added.length > 0) process.env.PATH = entries.join(delimiter)
+  return added
+}
 
 export interface CommandResult {
   code: number

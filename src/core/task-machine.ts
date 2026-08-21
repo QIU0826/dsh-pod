@@ -242,11 +242,12 @@ export class TaskMachine {
     this.applyFailure(task, fault.kind, fault.message)
   }
 
-  /** 转人工（commander 决策或 UI 手动模式直接调用；也是 mismatch 的落点）。 */
+  /** 转人工（commander 决策或 UI 手动模式直接调用；也是 mismatch 与「无人可派」的落点）。 */
   escalate(taskId: string): void {
     const task = this.getTask(taskId)
-    if (task.status !== 'blocked') {
-      throw new InvalidTransitionError(task.status, 'escalated', 'only blocked tasks escalate')
+    // ready 也允许：无人可派（能力缺口/审查者唯一）时直接转人工，不消费 attempts
+    if (task.status !== 'blocked' && task.status !== 'ready') {
+      throw new InvalidTransitionError(task.status, 'escalated', 'only blocked or ready tasks escalate')
     }
     this.escalateInternal(task, 'escalated by operator', [])
   }

@@ -268,8 +268,31 @@ describe('ClaudeHeadlessBackend.start（FakeSpawner 集成）', () => {
     expect(args).toContain('--session-id')
   })
 
-  it('result 事件流 → 完成信号 + usage + 报告解析（fake 流回放）', async () => {
-    const events = [
+  it('envForSlot 进程级覆盖（ccswitch 共存方案，CR-03：不改全局 settings.json）', async () => {
+    const capturedEnv: Array<Record<string, string> | undefined> = []
+    const backend = new ClaudeHeadlessBackend({
+      clock: () => now,
+      envForSlot: (slot): Record<string, string> =>
+        slot.id === 'S-1'
+          ? { ANTHROPIC_MODEL: 'deepseek-v4-flash', ANTHROPIC_BASE_URL: 'https://alt.example/v1' }
+          : {},
+      spawner: (cmd, args, options) => {
+        capturedEnv.push(options.env)
+        void cmd
+        void args
+        return {
+          child: { pid: 999 } as never,
+          onLine() {},
+          exited: Promise.resolve({ code: 0, signal: null, timedOut: false }),
+        }
+      },
+    })
+    await backend.start(slot, makeTask(), 'W')
+    expect(capturedEnv[0]!).toEqual(expect.objectContaining({ ANTHROPIC_MODEL: 'deepseek-v4-flash' }))
+    expect(capturedEnv[0]!).toEqual(expect.objectContaining({ ANTHROPIC_BASE_URL: 'https://alt.example/v1' }))
+  })
+
+  it('result 事件流 → 完成信号 + usage + 报告解析（fake 流回放）', async () => {    const events = [
       '{"type":"system","subtype":"init"}',
       '{"type":"assistant","message":{"content":[{"type":"text","text":"开始实现"}]}}',
       '{"type":"result","is_error":false,"result":"完成。```json{\\"task_id\\":\\"T-3\\",\\"task_type\\":\\"implement\\",\\"status\\":\\"done\\",\\"summary\\":\\"s\\",\\"files_changed\\":[\\"a.ts\\"],\\"commit_sha\\":\\"abc\\",\\"test_command\\":\\"npm test\\",\\"test_result\\":\\"not_run\\",\\"decisions\\":[],\\"blockers\\":[],\\"questions\\":[]}```","session_id":"sess-1","usage":{"input_tokens":10,"output_tokens":5}}',

@@ -110,11 +110,13 @@ export interface CodexBackendOptions {
 }
 
 /** 组装 codex exec 参数（W1 实证：resume 的 flag 必须放在 session_id 之前）。 */
-export function buildCodexArgs(mode: CodexLaunchMode, prompt: string, worktree: string): string[] {
+export function buildCodexArgs(mode: CodexLaunchMode, prompt: string, worktree: string, model?: string): string[] {
   if (mode.kind === 'resume') {
     return ['exec', 'resume', '--json', mode.threadId, prompt]
   }
-  return ['exec', prompt, '--json', '--color', 'never', '--skip-git-repo-check', '-s', 'read-only', '-C', worktree]
+  const args = ['exec', prompt, '--json', '--color', 'never', '--skip-git-repo-check', '-s', 'read-only', '-C', worktree]
+  if (model !== undefined && model.length > 0) args.push('-m', model)
+  return args
 }
 
 export class CodexHeadlessBackend implements WorkerBackend {
@@ -160,7 +162,7 @@ export class CodexHeadlessBackend implements WorkerBackend {
   ): Promise<WorkerHandle> {
     const mode = resolveCodexMode(slot)
     const prompt = `# 任务 ${task.id}：${task.title}\n${task.spec}\n\n完成后输出 MISSION_REPORT JSON（task_id/status/summary/files_changed/commit_sha/test_command/test_result/test_evidence/decisions/blockers/questions）。commit message 含 task-${task.id}。`
-    const args = buildCodexArgs(mode, prompt, worktree)
+    const args = buildCodexArgs(mode, prompt, worktree, slot.model !== '' ? slot.model : undefined)
     const spawned = this.spawnCodex(args, worktree)
     const handle: WorkerHandle = { pid: spawned.pid }
     const session = this.collect(slot, task, spawned, callbacks)
@@ -244,6 +246,7 @@ export class CodexHeadlessBackend implements WorkerBackend {
       threadId,
       completion: {
         exit: exit.timedOut ? 'timeout' : fault === 'crash' ? 'failed' : 'done',
+        fault: fault ?? undefined,
         report,
         usage,
         artifacts: [],

@@ -46,6 +46,7 @@ const DEFAULT_THRESHOLDS: Record<WatchdogKind, number> = {
 export class Watchdog {
   private readonly arms = new Map<string, WatchdogArm>()
   private readonly clock: () => number
+  private readonly overrides = new Map<WatchdogKind, number>()
   private paused = false
   /** 挂起开始时刻：resume 时把所有 deadline 顺延挂起时长。 */
   private pausedAt: number | undefined
@@ -55,7 +56,12 @@ export class Watchdog {
   }
 
   thresholdMs(kind: WatchdogKind): number {
-    return DEFAULT_THRESHOLDS[kind]
+    return this.overrides.get(kind) ?? DEFAULT_THRESHOLDS[kind]
+  }
+
+  /** 覆写某类阈值（测试/配置注入）。 */
+  setThreshold(kind: WatchdogKind, ms: number): void {
+    if (ms > 0) this.overrides.set(kind, ms)
   }
 
   /** arm 一个计时器（同 key 覆盖 = 活动信号刷新）。 */

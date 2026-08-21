@@ -1,0 +1,677 @@
+/**
+ * Commander 编排器 —— 方案书 3.3 节编排层 + W2 最小可演示链的引擎。
+ *
+ * 架构不变量落地（3.3 节四条）：
+ *   1. LLM 提议、代码裁决：所有状态迁移经 TaskMachine/MissionMachine，编排器只做合法事件；
+ *   2. 原始事件永不进 commander 上下文：进度只进磁盘与 Canvas（store events）；
+ *   3. 审批/收集/合并只走代码入口：report/approve 全部经本模块与状态机，无 bash 旁路；
+ *   4. 员工进程是沙箱边界：worktree 隔离 + 后端进程白名单（各后端参数组装已实现）。
+ *
+ * 质量门（DoD-5）：review 任务派发时排除被审任务的实现者槽位；无人可派 → 转人工。
+ * 单路并行（D8）：MAX_PARALLEL_TASKS=2，拓扑就绪才派发。
+ * CR-01-2：steer 指令排队，员工下次派单必带。
+ * 预算熔断（2.7 节）：usage 超限 → 自动 pause + 告警事件。
+ * watchdog 接线（3.3/3.4 节）：派发 arm 空闲计时，事件/完成刷新，超时 kill + idle_timeout。
+ *
+ * 全依赖注入（store/backends/worktree/clock/verify）：CLI 级与插件级共用同一引擎。
+ */
+
+import { ApprovalEngine } from './approvals.js'
+import { routeTask } from './dispatcher.js'
+import { ConcurrencyLimitError, InvalidTransitionError, PodError } from './errors.js'
+import { Ledger } from './ledger.js'
+import { MissionMachine } from './mission.js'
+import { estimateCtxUsage } from './session-tiers.js'
+import type { PodStore } from './store.js'
+import { classifyFault, TaskMachine, type TaskVerifyFn } from './task-machine.js'
+import type {
+  AgentSlot,
+  ApprovalRequest,
+  FaultKind,
+  Mission,
+  MissionReport,
+  SessionTier,
+  Task,
+  TaskType,
+  Vendor,
+  WorkerBackend,
+  WorkerCompletion,
+  WorkerHandle,
+  WorkerProgressEvent,
+} from './types.js'
+import {
+  DEFAULT_MAX_WALL_CLOCK_MS,
+  DEFAULT_SESSION_TIERS,
+  MAX_PARALLEL_TASKS,
+  MAX_SLOTS,
+} from './types.js'
+import { Watchdog } from './watchdog.js'
+
+export interface SlotInput {
+  id: string
+  vendor: Vendor
+  role: string
+  capabilities: string[]
+  model: string
+  session_tier?: SessionTier
+  window_tokens?: number
+}
+
+export interface LaunchInput {
+  name: string
+  goal: string
+  cwd: string
+  budgetUsd: number
+  budgetTokens?: number
+  slots: SlotInput[]
+}
+
+export interface PlanTaskInput {
+  id: string
+  title: string
+  spec: string
+  type: TaskType
+  skill_tags?: string[]
+  depends_on?: string[]
+}
+
+export interface WorktreeManager {
+  /** 为槽位确保 worktree 存在并返回路径（默认每员工一个，3.7 节）。 */
+  ensure(repoRoot: string, slotId: string): Promise<string>
+}
+
+export type RunStatus = 'awaiting_approval' | 'needs_human' | 'waiting_backoff' | 'budget_exceeded' | 'aborted'
+
+export interface RunSummary {
+  status: RunStatus
+  doneTasks: string[]
+  escalatedTasks: string[]
+  pendingApprovals: string[]
+  reason?: string
+}
+
+export interface OrchestratorDeps {
+  store: PodStore
+  backends: Partial<Record<Vendor, WorkerBackend>>
+  worktree: WorktreeManager
+  clock?: () => number
+  verify?: TaskVerifyFn
+  maxParallel?: number
+}
+
+interface WakeLatch {
+  fired: boolean
+  resolve?: () => void
+}
+
+export class MissionOrchestrator {
+  private readonly store: PodStore
+  private readonly backends: Partial<Record<Vendor, WorkerBackend>>
+  private readonly worktree: WorktreeManager
+  private readonly clock: () => number
+  private readonly approvals: ApprovalEngine
+  private readonly ledger: Ledger
+  private readonly missionMachine: MissionMachine
+  private readonly taskMachine: TaskMachine
+  private readonly watchdog: Watchdog
+  private readonly missionId: string
+  private readonly maxParallel: number
+  private readonly handles = new Map<string, WorkerHandle>()
+  private readonly queuedSteer = new Map<string, string[]>()
+  private readonly wakeLatch: WakeLatch = { fired: false }
+  private stopRequested = false
+
+  constructor(missionId: string, deps: OrchestratorDeps) {
+    this.missionId = missionId
+    this.store = deps.store
+    this.backends = deps.backends
+    this.worktree = deps.worktree
+    this.clock = deps.clock ?? (() => Date.now())
+    this.maxParallel = deps.maxParallel ?? MAX_PARALLEL_TASKS
+    this.approvals = new ApprovalEngine(this.store, { clock: this.clock })
+    this.ledger = new Ledger(this.store, { clock: this.clock })
+    this.missionMachine = new MissionMachine(this.store, this.approvals, missionId, { clock: this.clock })
+    this.taskMachine = new TaskMachine(this.store, { clock: this.clock, verify: deps.verify })
+    this.watchdog = new Watchdog({ clock: this.clock })
+  }
+
+  // ── 组装阶段 ──────────────────────────────────────────────────────────
+
+  /** 创建 mission + 名册（单 active mission / fan-out 上限，2.12/3.8 节）。 */
+  launch(input: LaunchInput): Mission {
+    if (this.store.getActiveMission() !== undefined) {
+      throw new ConcurrencyLimitError(1, 'another mission is active; finish or abort it first')
+    }
+    if (input.slots.length > MAX_SLOTS) {
+      throw new ConcurrencyLimitError(MAX_SLOTS, `slot count ${input.slots.length}`)
+    }
+    const now = this.clock()
+    const mission: Mission = {
+      id: this.missionId,
+      name: input.name,
+      goal: input.goal,
+      status: 'planning',
+      budget_usd: input.budgetUsd,
+      budget_tokens: input.budgetTokens,
+      spent_tokens: 0,
+      spent_equiv_usd: 0,
+      approval_mode: 1,
+      cwd: input.cwd,
+      worktree_policy: 'per-slot',
+      orchestration_mode: 'commander',
+      commander_healthy: true,
+      created_at: now,
+      updated_at: now,
+    }
+    this.store.createMission(mission)
+    for (const slotInput of input.slots) {
+      const slot: AgentSlot = {
+        id: slotInput.id,
+        mission_id: this.missionId,
+        vendor: slotInput.vendor,
+        role: slotInput.role,
+        capabilities: slotInput.capabilities,
+        model: slotInput.model,
+        effort: 'medium',
+        session_tier: slotInput.session_tier ?? DEFAULT_SESSION_TIERS[slotInput.vendor],
+        status: 'idle',
+        tokens_in: 0,
+        tokens_out: 0,
+        ctx_usage_pct: 0,
+        window_tokens: slotInput.window_tokens ?? 200_000,
+      }
+      this.store.createSlot(slot)
+    }
+    this.store.appendEvent(this.missionId, {
+      id: `ev-mission-created-${this.missionId}`,
+      mission_id: this.missionId,
+      ts: now,
+      kind: 'mission_created',
+      payload: { name: input.name, goal: input.goal, slots: input.slots.map((s) => s.id) },
+    })
+    return mission
+  }
+
+  /** 任务 DAG 落盘（拓扑就绪派发；环与悬空 review 目标拒绝，fail-closed）。 */
+  createTasks(plan: PlanTaskInput[]): Task[] {
+    const now = this.clock()
+    const ids = new Set(plan.map((p) => p.id))
+    for (const item of plan) {
+      if (this.store.getTask(item.id) !== undefined) {
+        throw new PodError(`task ${item.id} already exists`, 'DUPLICATE_TASK', { id: item.id })
+      }
+    }
+    for (const item of plan) {
+      for (const dep of item.depends_on ?? []) {
+        if (!ids.has(dep) && this.store.getTask(dep) === undefined) {
+          throw new PodError(`task ${item.id} depends on missing task ${dep}`, 'MISSING_DEPENDENCY', { id: item.id, dep })
+        }
+      }
+    }
+    // 环检测（DFS 三色）
+    const visiting = new Set<string>()
+    const visited = new Set<string>()
+    const visit = (id: string, stack: string[]): void => {
+      if (visiting.has(id)) {
+        throw new PodError(`dependency cycle: ${[...stack, id].join(' -> ')}`, 'TASK_CYCLE', { cycle: [...stack, id] })
+      }
+      if (visited.has(id)) return
+      visiting.add(id)
+      for (const dep of plan.find((p) => p.id === id)?.depends_on ?? []) {
+        if (ids.has(dep)) visit(dep, [...stack, id])
+      }
+      visiting.delete(id)
+      visited.add(id)
+    }
+    for (const item of plan) visit(item.id, [])
+
+    const tasks: Task[] = []
+    for (const item of plan) {
+      const task: Task = {
+        id: item.id,
+        mission_id: this.missionId,
+        title: item.title,
+        spec: item.spec,
+        skill_tags: item.skill_tags ?? [],
+        type: item.type,
+        depends_on: item.depends_on ?? [],
+        status: 'ready',
+        attempts: 0,
+        soft_attempts: 0,
+        max_wall_clock_ms: DEFAULT_MAX_WALL_CLOCK_MS,
+        created_at: now,
+        updated_at: now,
+      }
+      this.store.createTask(task)
+      tasks.push(task)
+    }
+    return tasks
+  }
+
+  // ── 驱动循环 ──────────────────────────────────────────────────────────
+
+  /** 完整驱动：拓扑派发（单路并行）→ 等待完成 → 重试/转人工 → 质量门 → 审批卡。 */
+  async run(): Promise<RunSummary> {
+    const mission = this.requireMission()
+    if (mission.status === 'planning') this.missionMachine.start()
+    else if (mission.status !== 'running') {
+      throw new InvalidTransitionError(mission.status, 'run', 'mission must be planning or running')
+    }
+    this.stopRequested = false
+    while (!this.stopRequested) {
+      const dispatched = await this.dispatchNext()
+      // 循环继续条件：还有活跃任务等待完成，或刚完成/派发失败后仍有可派任务
+      if (!dispatched && this.activeTasks().length === 0) break
+      if (this.activeTasks().length > 0) {
+        await this.waitForCompletion()
+        this.tickWatchdogs()
+      }
+    }
+    return this.summarize()
+  }
+
+  private requireMission(): Mission {
+    const mission = this.store.getMission(this.missionId)
+    if (mission === undefined) throw new PodError(`mission ${this.missionId} not found`, 'NOT_FOUND', { id: this.missionId })
+    return mission
+  }
+
+  private activeTasks(): Task[] {
+    return this.store.listTasks(this.missionId).filter((t) => t.status === 'dispatched' || t.status === 'running')
+  }
+
+  private readyTasks(): Task[] {
+    const all = this.store.listTasks(this.missionId)
+    const done = new Set(all.filter((t) => t.status === 'done').map((t) => t.id))
+    const candidates = all.filter((t) => {
+      if (t.status === 'ready') return true
+      if (t.status === 'blocked') return this.taskMachine.shouldRetry(t, this.clock())
+      return false
+    })
+    return candidates.filter((t) => t.depends_on.every((dep) => done.has(dep)))
+  }
+
+  /** 派发一个就绪任务；无任务可派返回 false。 */
+  async dispatchNext(): Promise<boolean> {
+    if (this.activeTasks().length >= this.maxParallel) return false
+    const ready = this.readyTasks()
+    if (ready.length === 0) return false
+    return this.dispatchTask(ready[0]!)
+  }
+
+  private async dispatchTask(task: Task): Promise<boolean> {
+    const mission = this.requireMission()
+    // 429 恢复（3.4 节）：槽位因限流置 rate_limited；其任务退避期满后槽位回 idle 重新可路由
+    const now = this.clock()
+    for (const slot of this.store.listSlots(this.missionId)) {
+      if (slot.status !== 'rate_limited') continue
+      const pendingBackoff = this.store
+        .listTasks(this.missionId)
+        .some(
+          (t) =>
+            t.owner_slot_id === slot.id &&
+            t.status === 'blocked' &&
+            t.fault === 'rate_limited' &&
+            (t.next_retry_at ?? 0) > now,
+        )
+      if (!pendingBackoff) this.store.updateSlot(slot.id, { status: 'idle' })
+    }
+    // 质量门（DoD-5）：review 不得派给被审任务的实现者
+    let availableSlots = this.store.listSlots(this.missionId)
+    if (task.type === 'review') {
+      const targetOwners = new Set(
+        task.depends_on
+          .map((id) => this.store.getTask(id)?.owner_slot_id)
+          .filter((s): s is string => s !== undefined),
+      )
+      availableSlots = availableSlots.filter((s) => !targetOwners.has(s.id))
+    }
+    const routed = routeTask(task, { slots: availableSlots, tasks: this.store.listTasks(this.missionId) })
+    if (routed.slotId === null) {
+      // 无人可派（能力缺口 / 审查者唯一）→ 转人工，不消费 attempts
+      this.taskMachine.escalate(task.id)
+      this.store.appendEvent(this.missionId, {
+        id: `ev-no-slot-${task.id}`,
+        mission_id: this.missionId,
+        ts: this.clock(),
+        kind: 'task_escalated',
+        task_id: task.id,
+        payload: { reason: `no routable slot: ${routed.reason}` },
+      })
+      this.signalCompletion()
+      return false
+    }
+    const slot = this.store.getSlot(routed.slotId)!
+    const backend = this.backends[slot.vendor]
+    if (backend === undefined) {
+      throw new PodError(`no backend registered for vendor ${slot.vendor}`, 'BACKEND_MISSING', { vendor: slot.vendor })
+    }
+
+    // worktree 隔离（3.7 节：默认每员工一个）
+    let worktreePath = slot.worktree_path
+    if (worktreePath === undefined || worktreePath.length === 0) {
+      worktreePath = await this.worktree.ensure(mission.cwd, slot.id)
+      this.store.updateSlot(slot.id, { worktree_path: worktreePath })
+    }
+
+    // review 最小上下文（2.5 节）：只给 diff 指针 + 规格，无实现者叙事
+    let spec = task.spec
+    if (task.type === 'review') {
+      const targets = task.depends_on.map((id) => this.store.getTask(id)).filter((t): t is Task => t !== undefined)
+      const diffRanges = targets
+        .map((t) => `${t.id}（${t.parent_sha ?? '?'}..${t.commit_sha ?? '?'}）`)
+        .join('、')
+      spec += `\n\n## 审查输入（最小上下文原则）\n审查对象：${diffRanges}\n仅审查该 diff + 规格 + 测试输出，刻意排除实现者推理叙事。\n规格：${targets.map((t) => `${t.id}: ${t.spec}`).join('；')}`
+    }
+    // CR-01-2：steer 排队指令，本次派单必带（运行中指令落盘，不打断进程）
+    const queued = this.queuedSteer.get(slot.id) ?? []
+    if (queued.length > 0) {
+      spec += `\n\n## 排队指令（用户 steer）\n${queued.join('\n')}`
+      this.queuedSteer.delete(slot.id)
+    }
+
+    const enriched: Task = { ...task, spec }
+    this.taskMachine.dispatch(task.id, slot.id)
+    this.taskMachine.start(task.id)
+    this.watchdog.arm({
+      key: `task-idle:${task.id}`,
+      kind: 'task-idle',
+      mission_id: this.missionId,
+      task_id: task.id,
+      deadline: this.clock() + this.watchdog.thresholdMs('task-idle'),
+    })
+    this.watchdog.arm({
+      key: `task-wall-clock:${task.id}`,
+      kind: 'task-wall-clock',
+      mission_id: this.missionId,
+      task_id: task.id,
+      deadline: this.clock() + task.max_wall_clock_ms,
+    })
+    const handle = await backend.start(slot, enriched, worktreePath, {
+      onProgress: (event) => this.handleProgress(slot, task, event),
+      onExit: (completion) => {
+        void this.handleCompletion(task.id, completion)
+      },
+    })
+    this.handles.set(task.id, handle)
+    return true
+  }
+
+  private handleProgress(slot: AgentSlot, task: Task, event: WorkerProgressEvent): void {
+    this.watchdog.arm({
+      key: `task-idle:${task.id}`,
+      kind: 'task-idle',
+      mission_id: this.missionId,
+      task_id: task.id,
+      deadline: this.clock() + this.watchdog.thresholdMs('task-idle'),
+    })
+    void slot
+    this.store.appendEvent(this.missionId, {
+      id: `ev-progress-${task.id}-${event.ts}`,
+      mission_id: this.missionId,
+      ts: event.ts,
+      kind: 'worker_progress',
+      task_id: task.id,
+      slot_id: event.slot_id,
+      payload: { kind: event.kind, text: event.text, tool: event.tool },
+    })
+  }
+
+  private async handleCompletion(taskId: string, completion: WorkerCompletion): Promise<void> {
+    try {
+      await this.processCompletion(taskId, completion)
+    } catch (error) {
+      // 内部错误绝不静默（error-handling 纪律）：落事件 + 任务故障化 + 唤醒驱动循环
+      const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+      this.store.appendEvent(this.missionId, {
+        id: `ev-completion-error-${taskId}-${this.clock()}`,
+        mission_id: this.missionId,
+        ts: this.clock(),
+        kind: 'completion_error',
+        task_id: taskId,
+        payload: { error: message },
+      })
+      const task = this.store.getTask(taskId)
+      if (task !== undefined && (task.status === 'dispatched' || task.status === 'running')) {
+        try {
+          this.taskMachine.fail(taskId, { kind: 'crash', message: `internal error: ${message}` })
+        } catch {
+          // 状态已漂移：只留事件，不二次抛出
+        }
+      }
+    } finally {
+      this.signalCompletion()
+    }
+  }
+
+  private async processCompletion(taskId: string, completion: WorkerCompletion): Promise<void> {
+    const task = this.store.getTask(taskId)
+    if (task === undefined || task.owner_slot_id === undefined) {
+      this.signalCompletion()
+      return
+    }
+    this.watchdog.disarm(`task-idle:${taskId}`)
+    this.watchdog.disarm(`task-wall-clock:${taskId}`)
+    const slot = this.store.getSlot(task.owner_slot_id)
+    if (slot !== undefined) {
+      // 账本（2.7 节）：tokens 权威列 + equiv 估算；超限熔断自动 pause
+      try {
+        this.ledger.recordUsage(
+          this.missionId,
+          slot.id,
+          taskId,
+          slot.model,
+          completion.usage.tokens_in,
+          completion.usage.tokens_out,
+          completion.usage.source,
+        )
+      } catch (error) {
+        if (error instanceof PodError && error.code === 'BUDGET_EXCEEDED') {
+          this.stopRequested = true
+          this.missionMachine.pause()
+          this.store.appendEvent(this.missionId, {
+            id: `ev-budget-${taskId}`,
+            mission_id: this.missionId,
+            ts: this.clock(),
+            kind: 'mission_paused_budget',
+            task_id: taskId,
+            payload: { error: error.message },
+          })
+        } else {
+          throw error
+        }
+      }
+      const tokensIn = slot.tokens_in + completion.usage.tokens_in
+      const tokensOut = slot.tokens_out + completion.usage.tokens_out
+      this.store.updateSlot(slot.id, {
+        tokens_in: tokensIn,
+        tokens_out: tokensOut,
+        ctx_usage_pct: estimateCtxUsage(tokensIn, tokensOut, slot.window_tokens),
+      })
+    }
+
+    switch (completion.exit) {
+      case 'done': {
+        if (completion.report !== undefined) {
+          await this.taskMachine.report(taskId, completion.report)
+        } else {
+          // 无报告即静默假成功候选（Verifier 层 fail-closed 的同源判定）
+          this.taskMachine.fail(taskId, { kind: 'silent_failure', message: 'process exited 0 but produced no MISSION_REPORT' })
+        }
+        break
+      }
+      case 'rate_limited':
+        this.taskMachine.fail(taskId, { kind: 'rate_limited', message: 'rate limited by upstream' })
+        break
+      case 'timeout':
+        this.taskMachine.fail(taskId, { kind: 'wall_clock', message: 'task wall-clock exceeded' })
+        break
+      case 'failed': {
+        const fault: FaultKind =
+          completion.fault ?? classifyFault({ exit: 'failed', exitCode: completion.exit_code }) ?? 'crash'
+        this.taskMachine.fail(taskId, { kind: fault, message: `worker failed (exit ${completion.exit_code ?? '?'})` })
+        break
+      }
+      case 'killed':
+        this.taskMachine.fail(taskId, { kind: 'crash', message: 'worker process killed' })
+        break
+    }
+    this.signalCompletion()
+  }
+
+  private signalCompletion(): void {
+    if (this.wakeLatch.resolve !== undefined) {
+      const resolve = this.wakeLatch.resolve
+      this.wakeLatch.resolve = undefined
+      resolve()
+    } else {
+      this.wakeLatch.fired = true
+    }
+  }
+
+  private waitForCompletion(): Promise<void> {
+    if (this.wakeLatch.fired) {
+      this.wakeLatch.fired = false
+      return Promise.resolve()
+    }
+    return new Promise<void>((resolve) => {
+      this.wakeLatch.resolve = resolve
+    })
+  }
+
+  /** watchdog 巡检（插件层定时调用；CLI 演示链在循环内调用）。 */
+  tickWatchdogs(): void {
+    const now = this.clock()
+    for (const fired of this.watchdog.tick(now)) {
+      if (fired.task_id === undefined) continue
+      const task = this.store.getTask(fired.task_id)
+      if (task === undefined) continue
+      if (fired.kind === 'task-wall-clock') {
+        void this.killTask(fired.task_id)
+        if (task.status === 'dispatched' || task.status === 'running') {
+          this.taskMachine.fail(fired.task_id, { kind: 'wall_clock', message: 'watchdog: wall-clock exceeded' })
+        }
+      } else if (fired.kind === 'task-idle') {
+        void this.killTask(fired.task_id)
+        if (task.status === 'dispatched' || task.status === 'running') {
+          this.taskMachine.fail(fired.task_id, { kind: 'idle_timeout', message: 'watchdog: no stream events' })
+        }
+      }
+      this.signalCompletion()
+    }
+  }
+
+  async killTask(taskId: string): Promise<void> {
+    const handle = this.handles.get(taskId)
+    if (handle !== undefined) {
+      const task = this.store.getTask(taskId)
+      const backend = task?.owner_slot_id !== undefined ? this.backends[this.store.getSlot(task.owner_slot_id)?.vendor ?? 'dsh'] : undefined
+      if (backend !== undefined) await backend.kill(handle)
+      this.handles.delete(taskId)
+    }
+  }
+
+  setWatchdogThreshold(kind: 'task-idle' | 'task-wall-clock', ms: number): void {
+    this.watchdog.setThreshold(kind, ms)
+  }
+
+  /** CR-01-2：steer 指令排队（运行中不打断进程；员工下次派单必带）。 */
+  steer(slotId: string, instruction: string): void {
+    const list = this.queuedSteer.get(slotId) ?? []
+    list.push(instruction)
+    this.queuedSteer.set(slotId, list)
+    this.store.appendEvent(this.missionId, {
+      id: `ev-steer-${slotId}-${this.clock()}`,
+      mission_id: this.missionId,
+      ts: this.clock(),
+      kind: 'steer_queued',
+      slot_id: slotId,
+      payload: { instruction },
+    })
+  }
+
+  // ── 审批闭环 ──────────────────────────────────────────────────────────
+
+  approve(approvalId: string, by: string): void {
+    this.missionMachine.approve(approvalId, by)
+  }
+
+  deny(approvalId: string, by: string, reason: string): void {
+    this.missionMachine.deny(approvalId, by, reason)
+  }
+
+  /** 由 done 实现任务汇总审批 patch（合并执行属 W5 apply_patch；此处仅生成待批卡）。 */
+  buildApprovalRequest(): ApprovalRequest {
+    const implementTasks = this.store
+      .listTasks(this.missionId)
+      .filter((t) => t.type !== 'review' && t.status === 'done')
+    if (implementTasks.length === 0) {
+      throw new PodError('no implement tasks to approve', 'NO_PATCH', { mission: this.missionId })
+    }
+    const primary = implementTasks[0]!
+    const slot = primary.owner_slot_id !== undefined ? this.store.getSlot(primary.owner_slot_id) : undefined
+    return this.approvals.request(this.missionId, {
+      slot_id: primary.owner_slot_id ?? 'unknown',
+      worktree_path: slot?.worktree_path ?? '',
+      base_commit: primary.parent_sha,
+      head_commit: primary.commit_sha,
+      summary: implementTasks.map((t) => `${t.id} ${t.title} @ ${t.commit_sha ?? '?'}`).join('；'),
+    })
+  }
+
+  private summarize(): RunSummary {
+    const tasks = this.store.listTasks(this.missionId)
+    const done = tasks.filter((t) => t.status === 'done').map((t) => t.id)
+    const escalated = tasks.filter((t) => t.status === 'escalated').map((t) => t.id)
+    if (this.stopRequested && this.requireMission().status === 'paused') {
+      return { status: 'budget_exceeded', doneTasks: done, escalatedTasks: escalated, pendingApprovals: [] }
+    }
+    if (escalated.length > 0) {
+      return { status: 'needs_human', doneTasks: done, escalatedTasks: escalated, pendingApprovals: [] }
+    }
+    const waitingBackoff = tasks.filter(
+      (t) => t.status === 'blocked' && (t.next_retry_at ?? 0) > this.clock(),
+    )
+    if (waitingBackoff.length > 0) {
+      return { status: 'waiting_backoff', doneTasks: done, escalatedTasks: escalated, pendingApprovals: [] }
+    }
+    try {
+      this.missionMachine.tasksCompleted()
+    } catch (error) {
+      return {
+        status: 'needs_human',
+        doneTasks: done,
+        escalatedTasks: escalated,
+        pendingApprovals: [],
+        reason: error instanceof Error ? error.message : String(error),
+      }
+    }
+    const approval = this.buildApprovalRequest()
+    return {
+      status: 'awaiting_approval',
+      doneTasks: done,
+      escalatedTasks: escalated,
+      pendingApprovals: [approval.id],
+    }
+  }
+
+  /** pod_status 数据源：mission/任务/员工/审批/账本快照（结构化，无原始对话）。 */
+  status(): {
+    mission: Mission
+    tasks: Task[]
+    slots: AgentSlot[]
+    pendingApprovals: ApprovalRequest[]
+    ledger: ReturnType<Ledger['summary']>
+  } {
+    return {
+      mission: this.requireMission(),
+      tasks: this.store.listTasks(this.missionId),
+      slots: this.store.listSlots(this.missionId),
+      pendingApprovals: this.approvals.pendingFor(this.missionId),
+      ledger: this.ledger.summary(this.missionId),
+    }
+  }
+}
+
+/** 报告类型引用（避免未使用告警的显式导出）。 */
+export type { MissionReport }

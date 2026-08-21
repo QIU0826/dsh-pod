@@ -264,6 +264,8 @@ export type WorkerExit =
 
 export interface WorkerCompletion {
   exit: WorkerExit
+  /** 后端已分类的故障（如 claude result.is_error 404 → auth_expired）；缺省由编排层按信号再分类。 */
+  fault?: FaultKind
   report?: MissionReport
   usage: { tokens_in: number; tokens_out: number; source: UsageSource }
   artifacts: string[]

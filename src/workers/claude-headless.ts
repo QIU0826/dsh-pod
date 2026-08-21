@@ -244,11 +244,17 @@ export interface SpawnedClaude {
 }
 
 export interface ClaudeBackendOptions {
-  spawner?: (cmd: string, args: string[], options: { cwd: string; shell: boolean }) => SpawnedClaude
+  spawner?: (cmd: string, args: string[], options: { cwd: string; shell: boolean; env?: Record<string, string> }) => SpawnedClaude
   detectRunner?: { run(cmd: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string }> }
   registry?: ProcessRegistry
   /** 供测试注入的时钟。 */
   clock?: () => number
+  /**
+   * 进程级 env 覆盖（ccswitch 共存方案，CR-03）：
+   * 每个员工可按 slot 注入 ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL 等，
+   * 实现「不同员工不同模型/提供商」而不改写全局 settings.json。
+   */
+  envForSlot?: (slot: AgentSlot) => Record<string, string>
 }
 
 /** 组装 claude -p 参数（3.2 节后端对照表的 v2 增强全集）。 */
@@ -272,10 +278,12 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
   private readonly spawner: ClaudeBackendOptions['spawner']
   private readonly detectRunner: NonNullable<ClaudeBackendOptions['detectRunner']>
   private readonly clock: () => number
+  private readonly envForSlot: ((slot: AgentSlot) => Record<string, string>) | undefined
 
   constructor(options: ClaudeBackendOptions = {}) {
     this.spawner = options.spawner
     this.clock = options.clock ?? (() => Date.now())
+    this.envForSlot = options.envForSlot
     // 默认探测复用 preflight 的 shell-fallback runner（.cmd 包装器兼容）
     this.detectRunner = options.detectRunner ?? execCommandRunner
   }
@@ -318,7 +326,8 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
       newSessionId: needsNewSession ? randomUUID() : undefined,
       permissionMode: 'acceptEdits',
     })
-    const spawned = this.spawnClaude(args, worktree)
+    const env = this.envForSlot !== undefined ? this.envForSlot(slot) : undefined
+    const spawned = this.spawnClaude(args, worktree, env)
     const handle: WorkerHandle = { pid: spawned.child.pid }
     const session = this.collect(slot, task, spawned, callbacks)
     session.then(({ sessionRef, completion }) => {
@@ -328,9 +337,15 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
     return handle
   }
 
-  private spawnClaude(args: string[], cwd: string): SpawnedClaude {
-    if (this.spawner !== undefined) return this.spawner('claude', args, { cwd, shell: true })
-    const child = spawn('claude', args, { cwd, shell: process.platform === 'win32', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+  private spawnClaude(args: string[], cwd: string, env?: Record<string, string>): SpawnedClaude {
+    if (this.spawner !== undefined) return this.spawner('claude', args, { cwd, shell: true, env })
+    const child = spawn('claude', args, {
+      cwd,
+      shell: process.platform === 'win32',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: env !== undefined ? { ...process.env, ...env } : process.env,
+    })
     // onLine 通过属性访问器路由进闭包：collect() 的赋值与 stdout 事件读同一个 handler。
     let lineHandler: (line: string) => void = () => {}
     const spawned = {
@@ -397,6 +412,7 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
       sessionRef: typeof resultEvent?.session_id === 'string' ? resultEvent.session_id : undefined,
       completion: {
         exit: exitKind,
+        fault: fault ?? undefined,
         report,
         usage,
         artifacts: report?.diff_path !== undefined ? [report.diff_path] : [],
