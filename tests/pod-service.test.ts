@@ -3,10 +3,10 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { JsonStore } from '../src/core/store.js'
-import { PodService } from '../src/pod-service.js'
+import { PodService, defaultPlan } from '../src/pod-service.js'
 
 /**
- * PodService 宿主侧闭环测试：commander 自动创建接线 + maintenanceTick 透传。
+ * PodService 宿主侧闭环测试：commander 自动创建接线 + maintenanceTick 透传 + 默认任务链。
  * 空 backends + 无任务 plan → run() 立即收敛，不触达真实 CLI（无 API 消耗）。
  */
 describe('PodService 宿主闭环（CR-05-6）', () => {
@@ -54,7 +54,22 @@ describe('PodService 宿主闭环（CR-05-6）', () => {
     const mission = service.launch({ name: 'm', goal: 'g', cwd: 'C:\\repo', budgetUsd: 2, slots: [] })
     expect(mission.status).toBe('planning')
     await new Promise((resolve) => setTimeout(resolve, 50))
-    // 无任务 → run() 收敛到 needs_human，mission 状态保持 running（转人工语义）
+    // 自动默认链存在但无人可派（slots 空）→ 转人工；mission 状态保持 running
     expect(store.getMission(mission.id)!.status).toBe('running')
+  })
+
+  it('launch 缺省 plan → 自动生成「实现 + 独立 review」默认链（CR-06-5 质量门默认开）', async () => {
+    const mission = service.launch({ name: 'm', goal: '实现 multiply 函数', cwd: 'C:\\repo', budgetUsd: 2, slots: [] })
+    const tasks = store.listTasks(mission.id)
+    expect(tasks.map((t) => t.type)).toEqual(['implement', 'review'])
+    expect(tasks[1]!.depends_on).toEqual(['T-1'])
+    expect(tasks[0]!.spec).toContain('multiply')
+  })
+
+  it('defaultPlan：goal 过长截断为标题，review 依赖实现任务', () => {
+    const plan = defaultPlan('在 src/util.ts 新增 multiply(a,b) 函数并在 example.md 补充用法示例，要求文档清晰')
+    expect(plan).toHaveLength(2)
+    expect(plan[0]!.title.length).toBeLessThanOrEqual(41)
+    expect(plan[1]!.type).toBe('review')
   })
 })

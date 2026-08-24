@@ -69,9 +69,10 @@ export class PodService {
     const missionId = `M-${this.clock()}-${Math.floor(Math.random() * 1e6)}`
     const orchestrator = this.makeOrchestrator(missionId)
     const mission = orchestrator.launch(input)
-    if (input.plan !== undefined && input.plan.length > 0) {
-      orchestrator.createTasks(input.plan)
-    }
+    // plan 缺省时自动生成「实现 + 独立 review」默认链（质量门默认开，CR-06-5）：
+    // 表单/工具未给任务 DAG 也能跑出完整链，而非空 mission 静默转人工
+    const plan = input.plan !== undefined && input.plan.length > 0 ? input.plan : defaultPlan(input.goal)
+    orchestrator.createTasks(plan)
     this.orchestrator = orchestrator
     this.running = orchestrator.run().catch((error) => {
       this.store.appendEvent(missionId, {
@@ -228,6 +229,28 @@ export class PodService {
   waitRun(): Promise<RunSummary> | undefined {
     return this.running
   }
+}
+
+/** 默认任务 DAG：T-1 实现（goal 即规格）+ T-2 独立 review（审查者≠实现者，质量门）。 */
+export function defaultPlan(goal: string): PlanTaskInput[] {
+  const title = goal.length > 40 ? `${goal.slice(0, 40)}…` : goal
+  return [
+    {
+      id: 'T-1',
+      title,
+      spec: goal,
+      type: 'implement',
+      skill_tags: ['编码'],
+    },
+    {
+      id: 'T-2',
+      title: '独立 review T-1',
+      spec: '按最小上下文审查 T-1：规格落实、越界改动、commit 纪律（只依据注入 diff，无实现者叙事）。',
+      type: 'review',
+      skill_tags: ['审查'],
+      depends_on: ['T-1'],
+    },
+  ]
 }
 
 /** 默认数据根（插件与 CLI 共用）。 */
