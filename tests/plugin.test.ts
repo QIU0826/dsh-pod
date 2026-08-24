@@ -100,7 +100,8 @@ describe('plugin 宿主契约', () => {
     }
     await ctx.plugin(plugin)
     expect(mocks.section).not.toHaveBeenCalled()
-    expect(mocks.register).toHaveBeenCalledTimes(1)
+    // ping + status + events + launch 四条数据面路由
+    expect(mocks.register).toHaveBeenCalledTimes(4)
     expect(mocks.toolNames).toHaveLength(8)
     ctx.registry.delete(plugin)
     rmSync(dataDir, { recursive: true, force: true })

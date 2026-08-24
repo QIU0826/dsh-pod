@@ -25,6 +25,7 @@ import { JsonStore } from './core/store.js'
 import { makePodTools, makeCommanderStartTool } from './pod-tools.js'
 import { PodService } from './pod-service.js'
 import { createCommanderSession } from './commander.js'
+import { makePodRoutes } from './routes.js'
 
 /** Stable cordis plugin name. */
 export const name = 'pod'
@@ -109,8 +110,12 @@ export function apply(ctx: Context, config?: PodConfig): void {
 
   let runtime: PodRuntime | undefined
   let runtimeError: string | undefined
+  let service: PodService | undefined
   try {
     runtime = createPodRuntime(config?.dataDir)
+    if (runtime !== undefined) {
+      service = new PodService({ store: runtime.store, dataDir: runtime.dataDir })
+    }
   } catch (error) {
     const podError = error instanceof PodError ? error : new PodError(String(error), 'INTERNAL', { error })
     runtimeError = `${podError.code}: ${podError.message}`
@@ -120,9 +125,11 @@ export function apply(ctx: Context, config?: PodConfig): void {
 
   ctx.effect(
     () => {
-      const disposeRoute = ctx.webServer.register(pingRoute(runtime, runtimeError))
+      // 数据面（Canvas/Team Builder 取数）与健康路由
+      const routes = [pingRoute(runtime, runtimeError), ...makePodRoutes(() => service)]
+      const disposers = routes.map((route) => ctx.webServer.register(route))
       return () => {
-        disposeRoute()
+        for (const dispose of disposers) dispose()
       }
     },
     'dsh-pod: routes',
@@ -130,16 +137,15 @@ export function apply(ctx: Context, config?: PodConfig): void {
 
   // pod_* 工具注册（3.3 节工具作用域清单；MVP 全局注册，作用域细化见 CR-04）。
   // 运行时损坏时同样注册工具（pod_launch 会如实报错），工具是稳定契约面。
-  if (runtime !== undefined) {
+  if (service !== undefined) {
     ctx.effect(
       () => {
-        const service = new PodService({ store: runtime.store, dataDir: runtime.dataDir })
         // pod_launch 后自动创建 commander 会话（3.3 节：mission 独立会话承载编排）
-        service.setCommanderLauncher(async (goal, cwd, agentPreset) => {
+        service!.setCommanderLauncher(async (goal, cwd, agentPreset) => {
           const sessionId = `pod-mission-${Date.now()}`
           const session = await createCommanderSession({
             agents: ctx.agents,
-            service,
+            service: service!,
             sessionId,
             cwd,
             goal,
@@ -151,7 +157,7 @@ export function apply(ctx: Context, config?: PodConfig): void {
         // 周期巡检：watchdog 空闲/墙钟 + 审批超期自动 pause（CR-05-6 / CR-01-7）
         const maintenanceTimer = setInterval(() => {
           try {
-            const result = service.maintenanceTick()
+            const result = service!.maintenanceTick()
             if (result.staleApprovals.length > 0) {
               console.error('[dsh-pod] stale approvals paused mission:', result.staleApprovals)
             }
@@ -159,13 +165,13 @@ export function apply(ctx: Context, config?: PodConfig): void {
             console.error('[dsh-pod] maintenance tick failed:', error)
           }
         }, 30_000)
-        const { tools } = makePodTools(service)
+        const { tools } = makePodTools(service!)
         // pod_commander_start：真实宿主的 commander 会话验证入口（CR-05-2 官方作用域路径）
         const commanderTool = makeCommanderStartTool(async (goal, cwd, agentPreset) => {
           const sessionId = `pod-mission-${Date.now()}`
           const session = await createCommanderSession({
             agents: ctx.agents,
-            service,
+            service: service!,
             sessionId,
             cwd,
             goal,

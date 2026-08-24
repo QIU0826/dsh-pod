@@ -19,7 +19,7 @@ import type { JsonStore } from './core/store.js'
 import { ClaudeHeadlessBackend } from './workers/claude-headless.js'
 import { CodexHeadlessBackend, codexBinaryCandidates } from './workers/codex-headless.js'
 import { repairPath } from './workers/preflight.js'
-import type { ApprovalRequest, Mission, Task, Vendor, WorkerBackend } from './core/types.js'
+import type { ApprovalRequest, AgentSlot, Mission, Task, Vendor, WorkerBackend } from './core/types.js'
 
 export interface PodServiceOptions {
   store: JsonStore
@@ -159,19 +159,39 @@ export class PodService {
   status(): {
     mission?: Mission
     tasks: Task[]
+    slots: AgentSlot[]
     pendingApprovals: ApprovalRequest[]
     runStatus?: string
   } {
     const active = this.store.getActiveMission()
-    if (active === undefined) return { tasks: [], pendingApprovals: [] }
+    if (active === undefined) return { tasks: [], slots: [], pendingApprovals: [] }
     const orch = this.requireOrchestrator()
     const snapshot = orch.status()
     return {
       mission: snapshot.mission,
       tasks: snapshot.tasks,
+      slots: snapshot.slots,
       pendingApprovals: snapshot.pendingApprovals,
       runStatus: this.running !== undefined ? 'running' : 'idle',
     }
+  }
+
+  /** Canvas 事件流尾部（after=ts 游标；客户端按 id 去重）。 */
+  eventsTail(afterTs: number): Array<{ id: string; ts: number; kind: string; task_id?: string; slot_id?: string; payload: Record<string, unknown> }> {
+    const missions = this.store.listMissions().filter((m) => m.status !== 'done' && m.status !== 'aborted')
+    const events = missions.flatMap((m) => this.store.listEvents(m.id))
+    return events
+      .filter((e) => e.ts > afterTs)
+      .sort((a, b) => a.ts - b.ts)
+      .slice(-200)
+      .map((e) => ({
+        id: e.id,
+        ts: e.ts,
+        kind: e.kind,
+        task_id: e.task_id,
+        slot_id: e.slot_id,
+        payload: e.payload,
+      }))
   }
 
   /** 手动模式（3.3 节）：UI/工具直连状态机接口，绕开 LLM 编排。 */
