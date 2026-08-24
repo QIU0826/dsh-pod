@@ -30,6 +30,7 @@ function fakeService(over: Partial<PodService> = {}) {
   const service = {
     status: () => ({ mission: null, tasks: [], slots: [], pendingApprovals: [] }),
     eventsTail: () => [],
+    ledgerTail: () => ({ total_tokens: 0, total_equiv_usd: 0, entries: [] }),
     launch: (input: unknown) => ({
       id: 'M-1',
       status: 'planning' as const,

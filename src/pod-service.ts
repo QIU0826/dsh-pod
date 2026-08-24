@@ -13,6 +13,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync } from 'node:fs'
 import { ApprovalEngine } from './core/approvals.js'
 import { ApplyPatch, execGitRunner, type ApplyResult } from './core/apply-patch.js'
+import { Ledger } from './core/ledger.js'
 import { MissionOrchestrator, type LaunchInput, type PlanTaskInput, type RunSummary } from './core/orchestrator.js'
 import { execGitClient, verifyTaskArtifacts } from './core/verifier.js'
 import type { JsonStore } from './core/store.js'
@@ -198,36 +199,27 @@ export class PodService {
       }))
   }
 
-  /** 账本双列快照（W5：tokens 实测 + equiv_usd 标注估算；尾部 50 条）。 */
-  ledgerTail(): Array<{
-    slot_id: string
-    task_id: string | null
-    model: string
-    ts: number
-    tokens_in: number
-    tokens_out: number
-    equiv_usd: number
-    price_known: boolean
-    price_table_version: string
-    usage_source: string
-  }> {
+  /** 账本双列尾部（W5：tokens 实测权威列 + equiv_usd 标注估算）。 */
+  ledgerTail(): {
+    total_tokens: number
+    total_equiv_usd: number
+    entries: Array<{ model: string; tokens_in: number; tokens_out: number; equiv_usd: number; price_known: boolean; usage_source: string }>
+  } {
     const active = this.store.getActiveMission()
-    if (active === undefined) return []
-    return this.store
-      .listLedger(active.id)
-      .slice(-50)
-      .map((e) => ({
-        slot_id: e.slot_id,
-        task_id: e.task_id ?? null,
+    if (active === undefined) return { total_tokens: 0, total_equiv_usd: 0, entries: [] }
+    const summary = new Ledger(this.store).summary(active.id)
+    return {
+      total_tokens: summary.total_tokens,
+      total_equiv_usd: Number(summary.total_equiv_usd.toFixed(6)),
+      entries: summary.entries.map((e) => ({
         model: e.model,
-        ts: e.ts,
         tokens_in: e.tokens_in,
         tokens_out: e.tokens_out,
-        equiv_usd: Number(e.equiv_usd.toFixed(4)),
+        equiv_usd: e.equiv_usd,
         price_known: e.price_known,
-        price_table_version: e.price_table_version,
         usage_source: e.usage_source,
-      }))
+      })),
+    }
   }
 
   /** 手动模式（3.3 节）：UI/工具直连状态机接口，绕开 LLM 编排。 */
