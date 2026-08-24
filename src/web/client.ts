@@ -25,7 +25,6 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 /** Required services (fiber inject waiting — the runtime must be up first). */
 export const inject = ['locale']
 
-const SIDEBAR_ENTRY_SELECTOR = '[data-dsh-pod-entry]'
 const CONVERSATION_COLUMN_SELECTOR = '[data-pane="conversation"], [class*="centerCol"]'
 const ACTIVE_ATTR = 'data-dsh-pod-active'
 const OTHER_ACTIVE_ATTR = 'data-dsh-taskboard-active'
@@ -35,26 +34,103 @@ const PANEL_NAME = 'pod'
 const ENTRY_ICON =
   '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/><circle cx="5" cy="8" r="1.2" fill="currentColor"/><circle cx="8" cy="5" r="1.2" fill="currentColor"/><circle cx="11" cy="8" r="1.2" fill="currentColor"/></svg>'
 
-/** 侧边栏入口（纯 DOM；frame 迟到时由 interval self-heal，沿 dsh-ssh 思路的最小实现）。 */
-function mountSidebarEntry(toggle: () => void): () => void {
-  const ensure = (): void => {
-    if (document.querySelector(SIDEBAR_ENTRY_SELECTOR) !== null) return
-    const nav = document.querySelector('nav[class*="sidebar"], [class*="sidebarNav"], [data-testid*="sidebar"]')
-    if (nav === undefined || nav === null) return
-    const row = document.createElement('button')
-    row.dataset.dshPodEntry = ''
-    row.style.cssText =
-      'display:flex;align-items:center;gap:6px;width:100%;padding:6px 8px;background:none;border:none;cursor:pointer;font:inherit;color:inherit;'
-    row.innerHTML = `${ENTRY_ICON}<span>Pod</span>`
-    row.title = 'Pod 鲸群'
-    row.addEventListener('click', toggle)
-    nav.appendChild(row)
+/**
+ * 侧边栏入口 —— 按 shell 真实结构挂载（dsh-ssh sidebar-entry-core 实证：
+ * 入口行插在 New Session 按钮之后；MutationObserver self-heal 防 React 重渲染位移）。
+ * 纯 DOM 行（不参与 shell 协调）；语义属性 data-dsh-plugin="pod" + data-dsh-part="sidebar-entry"。
+ */
+const SIDEBAR_COLUMN_SELECTOR = '[data-pane="sidebar"], [class*="sidebarCol"]'
+const FAMILY_SELECTORS = ['[data-dsh-pod-entry]', '[data-dsh-ssh-entry]', '[data-dsh-taskboard-entry]']
+
+function sidebarRoot(): HTMLElement | undefined {
+  const column = document.querySelector<HTMLElement>(SIDEBAR_COLUMN_SELECTOR)
+  if (column === null) return undefined
+  const logoOwner = column.querySelector<HTMLElement>('[class*="logoRow"]')?.parentElement
+  return logoOwner ?? (column.firstElementChild as HTMLElement | undefined)
+}
+
+function newSessionButton(root: HTMLElement): HTMLButtonElement | undefined {
+  const nested = root.querySelector<HTMLButtonElement>('button[class*="newSession"]')
+  if (nested !== null) return nested
+  for (const child of root.children) {
+    if (child.tagName === 'BUTTON') return child as HTMLButtonElement
   }
-  ensure()
-  const timer = setInterval(ensure, 1500)
+  return undefined
+}
+
+function createPodEntry(onToggle: () => void): HTMLButtonElement {
+  const entry = document.createElement('button')
+  entry.type = 'button'
+  entry.dataset.dshPodEntry = ''
+  entry.setAttribute('data-dsh-plugin', 'pod')
+  entry.setAttribute('data-dsh-part', 'sidebar-entry')
+  entry.setAttribute('aria-label', 'Pod 鲸群')
+  entry.title = 'Pod 鲸群'
+  entry.style.cssText =
+    'display:flex;align-items:center;gap:6px;width:100%;padding:6px 10px;background:none;border:none;cursor:pointer;font:inherit;color:inherit;text-align:left;'
+  entry.innerHTML = `<span>${ENTRY_ICON}</span><span>Pod</span>`
+  entry.addEventListener('click', onToggle)
+  return entry
+}
+
+function placePodEntry(root: HTMLElement, entry: HTMLButtonElement): boolean {
+  const button = newSessionButton(root)
+  if (button === undefined) return false
+  if (entry.parentElement !== root) {
+    const row = button.closest('[class*="logoRow"]')
+    const base = row !== null && row.parentElement === root ? row : button
+    const family = Array.from(root.children).filter(
+      (el): el is HTMLElement => el instanceof HTMLElement && el.matches(FAMILY_SELECTORS.join(', ')),
+    )
+    const anchor = family.length > 0 ? family[family.length - 1]!.nextElementSibling : base.nextElementSibling
+    root.insertBefore(entry, anchor)
+  }
+  return true
+}
+
+function mountSidebarEntry(onToggle: () => void): () => void {
+  if (document.querySelector('[data-dsh-pod-entry]') !== null) return () => {}
+  const entry = createPodEntry(onToggle)
+  let root: HTMLElement | undefined
+  let placed = false
+
+  const tryPlace = (): void => {
+    if (root !== undefined && !root.isConnected) {
+      rootObserver.disconnect()
+      root = undefined
+      placed = false
+    }
+    if (placed) {
+      if (document.body.contains(entry)) return
+      rootObserver.disconnect()
+      root = undefined
+      placed = false
+    }
+    root ??= sidebarRoot()
+    if (root === undefined) return
+    placed = placePodEntry(root, entry)
+    if (placed) rootObserver.observe(root, { childList: true, subtree: true })
+  }
+
+  const waitObserver = new MutationObserver(() => {
+    tryPlace()
+  })
+  waitObserver.observe(document.body, { childList: true, subtree: true })
+
+  const rootObserver = new MutationObserver(() => {
+    if (root === undefined || !root.isConnected) {
+      placed = false
+      tryPlace()
+      return
+    }
+    if (!root.contains(entry)) placed = placePodEntry(root, entry)
+  })
+
+  tryPlace()
   return () => {
-    clearInterval(timer)
-    document.querySelectorAll(SIDEBAR_ENTRY_SELECTOR).forEach((node) => node.remove())
+    waitObserver.disconnect()
+    rootObserver.disconnect()
+    entry.remove()
   }
 }
 
