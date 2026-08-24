@@ -177,8 +177,11 @@ export class MissionOrchestrator {
     }
     this.store.createMission(mission)
     for (const slotInput of input.slots) {
+      // 槽位 id 全局唯一（2.12 节多 mission 数据模型）：按 mission 命名空间化，
+      // 避免跨 mission 短 id（S-1/S-2）在 Store 全局表中冲突（CR-06-6）。
+      const slotId = `${this.missionId}-${slotInput.id}`
       const slot: AgentSlot = {
-        id: slotInput.id,
+        id: slotId,
         mission_id: this.missionId,
         vendor: slotInput.vendor,
         role: slotInput.role,
@@ -605,19 +608,28 @@ export class MissionOrchestrator {
     this.watchdog.setThreshold(kind, ms)
   }
 
-  /** CR-01-2：steer 指令排队（运行中不打断进程；员工下次派单必带）。 */
+  /** CR-01-2：steer 指令排队（运行中不打断进程；员工下次派单必带）。短 id 自动映射到 mission 命名空间 id。 */
   steer(slotId: string, instruction: string): void {
-    const list = this.queuedSteer.get(slotId) ?? []
+    const fullId = this.resolveSlotId(slotId)
+    const list = this.queuedSteer.get(fullId) ?? []
     list.push(instruction)
-    this.queuedSteer.set(slotId, list)
+    this.queuedSteer.set(fullId, list)
     this.store.appendEvent(this.missionId, {
-      id: `ev-steer-${slotId}-${this.clock()}`,
+      id: `ev-steer-${fullId}-${this.clock()}`,
       mission_id: this.missionId,
       ts: this.clock(),
       kind: 'steer_queued',
-      slot_id: slotId,
+      slot_id: fullId,
       payload: { instruction },
     })
+  }
+
+  /** 槽位 id 解析：完整 id 或短 id（mission 命名空间后缀，CR-06-6）。 */
+  private resolveSlotId(slotId: string): string {
+    const exact = this.store.getSlot(slotId)
+    if (exact !== undefined) return slotId
+    const matches = this.store.listSlots(this.missionId).filter((s) => s.id.endsWith(`-${slotId}`))
+    return matches.length > 0 ? matches[0]!.id : slotId
   }
 
   // ── 审批闭环 ──────────────────────────────────────────────────────────

@@ -316,16 +316,19 @@ describe('run 最小可演示链（fake 后端）', () => {
     expect(summary.status).toBe('awaiting_approval')
     expect(fixture.store.getTask('T-1')!.status).toBe('done')
     expect(fixture.store.getTask('T-2')!.status).toBe('done')
-    // 独立 review：审查者 ≠ 实现者
-    expect(fixture.store.getTask('T-1')!.owner_slot_id).toBe('S-1')
-    expect(fixture.store.getTask('T-2')!.owner_slot_id).toBe('S-2')
+    // 独立 review：审查者 ≠ 实现者（槽位 id 按 mission 命名空间化，CR-06-6）
+    const ownerT1 = fixture.store.getTask('T-1')!.owner_slot_id!
+    const ownerT2 = fixture.store.getTask('T-2')!.owner_slot_id!
+    expect(ownerT1).toBe('M-1-S-1')
+    expect(ownerT2).toBe('M-1-S-2')
+    expect(ownerT1).not.toBe(ownerT2)
     // 审批卡已持久化（2.6 节模式 1）
     const approvals = fixture.store.listApprovals('M-1')
     expect(approvals).toHaveLength(1)
     expect(approvals[0]!.status).toBe('pending')
     // worktree 已为员工建立
-    expect(fixture.worktrees.has('S-1')).toBe(true)
-    expect(fixture.worktrees.has('S-2')).toBe(true)
+    expect(fixture.worktrees.has('M-1-S-1')).toBe(true)
+    expect(fixture.worktrees.has('M-1-S-2')).toBe(true)
     // 事件流含派单/完成/审批
     const kinds = fixture.store.listEvents('M-1').map((e) => e.kind)
     expect(kinds).toContain('task_dispatched')
@@ -392,7 +395,7 @@ describe('run 最小可演示链（fake 后端）', () => {
     fixture.clockNow += 60_000
     const summary2 = await orchestrator.run()
     expect(summary2.status).toBe('awaiting_approval')
-    expect(fixture.store.getSlot('S-1')!.status).toBe('idle')
+    expect(fixture.store.getSlot('M-1-S-1')!.status).toBe('idle')
   })
 
   it('预算熔断 → mission paused + 事件（2.7 节）', async () => {
