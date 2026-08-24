@@ -45,7 +45,7 @@ import {
   MAX_PARALLEL_TASKS,
   MAX_SLOTS,
 } from './types.js'
-import { Watchdog } from './watchdog.js'
+import { Watchdog, type FiredWatchdog } from './watchdog.js'
 
 export interface SlotInput {
   id: string
@@ -559,25 +559,36 @@ export class MissionOrchestrator {
   }
 
   /** watchdog 巡检（插件层定时调用；CLI 演示链在循环内调用）。 */
-  tickWatchdogs(): void {
-    const now = this.clock()
-    for (const fired of this.watchdog.tick(now)) {
-      if (fired.task_id === undefined) continue
-      const task = this.store.getTask(fired.task_id)
+  tickWatchdogs(firedOverride?: FiredWatchdog[]): void {
+    const fired = firedOverride ?? this.watchdog.tick(this.clock())
+    for (const item of fired) {
+      if (item.task_id === undefined) continue
+      const task = this.store.getTask(item.task_id)
       if (task === undefined) continue
-      if (fired.kind === 'task-wall-clock') {
-        void this.killTask(fired.task_id)
+      if (item.kind === 'task-wall-clock') {
+        void this.killTask(item.task_id)
         if (task.status === 'dispatched' || task.status === 'running') {
-          this.taskMachine.fail(fired.task_id, { kind: 'wall_clock', message: 'watchdog: wall-clock exceeded' })
+          this.taskMachine.fail(item.task_id, { kind: 'wall_clock', message: 'watchdog: wall-clock exceeded' })
         }
-      } else if (fired.kind === 'task-idle') {
-        void this.killTask(fired.task_id)
+      } else if (item.kind === 'task-idle') {
+        void this.killTask(item.task_id)
         if (task.status === 'dispatched' || task.status === 'running') {
-          this.taskMachine.fail(fired.task_id, { kind: 'idle_timeout', message: 'watchdog: no stream events' })
+          this.taskMachine.fail(item.task_id, { kind: 'idle_timeout', message: 'watchdog: no stream events' })
         }
       }
       this.signalCompletion()
     }
+  }
+
+  /**
+   * 宿主周期巡检（CR-05-6）：watchdog 触发 + 审批超期自动 pause（CR-01-7）。
+   * 插件层以固定间隔调用；awaiting_approval 期间 watchdog 已由 Watchdog.pauseAll 语义挂起。
+   */
+  maintenanceTick(): { staleApprovals: string[]; watchdogFired: number } {
+    const fired = this.watchdog.tick(this.clock())
+    this.tickWatchdogs(fired)
+    const stale = this.missionMachine.tickStaleApprovals()
+    return { staleApprovals: stale.map((a) => a.id), watchdogFired: fired.length }
   }
 
   async killTask(taskId: string): Promise<void> {

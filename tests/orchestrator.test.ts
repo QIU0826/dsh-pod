@@ -21,6 +21,7 @@ import type {
   WorkerHandle,
   WorkerProgressEvent,
 } from '../src/core/types.js'
+import { APPROVAL_STALE_MS } from '../src/core/types.js'
 
 /**
  * FakeBackend：脚本化回放——start 记录调用并按任务 id 脚本产出进度与完成信号。
@@ -465,5 +466,33 @@ describe('watchdog 接线（任务空闲 kill + 故障分类）', () => {
     expect(task.status).toBe('blocked')
     expect(task.fault).toBe('idle_timeout')
     expect(fixture.backends.claude!.kills.length).toBeGreaterThan(0)
+  })
+})
+
+describe('maintenanceTick（CR-05-6：宿主周期巡检 = watchdog + 审批超期）', () => {
+  it('审批超期 → staleApprovals 返回 + mission 自动 pause', async () => {
+    const orchestrator = makeOrchestrator(fixture, {})
+    orchestrator.launch(launchInput({ cwd: fixture.repo }))
+    orchestrator.createTasks(plan())
+    await orchestrator.run()
+    const approval = fixture.store.listApprovals('M-1')[0]!
+    fixture.clockNow += APPROVAL_STALE_MS + 1
+    const result = orchestrator.maintenanceTick()
+    expect(result.staleApprovals).toEqual([approval.id])
+    expect(fixture.store.getMission('M-1')!.status).toBe('paused')
+    expect(fixture.store.listEvents('M-1').some((e) => e.kind === 'mission_paused_stale_approval')).toBe(true)
+  })
+
+  it('watchdog 触发计入 watchdogFired（空闲超时 kill 路径经 maintenanceTick）', async () => {
+    const orchestrator = makeOrchestrator(fixture, { 'T-1': { hang: true } })
+    orchestrator.launch(launchInput({ cwd: fixture.repo }))
+    orchestrator.createTasks([{ id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'] }])
+    orchestrator.setWatchdogThreshold('task-idle', 100)
+    await orchestrator.dispatchNext()
+    fixture.clockNow += 101
+    const result = orchestrator.maintenanceTick()
+    expect(result.watchdogFired).toBeGreaterThan(0)
+    expect(fixture.store.getTask('T-1')!.status).toBe('blocked')
+    expect(fixture.store.getTask('T-1')!.fault).toBe('idle_timeout')
   })
 })

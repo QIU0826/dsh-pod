@@ -19,10 +19,10 @@ while ($waited -lt 90) {
     Write-Host "[restart] waiting for port $port release... ${waited}s"
 }
 
-# 3) 启动新 DSH
-Write-Host "[restart] launching dsh --profile web (no-open)"
+# 3) 启动新 DSH（默认自动打开浏览器 GUI）
+Write-Host "[restart] launching dsh --profile web"
 try {
-    Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "dsh --profile web --no-open" -WorkingDirectory "D:\玩具" -WindowStyle Minimized
+    Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "dsh --profile web" -WorkingDirectory "D:\玩具" -WindowStyle Minimized
     Write-Host "[restart] launched"
 } catch {
     Write-Host "[restart] LAUNCH FAILED: $_"

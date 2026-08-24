@@ -134,6 +134,31 @@ export function apply(ctx: Context, config?: PodConfig): void {
     ctx.effect(
       () => {
         const service = new PodService({ store: runtime.store, dataDir: runtime.dataDir })
+        // pod_launch 后自动创建 commander 会话（3.3 节：mission 独立会话承载编排）
+        service.setCommanderLauncher(async (goal, cwd, agentPreset) => {
+          const sessionId = `pod-mission-${Date.now()}`
+          const session = await createCommanderSession({
+            agents: ctx.agents,
+            service,
+            sessionId,
+            cwd,
+            goal,
+            agentPreset,
+          })
+          void session // handle 生命周期随插件卸载（MVP 单 commander）
+          return { sessionId }
+        })
+        // 周期巡检：watchdog 空闲/墙钟 + 审批超期自动 pause（CR-05-6 / CR-01-7）
+        const maintenanceTimer = setInterval(() => {
+          try {
+            const result = service.maintenanceTick()
+            if (result.staleApprovals.length > 0) {
+              console.error('[dsh-pod] stale approvals paused mission:', result.staleApprovals)
+            }
+          } catch (error) {
+            console.error('[dsh-pod] maintenance tick failed:', error)
+          }
+        }, 30_000)
         const { tools } = makePodTools(service)
         // pod_commander_start：真实宿主的 commander 会话验证入口（CR-05-2 官方作用域路径）
         const commanderTool = makeCommanderStartTool(async (goal, cwd, agentPreset) => {
@@ -146,11 +171,12 @@ export function apply(ctx: Context, config?: PodConfig): void {
             goal,
             agentPreset,
           })
-          void session // handle 由插件持有表管理（MVP 单 commander；回收在插件卸载时）
+          void session
           return { sessionId, message: 'commander 会话已创建并以 goal 驱动；pod_* 工具仅注册于该会话作用域' }
         })
         const disposers = [...tools, commanderTool].map((tool) => ctx.tools.register(tool))
         return () => {
+          clearInterval(maintenanceTimer)
           for (const dispose of disposers) dispose()
         }
       },

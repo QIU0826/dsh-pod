@@ -29,12 +29,16 @@ export interface PodServiceOptions {
   clock?: () => number
 }
 
+/** commander 会话启动器（插件层注入：ctx.agents.create + agentCtx 作用域注册，CR-05-2）。 */
+export type CommanderLauncher = (goal: string, cwd: string, agentPreset?: string) => Promise<{ sessionId: string }>
+
 export class PodService {
   private readonly store: JsonStore
   private readonly clock: () => number
   private readonly backends: Partial<Record<Vendor, WorkerBackend>>
   private orchestrator: MissionOrchestrator | undefined
   private running: Promise<RunSummary> | undefined
+  private commanderLauncher: CommanderLauncher | undefined
 
   constructor(options: PodServiceOptions) {
     this.store = options.store
@@ -49,6 +53,11 @@ export class PodService {
         binary: codexBinaryCandidates('win32').find((c) => existsSync(c)) ?? 'codex',
       }),
     }
+  }
+
+  /** 插件层注入 commander 会话启动器（pod_launch 后自动创建 mission 编排会话，3.3 节）。 */
+  setCommanderLauncher(launcher: CommanderLauncher | undefined): void {
+    this.commanderLauncher = launcher
   }
 
   get activeMissionId(): string | undefined {
@@ -74,7 +83,25 @@ export class PodService {
       })
       return { status: 'aborted' as const, doneTasks: [], escalatedTasks: [], pendingApprovals: [], reason: String(error) }
     })
+    // 3.3 节：mission 独立会话承载 commander（编排逻辑）；创建失败仅落事件，不阻断 mission
+    if (this.commanderLauncher !== undefined) {
+      this.commanderLauncher(input.goal, input.cwd).catch((error) => {
+        this.store.appendEvent(missionId, {
+          id: `ev-commander-error-${this.clock()}`,
+          mission_id: missionId,
+          ts: this.clock(),
+          kind: 'commander_creation_error',
+          payload: { error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) },
+        })
+      })
+    }
     return mission
+  }
+
+  /** 宿主周期巡检：watchdog + 审批超期（CR-05-6）。 */
+  maintenanceTick(): { staleApprovals: string[]; watchdogFired: number } {
+    if (this.orchestrator === undefined) return { staleApprovals: [], watchdogFired: 0 }
+    return this.orchestrator.maintenanceTick()
   }
 
   private makeOrchestrator(missionId: string): MissionOrchestrator {
