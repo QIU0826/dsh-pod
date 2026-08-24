@@ -4,6 +4,8 @@
  *   GET  /status  → mission/任务看板/员工/审批卡/账本快照
  *   GET  /events  → 事件流尾部（after=ts 游标，客户端按 id 去重）
  *   POST /launch  → Team Builder 提交：启动 mission（含 commander 会话自动创建，CR-05-7）
+ *   POST /steer /approve /deny /dispatch /abort → W4 交互面（审批卡/指令/手动模式/终止）
+ *   status 含 ledger 双列（tokens 实测 + equiv_usd 标注，W5）
  * 信任面：全部 loopback-only（launch 会触发真实 LLM 成本，3.8 节 fan-out 限流同源精神）。
  */
 
@@ -120,7 +122,12 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
             status: s.status,
             ctx_usage_pct: s.ctx_usage_pct,
           })),
-          pending_approvals: snapshot.pendingApprovals.map((a) => ({ id: a.id, summary: a.patch.summary })),
+          pending_approvals: snapshot.pendingApprovals.map((a) => ({
+            id: a.id,
+            summary: a.patch.summary,
+            worktree_path: a.patch.worktree_path,
+          })),
+          ledger: current.ledgerTail(),
           message: snapshot.mission?.status ?? 'no active mission',
         })
       },
@@ -173,6 +180,135 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
             plan: validated.value.plan as PlanTaskInput[] | undefined,
           })
           writeJson(res, 200, { mission_id: mission.id, status: mission.status })
+        } catch (error) {
+          writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/api/dsh-pod/steer',
+      handler: async (req, res) => {
+        if (!isLoopback(req)) {
+          writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        const current = service()
+        if (current === undefined) {
+          writeJson(res, 503, { error: 'pod runtime not initialized' })
+          return
+        }
+        const body = await readJsonBody(req)
+        const slotId = body?.slot_id
+        const instruction = body?.instruction
+        if (typeof slotId !== 'string' || slotId.length === 0 || typeof instruction !== 'string' || instruction.length === 0) {
+          writeJson(res, 422, { error: 'slot_id and instruction are required' })
+          return
+        }
+        try {
+          current.steer(slotId, instruction)
+          writeJson(res, 200, { ok: true })
+        } catch (error) {
+          writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/api/dsh-pod/approve',
+      handler: async (req, res) => {
+        if (!isLoopback(req)) {
+          writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        const current = service()
+        if (current === undefined) {
+          writeJson(res, 503, { error: 'pod runtime not initialized' })
+          return
+        }
+        const body = await readJsonBody(req)
+        const approvalId = body?.approval_id
+        if (typeof approvalId !== 'string' || approvalId.length === 0) {
+          writeJson(res, 422, { error: 'approval_id is required' })
+          return
+        }
+        // apply_patch 单入口：合并成功才裁决 mission done；冲突保持 awaiting_approval（CR-05-3）
+        const result = await current.approve(approvalId, 'canvas-ui')
+        if (!result.ok) {
+          writeJson(res, result.conflict ? 409 : 404, { error: result.message, conflict: result.conflict })
+          return
+        }
+        writeJson(res, 200, { ok: true, merge_commit: result.mergeCommit.slice(0, 8) })
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/api/dsh-pod/deny',
+      handler: async (req, res) => {
+        if (!isLoopback(req)) {
+          writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        const current = service()
+        if (current === undefined) {
+          writeJson(res, 503, { error: 'pod runtime not initialized' })
+          return
+        }
+        const body = await readJsonBody(req)
+        const approvalId = body?.approval_id
+        if (typeof approvalId !== 'string' || approvalId.length === 0) {
+          writeJson(res, 422, { error: 'approval_id is required' })
+          return
+        }
+        const reason = typeof body?.reason === 'string' ? body.reason : 'denied via canvas-ui'
+        try {
+          current.deny(approvalId, 'canvas-ui', reason)
+          writeJson(res, 200, { ok: true })
+        } catch (error) {
+          writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/api/dsh-pod/dispatch',
+      handler: async (req, res) => {
+        if (!isLoopback(req)) {
+          writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        const current = service()
+        if (current === undefined) {
+          writeJson(res, 503, { error: 'pod runtime not initialized' })
+          return
+        }
+        try {
+          // 手动模式（3.3 节）：UI 直连状态机派单，绕开 LLM 编排
+          const dispatched = await current.dispatchNext()
+          writeJson(res, 200, { dispatched })
+        } catch (error) {
+          writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/api/dsh-pod/abort',
+      handler: async (req, res) => {
+        if (!isLoopback(req)) {
+          writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        const current = service()
+        if (current === undefined) {
+          writeJson(res, 503, { error: 'pod runtime not initialized' })
+          return
+        }
+        const body = await readJsonBody(req)
+        const reason = typeof body?.reason === 'string' && body.reason.length > 0 ? body.reason : 'aborted via canvas-ui'
+        try {
+          current.abort(reason)
+          writeJson(res, 200, { ok: true })
         } catch (error) {
           writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
         }

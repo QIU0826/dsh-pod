@@ -32,7 +32,19 @@ export interface StatusResponse {
   } | null
   tasks: StatusTask[]
   slots: StatusSlot[]
-  pending_approvals: Array<{ id: string; summary: string }>
+  pending_approvals: Array<{ id: string; summary: string; worktree_path: string }>
+  ledger: Array<{
+    slot_id: string
+    task_id: string | null
+    model: string
+    ts: number
+    tokens_in: number
+    tokens_out: number
+    equiv_usd: number
+    price_known: boolean
+    price_table_version: string
+    usage_source: string
+  }>
   message: string
 }
 
@@ -88,4 +100,39 @@ export async function postLaunch(payload: LaunchPayload): Promise<{ mission_id: 
       body: JSON.stringify(payload),
     }),
   )
+}
+
+async function postJson<T>(path: string, payload: Record<string, unknown>): Promise<T> {
+  return readJson<T>(
+    await fetch(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  )
+}
+
+/** steer 指令排队（员工下次派单必带，CR-01-2）。 */
+export function postSteer(slotId: string, instruction: string): Promise<{ ok: boolean }> {
+  return postJson('/api/dsh-pod/steer', { slot_id: slotId, instruction })
+}
+
+/** 审批卡 approve（apply_patch 单入口合并；冲突返回 409）。 */
+export function postApprove(approvalId: string): Promise<{ ok: boolean; message?: string }> {
+  return postJson('/api/dsh-pod/approve', { approval_id: approvalId })
+}
+
+/** 审批卡 deny（带原因落盘）。 */
+export function postDeny(approvalId: string, reason: string): Promise<{ ok: boolean }> {
+  return postJson('/api/dsh-pod/deny', { approval_id: approvalId, reason })
+}
+
+/** 手动模式：直连状态机派单一次（3.3 节）。 */
+export function postDispatch(): Promise<{ dispatched: boolean }> {
+  return postJson('/api/dsh-pod/dispatch', {})
+}
+
+/** 终止当前 mission。 */
+export function postAbort(reason: string): Promise<{ ok: boolean }> {
+  return postJson('/api/dsh-pod/abort', { reason })
 }

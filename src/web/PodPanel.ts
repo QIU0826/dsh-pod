@@ -5,7 +5,18 @@
  * 数据：2s 轮询 /api/dsh-pod/status + /events（同源 fetch，dsh-ssh 实证路径）。
  */
 import { createElement, useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react'
-import { fetchEvents, fetchStatus, postLaunch, type PodEvent, type StatusResponse } from './api.js'
+import {
+  fetchEvents,
+  fetchStatus,
+  postAbort,
+  postApprove,
+  postDeny,
+  postDispatch,
+  postLaunch,
+  postSteer,
+  type PodEvent,
+  type StatusResponse,
+} from './api.js'
 
 const POLL_MS = 2000
 
@@ -24,6 +35,12 @@ const styles: Record<string, CSSProperties> = {
   input: { fontFamily: 'inherit', fontSize: 12 },
   button: { fontFamily: 'inherit', fontSize: 12, cursor: 'pointer' },
   msg: { fontSize: 11, color: '#b45309' },
+  approvals: { display: 'grid', gap: 4, padding: 8, border: '1px solid var(--ds-color-border, rgba(0,0,0,.12))', borderRadius: 6 },
+  approvalCard: { display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, flexWrap: 'wrap' },
+  bar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+  ledger: { flex: 1, border: '1px solid var(--ds-color-border, rgba(0,0,0,.12))', borderRadius: 6, padding: 6, overflow: 'auto', maxHeight: 160 },
+  ledgerLine: { fontSize: 11, color: 'var(--ds-color-text-2, #666)', marginBottom: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  toggle: { fontSize: 11, padding: '2px 6px' },
 }
 
 const BOARD_COLS = ['ready', 'dispatched', 'running', 'blocked', 'done', 'escalated'] as const
@@ -50,6 +67,18 @@ export function PodPanel(): ReactElement {
   const [budget, setBudget] = useState('3')
   const [slots, setSlots] = useState('claude implementer 编码; codex reviewer 审查')
   const lastTs = useRef(0)
+  const [steerSlot, setSteerSlot] = useState('')
+  const [steerText, setSteerText] = useState('')
+
+  const runAction = async (action: () => Promise<unknown>): Promise<void> => {
+    try {
+      await action()
+      setError(null)
+      setTimeout(() => void poll(), 300)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
 
   const poll = async (): Promise<void> => {
     try {
@@ -110,6 +139,35 @@ export function PodPanel(): ReactElement {
   }
 
   const mission = status?.mission
+
+  const handleApprove = (approvalId: string): void => {
+    void runAction(() => postApprove(approvalId))
+  }
+
+  const handleDeny = (approvalId: string): void => {
+    const reason = window.prompt('驳回原因：') ?? 'denied via canvas-ui'
+    void runAction(() => postDeny(approvalId, reason))
+  }
+
+  const handleSteer = (): void => {
+    if (steerSlot.trim().length === 0 || steerText.trim().length === 0) {
+      setError('steer 需要 slot_id 与指令')
+      return
+    }
+    void runAction(() => postSteer(steerSlot.trim(), steerText.trim()))
+    setSteerText('')
+  }
+
+  const handleAbort = (): void => {
+    if (window.confirm('中止当前 mission？（终态，不可恢复）')) {
+      void runAction(() => postAbort('aborted via canvas-ui'))
+    }
+  }
+
+  const handleDispatch = (): void => {
+    void runAction(() => postDispatch())
+  }
+
   return createElement(
     'div',
     { style: styles.root },
@@ -124,7 +182,51 @@ export function PodPanel(): ReactElement {
             `${mission.status} · tokens ${mission.spent_tokens} · ≈$${mission.spent_equiv_usd.toFixed(4)}/${mission.budget_usd}`,
           )
         : createElement('span', { style: styles.pill }, '无 active mission'),
+      mission !== null
+        ? createElement(
+            'button',
+            { style: { ...styles.button, color: '#b91c1c' }, onClick: handleAbort, 'aria-label': '中止 mission' },
+            '中止',
+          )
+        : null,
       error !== null ? createElement('span', { style: styles.msg }, error) : null,
+    ),
+    (status?.pending_approvals ?? []).length > 0
+      ? createElement(
+          'div',
+          { style: styles.form },
+          (status?.pending_approvals ?? []).map((approval) =>
+            createElement(
+              'div',
+              { key: approval.id, style: { display: 'flex', gap: 8, alignItems: 'center' } },
+              createElement('span', null, `审批卡 ${approval.id}: ${approval.summary}`),
+              createElement('button', { style: styles.button, onClick: () => handleApprove(approval.id) }, '批准合并'),
+              createElement('button', { style: { ...styles.button, color: '#b91c1c' }, onClick: () => handleDeny(approval.id) }, '驳回'),
+            ),
+          ),
+        )
+      : null,
+    createElement(
+      'div',
+      { style: styles.form },
+      createElement('input', {
+        style: styles.input,
+        name: 'pod-steer-slot',
+        'aria-label': 'steer 目标员工槽位',
+        placeholder: 'steer 目标槽位（如 S-1）',
+        value: steerSlot,
+        onChange: (e) => setSteerSlot(e.target.value),
+      }),
+      createElement('input', {
+        style: styles.input,
+        name: 'pod-steer-text',
+        'aria-label': 'steer 指令',
+        placeholder: 'steer 指令（员工下次派单必带，不打断进程）',
+        value: steerText,
+        onChange: (e) => setSteerText(e.target.value),
+      }),
+      createElement('button', { style: styles.button, onClick: handleSteer }, '发指令'),
+      createElement('button', { style: styles.button, onClick: handleDispatch }, '手动派发'),
     ),
     createElement(
       'div',

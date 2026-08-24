@@ -87,12 +87,15 @@ export class PodService {
     // 3.3 节：mission 独立会话承载 commander（编排逻辑）；创建失败仅落事件，不阻断 mission
     if (this.commanderLauncher !== undefined) {
       this.commanderLauncher(input.goal, input.cwd).catch((error) => {
+        const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+        // 宿主日志定位（CR-06-7）：事件仅缓冲，日志才是持久诊断面
+        console.error('[dsh-pod] commander session creation failed:', message)
         this.store.appendEvent(missionId, {
           id: `ev-commander-error-${this.clock()}`,
           mission_id: missionId,
           ts: this.clock(),
           kind: 'commander_creation_error',
-          payload: { error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) },
+          payload: { error: message },
         })
       })
     }
@@ -192,6 +195,38 @@ export class PodService {
         task_id: e.task_id,
         slot_id: e.slot_id,
         payload: e.payload,
+      }))
+  }
+
+  /** 账本双列快照（W5：tokens 实测 + equiv_usd 标注估算；尾部 50 条）。 */
+  ledgerTail(): Array<{
+    slot_id: string
+    task_id: string | null
+    model: string
+    ts: number
+    tokens_in: number
+    tokens_out: number
+    equiv_usd: number
+    price_known: boolean
+    price_table_version: string
+    usage_source: string
+  }> {
+    const active = this.store.getActiveMission()
+    if (active === undefined) return []
+    return this.store
+      .listLedger(active.id)
+      .slice(-50)
+      .map((e) => ({
+        slot_id: e.slot_id,
+        task_id: e.task_id ?? null,
+        model: e.model,
+        ts: e.ts,
+        tokens_in: e.tokens_in,
+        tokens_out: e.tokens_out,
+        equiv_usd: Number(e.equiv_usd.toFixed(4)),
+        price_known: e.price_known,
+        price_table_version: e.price_table_version,
+        usage_source: e.usage_source,
       }))
   }
 
