@@ -7,7 +7,8 @@
  *     （实测 404 模型错误时 CLI 仍产出完整 result 事件；静默假成功对策，附录 F-25）
  *   - 会话持久：result.session_id 可用；--resume / --session-id 双路径（档位 B）
  *   - v2 增强：--json-schema 报告强制 / --max-budget-usd 双熔断 / --allowedTools 白名单 /
- *     --permission-mode acceptEdits（worktree 内自主写盘）
+ *     --permission-mode bypassPermissions（worktree 隔离内自主执行；acceptEdits 只放行写盘
+ *     不放行 Bash，实测 npm test 被权限系统拦截——CR-06-10）
  *
  * Windows 专项：claude 以 .cmd 分发 → win32 下 spawn 必须 shell:true（本机实证 ENOENT）。
  */
@@ -242,7 +243,7 @@ export interface ClaudeStartOptions {
   newSessionId?: string
   maxBudgetUsd?: number
   allowedTools?: string[]
-  permissionMode?: 'acceptEdits'
+  permissionMode?: 'acceptEdits' | 'bypassPermissions'
   timeoutMs?: number
 }
 
@@ -345,7 +346,7 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
       sessionTier: slot.session_tier,
       sessionRef: slot.session_ref,
       newSessionId: needsNewSession ? randomUUID() : undefined,
-      permissionMode: 'acceptEdits',
+      permissionMode: 'bypassPermissions',
       allowedTools: this.allowedTools,
     })
     const env = this.envForSlot !== undefined ? this.envForSlot(slot) : undefined

@@ -242,7 +242,7 @@ describe('ClaudeHeadlessBackend.start（FakeSpawner 集成）', () => {
     status: 'idle' as const, tokens_in: 0, tokens_out: 0, ctx_usage_pct: 0, window_tokens: 200_000,
   }
 
-  it('参数组装：stream-json/verbose/permission-mode acceptEdits；档位 B 首派 --session-id；prompt 走 stdin', async () => {
+  it('参数组装：stream-json/verbose/permission-mode bypassPermissions；档位 B 首派 --session-id；prompt 走 stdin', async () => {
     const captured: string[][] = []
     let stdinText = ''
     const backend = new ClaudeHeadlessBackend({
@@ -270,7 +270,7 @@ describe('ClaudeHeadlessBackend.start（FakeSpawner 集成）', () => {
     expect(args).toContain('--output-format')
     expect(args).toContain('--include-partial-messages')
     expect(args).toContain('--permission-mode')
-    expect(args).toContain('acceptEdits')
+    expect(args).toContain('bypassPermissions')
     expect(args).toContain('--session-id')
     // prompt 经 stdin 投递
     expect(stdinText).toContain('T-3')
