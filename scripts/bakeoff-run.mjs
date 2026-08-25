@@ -65,7 +65,13 @@ const report = {
 async function main() {
   try {
     if (condition === 'baseline') {
-      const backend = new ClaudeHeadlessBackend({ allowedTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep'] })
+      // 任务超时 = est_minutes 上浮 50% + 5 分钟缓冲（长任务如 SQLite 需远超默认 15 分钟）
+      const estMin = task.est_minutes ?? 30
+      const taskTimeoutMs = (estMin * 60 + 5 * 60) * 1000
+      const backend = new ClaudeHeadlessBackend({
+        allowedTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep'],
+        taskTimeoutMs,
+      })
       const slot = {
         id: 'S-1', mission_id: 'M-BAKE', vendor: 'claude', role: 'implementer',
         capabilities: ['编码'], model: 'deepseek-v4-pro', effort: 'medium',
@@ -114,10 +120,15 @@ async function main() {
       const store = new JsonStore({ rootDir: dataDir })
       store.open()
       const codexBin = codexBinaryCandidates('win32').find((c) => existsSync(c)) ?? 'codex'
+      const estMin = task.est_minutes ?? 30
+      const taskTimeoutMs = (estMin * 60 + 5 * 60) * 1000
       const orch = new MissionOrchestrator('M-BAKE', {
         store,
         backends: {
-          claude: new ClaudeHeadlessBackend({ allowedTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep'] }),
+          claude: new ClaudeHeadlessBackend({
+            allowedTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep'],
+            taskTimeoutMs,
+          }),
           codex: new CodexHeadlessBackend({ binary: codexBin }),
         },
         worktree: {
@@ -141,7 +152,8 @@ async function main() {
         cwd: repo,
         budgetUsd: 5,
         slots: [
-          { id: 'S-1', vendor: 'claude', role: 'implementer', capabilities: ['编码'], model: 'deepseek-v4-pro' },
+          // 实现者能力 = 任务标签全集（capabilitiesMatch 要求标签 ⊆ 能力；缺标签 → escalated）
+          { id: 'S-1', vendor: 'claude', role: 'implementer', capabilities: [...new Set(task.skill_tags ?? [])], model: 'deepseek-v4-pro' },
           { id: 'S-2', vendor: 'codex', role: 'reviewer', capabilities: ['审查'], model: '' },
         ],
       })

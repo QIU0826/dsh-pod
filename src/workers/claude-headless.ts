@@ -271,6 +271,8 @@ export interface ClaudeBackendOptions {
   envForSlot?: (slot: AgentSlot) => Record<string, string>
   /** --allowedTools 进程白名单（3.8 节三道防线之一），每次 start 统一注入。 */
   allowedTools?: string[]
+  /** 单任务进程超时（默认 15 分钟；长任务经 orchestrator max_wall_clock_ms 传递）。 */
+  taskTimeoutMs?: number
 }
 
 /**
@@ -300,12 +302,14 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
   private readonly clock: () => number
   private readonly envForSlot: ((slot: AgentSlot) => Record<string, string>) | undefined
   private readonly allowedTools: string[] | undefined
+  private readonly taskTimeoutMs: number
 
   constructor(options: ClaudeBackendOptions = {}) {
     this.spawner = options.spawner
     this.clock = options.clock ?? (() => Date.now())
     this.envForSlot = options.envForSlot
     this.allowedTools = options.allowedTools
+    this.taskTimeoutMs = options.taskTimeoutMs ?? 15 * 60_000
     // 默认探测复用 preflight 的 shell-fallback runner（.cmd 包装器兼容）
     this.detectRunner = options.detectRunner ?? execCommandRunner
   }
@@ -395,7 +399,7 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
         const timer = setTimeout(() => {
           child.kill()
           resolve({ code: null, signal: null, timedOut: true })
-        }, 15 * 60_000)
+        }, this.taskTimeoutMs)
         child.on('exit', (code, signal) => {
           clearTimeout(timer)
           resolve({ code, signal, timedOut: false })
