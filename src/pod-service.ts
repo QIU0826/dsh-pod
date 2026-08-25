@@ -13,6 +13,8 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { ApprovalEngine } from './core/approvals.js'
 import { ApplyPatch, execGitRunner, type ApplyResult } from './core/apply-patch.js'
+import { BackendsLock } from './core/backends-lock.js'
+import { PodError } from './core/errors.js'
 import { Ledger } from './core/ledger.js'
 import { MissionOrchestrator, type LaunchInput, type PlanTaskInput, type RunSummary } from './core/orchestrator.js'
 import { execGitClient, verifyTaskArtifacts } from './core/verifier.js'
@@ -69,6 +71,8 @@ export class PodService {
 
   /** 启动 mission：创建编排器（含真实 worktree/diff/verifier）并后台驱动。 */
   launch(input: Omit<LaunchInput, 'slots'> & { slots: LaunchInput['slots']; plan?: PlanTaskInput[] }): Mission {
+    // DoD-15：后端版本锁定（Berd-A）——mismatch 拒绝 launch；首次运行自动 pin
+    this.enforceBackendLock()
     const missionId = `M-${this.clock()}-${Math.floor(Math.random() * 1e6)}`
     const orchestrator = this.makeOrchestrator(missionId)
     const mission = orchestrator.launch(input)
@@ -108,9 +112,56 @@ export class PodService {
     return mission
   }
 
-  /** DoD-2：plan.md 落盘（mission 数据目录，唯一事实源）。序列化任务 DAG，可读且可回溯。 */
-  private writePlanFile(missionId: string, title: string, plan: PlanTaskInput[]): void {
+  /**
+   * DoD-15 后端版本锁定（Berd-A）：launch 前对照 ~/.dsh/pod/backends.lock.json。
+   *   ok/unlocked（首次）→ 放行并 pin；mismatch → 拒绝 launch（CLI 版本漂移 = R1）。
+   *   POD_*_BIN 覆盖 → override 绕过（显式逃生门）。
+   */
+  private enforceBackendLock(): void {
+    const lock = new BackendsLock({ filePath: join(this.dataDir, 'backends.lock.json') })
+    const snapshot = this.detectBackendVersions()
+    const check = lock.check(snapshot, this.binOverrides())
+    if (check.status === 'mismatch') {
+      throw new PodError(`backend version lock mismatch: ${check.details ?? ''} (run pin or set POD_*_BIN)`, 'BACKEND_LOCK_MISMATCH')
+    }
+    if (check.status === 'ok' || check.status === 'unlocked' || check.status === 'override') {
+      // 覆盖/解锁也重新 pin（锁定当前实况，下次 check 有基线）
+      lock.pin(snapshot)
+    }
+  }
+
+  /** 探测 claude/codex 版本快照（preflight 语义：已装才记版本）。 */
+  private detectBackendVersions(): Record<string, { installed: boolean; version?: string; bin: string }> {
+    const result: Record<string, { installed: boolean; version?: string; bin: string }> = {
+      claude: { installed: false, bin: 'claude' },
+      codex: { installed: false, bin: 'codex' },
+    }
     try {
+      const claude = execFileSync('claude', ['--version'], { encoding: 'utf8', timeout: 5000, windowsHide: true, shell: true })
+      result.claude = { installed: true, version: claude.trim().split('\n')[0] ?? '', bin: 'claude' }
+    } catch {
+      /* 未装/探测失败 → 如实 recorded installed=false */
+    }
+    try {
+      const codexBin = codexBinaryCandidates('win32').find((c) => existsSync(c)) ?? 'codex'
+      const codex = execFileSync(codexBin, ['--version'], { encoding: 'utf8', timeout: 5000, windowsHide: true, shell: true })
+      result.codex = { installed: true, version: codex.trim().split('\n')[0] ?? '', bin: codexBin }
+    } catch {
+      /* 未装 → 如实 recorded */
+    }
+    return result
+  }
+
+  /** POD_*_BIN 显式覆盖（Berd-A：POD_CLAUDE_BIN / POD_CODEX_BIN）。 */
+  private binOverrides(): Record<string, string> {
+    const overrides: Record<string, string> = {}
+    if (process.env.POD_CLAUDE_BIN !== undefined && process.env.POD_CLAUDE_BIN.length > 0) overrides.claude = process.env.POD_CLAUDE_BIN
+    if (process.env.POD_CODEX_BIN !== undefined && process.env.POD_CODEX_BIN.length > 0) overrides.codex = process.env.POD_CODEX_BIN
+    return overrides
+  }
+
+  /** DoD-2：plan.md 落盘（mission 数据目录，唯一事实源）。序列化任务 DAG，可读且可回溯。 */
+  private writePlanFile(missionId: string, title: string, plan: PlanTaskInput[]): void {    try {
       const dir = join(this.dataDir, 'missions', missionId)
       mkdirSync(dir, { recursive: true })
       const lines: string[] = [
