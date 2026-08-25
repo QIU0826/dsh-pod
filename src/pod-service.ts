@@ -20,7 +20,7 @@ import type { JsonStore } from './core/store.js'
 import { ClaudeHeadlessBackend } from './workers/claude-headless.js'
 import { CodexHeadlessBackend, codexBinaryCandidates } from './workers/codex-headless.js'
 import { repairPath } from './workers/preflight.js'
-import type { ApprovalRequest, AgentSlot, Mission, Task, Vendor, WorkerBackend } from './core/types.js'
+import type { ApprovalRequest, ApprovalRule, AgentSlot, Mission, Task, Vendor, WorkerBackend } from './core/types.js'
 
 export interface PodServiceOptions {
   store: JsonStore
@@ -316,6 +316,31 @@ export class PodService {
 
   deny(approvalId: string, by: string, reason: string): void {
     this.requireOrchestrator().deny(approvalId, by, reason)
+  }
+
+  // ── 审批规则层（AgentScope-A/B：查询 + suggested-rules 落 Store）──
+
+  listRules(): ApprovalRule[] {
+    return this.store.listRules()
+  }
+
+  /** 「记住此规则」：审批卡裁决时携带建议规则（DoD-18：同类调用免重复审批）。 */
+  addRule(input: { tool: string; pattern?: string; decision: 'allow' | 'deny' | 'ask'; scope?: 'mission' | 'global'; source?: string }): ApprovalRule {
+    const rule: ApprovalRule = {
+      id: `R-${this.clock()}-${Math.floor(Math.random() * 1e6)}`,
+      tool: input.tool,
+      pattern: input.pattern,
+      decision: input.decision,
+      scope: input.scope ?? 'global',
+      source: input.source ?? 'user-suggested',
+      ts: this.clock(),
+    }
+    this.store.createRule(rule)
+    return rule
+  }
+
+  deleteRule(ruleId: string): void {
+    this.store.deleteRule(ruleId)
   }
 
   abort(reason: string): void {

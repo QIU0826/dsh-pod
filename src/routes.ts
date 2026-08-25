@@ -327,6 +327,44 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
     },
     {
       kind: 'exact',
+      path: '/api/dsh-pod/rules',
+      handler: async (req, res) => {
+        if (!isLoopback(req)) {
+          writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        const current = service()
+        if (current === undefined) {
+          writeJson(res, 503, { error: 'pod runtime not initialized' })
+          return
+        }
+        if (req.method === 'GET') {
+          writeJson(res, 200, { rules: current.listRules() })
+          return
+        }
+        // POST：记住此规则（AgentScope-B：suggested-rules 落 Store）
+        const body = await readJsonBody(req)
+        const tool = body?.tool
+        const decision = body?.decision
+        if (typeof tool !== 'string' || tool.length === 0 || (decision !== 'allow' && decision !== 'deny' && decision !== 'ask')) {
+          writeJson(res, 422, { error: 'tool and decision (allow|deny|ask) are required' })
+          return
+        }
+        try {
+          const rule = current.addRule({
+            tool,
+            pattern: typeof body?.pattern === 'string' && body.pattern.length > 0 ? body.pattern : undefined,
+            decision,
+            scope: body?.scope === 'mission' ? 'mission' : 'global',
+          })
+          writeJson(res, 201, { ok: true, rule })
+        } catch (error) {
+          writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
+      kind: 'exact',
       path: '/api/dsh-pod/abort',
       handler: async (req, res) => {
         if (!isLoopback(req)) {

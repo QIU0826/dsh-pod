@@ -86,4 +86,13 @@ describe('PodService 宿主闭环（CR-05-6）', () => {
     const tasks = store.listTasks(mission.id)
     expect(tasks.map((t) => t.id)).toEqual(['T-1', 'T-2'])
   })
+
+  it('审批规则层（AgentScope-B）：addRule 落 Store，listRules 可查，deleteRule 可删', () => {
+    const rule = service.addRule({ tool: 'Bash', pattern: 'git push', decision: 'deny' })
+    expect(rule.id).toMatch(/^R-/)
+    expect(service.listRules()).toHaveLength(1)
+    expect(service.listRules()[0]!.pattern).toBe('git push')
+    service.deleteRule(rule.id)
+    expect(service.listRules()).toHaveLength(0)
+  })
 })

@@ -121,8 +121,7 @@ export interface Task {
   type: TaskType
   depends_on: string[]
   status: TaskStatus
-  attempts: number
-  /** 重试不计入的 attempts 计数（429 / need_clarify），仅观察。 */
+  attempts: number  /** 重试不计入的 attempts 计数（429 / need_clarify），仅观察。 */
   soft_attempts: number
   fault?: FaultKind
   last_error?: string
@@ -208,6 +207,19 @@ export interface ApprovalRequest {
   decided_at?: number
   decided_by?: string
   deny_reason?: string
+}
+
+/** 审批规则（2.6 节 v2.1 / CR-08 AgentScope-B：ApprovalRule 数据模型）。 */
+export interface ApprovalRule {
+  id: string
+  /** 工具名（Bash/Read/Write/apply_patch 等）。 */
+  tool: string
+  /** 命令/模式匹配（子串；省略 = 匹配该工具全部调用）。 */
+  pattern?: string
+  decision: 'allow' | 'deny' | 'ask'
+  scope: 'mission' | 'global'
+  source?: string
+  ts: number
 }
 
 /** MISSION_REPORT（附录 C schema，强制 JSON）。 */

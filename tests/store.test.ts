@@ -187,4 +187,37 @@ describe('JsonStore mutations', () => {
     // 审批卡可继续裁决（跨重启审批闭环不丢）
     expect(reopened.listApprovals('M-1')).toHaveLength(1)
   })
+
+  it('审批规则层：create/list/get/delete + 跨重启持久化（AgentScope-B）', () => {
+    const store = makeStore()
+    store.open()
+    store.createRule({
+      id: 'R-1', tool: 'Bash', pattern: 'git push', decision: 'deny', scope: 'global', ts: clockNow,
+    })
+    store.createRule({
+      id: 'R-2', tool: 'apply_patch', decision: 'ask', scope: 'global', ts: clockNow,
+    })
+    expect(store.listRules()).toHaveLength(2)
+    expect(store.getRule('R-1')!.decision).toBe('deny')
+    expect(() => store.createRule({ id: 'R-1', tool: 'Bash', decision: 'allow', scope: 'mission', ts: clockNow })).toThrowError(DuplicateIdError)
+    store.deleteRule('R-1')
+    expect(store.getRule('R-1')).toBeUndefined()
+    expect(() => store.deleteRule('nope')).toThrowError(NotFoundError)
+    // 跨重启：rules 持久化
+    store.flush()
+    const reopened = makeStore()
+    reopened.open()
+    expect(reopened.getRule('R-2')!.decision).toBe('ask')
+    // 旧 store 文件（无 rules 表）兼容：open 不炸且可写规则
+    const legacyRoot = mkdtempSync(join(tmpdir(), 'pod-store-legacy-'))
+    try {
+      writeFileSync(join(legacyRoot, 'store.json'), JSON.stringify({ schemaVersion: 1, missions: {}, slots: {}, tasks: {}, handoffs: [], ledger: [], approvals: {}, events: {} }))
+      const legacy = new JsonStore({ rootDir: legacyRoot })
+      legacy.open()
+      legacy.createRule({ id: 'R-x', tool: 'Bash', decision: 'allow', scope: 'global', ts: 1 })
+      expect(legacy.getRule('R-x')!.decision).toBe('allow')
+    } finally {
+      rmSync(legacyRoot, { recursive: true, force: true })
+    }
+  })
 })

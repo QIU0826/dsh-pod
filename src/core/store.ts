@@ -23,6 +23,7 @@ import { DuplicateIdError, NotFoundError, StoreCorruptError } from './errors.js'
 import type {
   AgentSlot,
   ApprovalRequest,
+  ApprovalRule,
   Handoff,
   LedgerEntry,
   Mission,
@@ -42,6 +43,8 @@ export interface StoreData {
   handoffs: Handoff[]
   ledger: LedgerEntry[]
   approvals: Record<string, ApprovalRequest>
+  /** v2.1 审批规则层（suggested-rules 持久化，AgentScope-B）。 */
+  rules: Record<string, ApprovalRule>
   events: Record<string, PodEvent[]>
 }
 
@@ -75,6 +78,10 @@ export interface PodStore {
   listApprovals(missionId: string): ApprovalRequest[]
   createApproval(approval: ApprovalRequest): void
   updateApproval(id: string, patch: Partial<ApprovalRequest>): void
+  getRule(id: string): ApprovalRule | undefined
+  listRules(): ApprovalRule[]
+  createRule(rule: ApprovalRule): void
+  deleteRule(id: string): void
   appendEvent(missionId: string, event: PodEvent): void
   listEvents(missionId: string): PodEvent[]
   /** 需要 mission 存在时的便捷写入：追加事件并写盘（单事件一写）。 */
@@ -97,6 +104,7 @@ function emptyData(): StoreData {
     handoffs: [],
     ledger: [],
     approvals: {},
+    rules: {},
     events: {},
   }
 }
@@ -164,6 +172,8 @@ export class JsonStore implements PodStore {
       }
       current = migrate(current)
     }
+    // v2.1 兼容：旧 store 文件无 rules 表 → 补空表（不 bump schema，字段可选）
+    if (current.rules === undefined) current.rules = {}
     return current
   }
 
@@ -329,6 +339,28 @@ export class JsonStore implements PodStore {
     const existing = data.approvals[id]
     if (existing === undefined) throw new NotFoundError('approval', id)
     data.approvals[id] = { ...existing, ...patch, id }
+    this.persist()
+  }
+
+  getRule(id: string): ApprovalRule | undefined {
+    return this.requireData().rules[id]
+  }
+
+  listRules(): ApprovalRule[] {
+    return Object.values(this.requireData().rules)
+  }
+
+  createRule(rule: ApprovalRule): void {
+    const data = this.requireData()
+    if (data.rules[rule.id] !== undefined) throw new DuplicateIdError('rule', rule.id)
+    data.rules[rule.id] = { ...rule }
+    this.persist()
+  }
+
+  deleteRule(id: string): void {
+    const data = this.requireData()
+    if (data.rules[id] === undefined) throw new NotFoundError('rule', id)
+    delete data.rules[id]
     this.persist()
   }
 
