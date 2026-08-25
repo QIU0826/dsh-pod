@@ -15,6 +15,9 @@ mkdirSync(REPORTS, { recursive: true })
 const TASKS = JSON.parse(readFileSync(join('tasks', 'bakeoff-tasks.json'), 'utf8'))
 const TASK_IDS = Object.keys(TASKS) // [small-1, small-2, medium-1, medium-2, long-1]
 const CONDITIONS = ['baseline', 'pod']
+// --only <condition>：只跑指定条件（如修复后重跑 pod）；缺省跑全部
+const onlyCondition = process.argv.includes('--only') ? process.argv[process.argv.indexOf('--only') + 1] : undefined
+const activeConditions = onlyCondition !== undefined ? CONDITIONS.filter((c) => c === onlyCondition) : CONDITIONS
 
 const summary = {
   started_at: new Date().toISOString(),
@@ -47,7 +50,7 @@ function log(line) {
   console.log(`[bakeoff-all] ${line}`)
 }
 
-for (const condition of CONDITIONS) {
+for (const condition of activeConditions) {
   for (const taskId of TASK_IDS) {
     summary.totals.planned += 1
     const reused = hasDoneResult(taskId, condition)
@@ -62,7 +65,7 @@ for (const condition of CONDITIONS) {
     const res = spawnSync(
       process.execPath,
       ['scripts/bakeoff-run.mjs', '--task', taskId, '--condition', condition],
-      { encoding: 'utf8', timeout: 90 * 60_000 }, // 单轮上限 90 分钟
+      { encoding: 'utf8', timeout: 4 * 60 * 60_000 }, // 单轮上限 4 小时（long-1 est 180min）
     )
     const wall = ((Date.now() - t0) / 1000).toFixed(1)
     if (res.status === 0 && res.stdout.includes('"status": "done"')) {
