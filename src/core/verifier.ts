@@ -15,6 +15,7 @@ import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { isAbsolute, join, normalize, sep } from 'node:path'
 import { promisify } from 'node:util'
+import { validateMissionReport } from './report-schema.js'
 import type { TaskVerifyResult } from './task-machine.js'
 import type { MissionReport, Task } from './types.js'
 
@@ -73,21 +74,19 @@ export function makePathWhitelist(worktreeRoot: string): (relPath: string) => bo
   }
 }
 
-/** 附录 C 强制字段校验（review/plan/research/doc 等非写码任务不要求 commit/files）。 */
+/** 附录 C 强制字段校验（结构层交给 report-schema 单一事实源；此处只做任务类型语义）。 */
 export function checkReportCompleteness(
   report: MissionReport,
   taskType: Task['type'] = 'implement',
 ): { check: string; detail: string }[] {
   const failures: { check: string; detail: string }[] = []
+  // 结构完整性由 schema 裁决（DoD-16 单一事实源）：字段枚举/类型/必填在此不再手写
+  const structural = validateMissionReport(report)
+  if (!structural.ok) {
+    for (const error of structural.errors) failures.push({ check: 'report_schema', detail: error })
+  }
   const fail = (check: string, detail: string): void => {
     failures.push({ check, detail })
-  }
-  if (!['done', 'blocked', 'need_clarify'].includes(report.status)) fail('status', `unknown status ${report.status}`)
-  if (!report.task_id) fail('task_id', 'task_id required')
-  if (!report.summary.trim()) fail('summary', 'summary required (factual, ≤5 sentences)')
-  if (!Array.isArray(report.files_changed)) fail('files_changed', 'files_changed must be an array')
-  if (!['pass', 'fail', 'not_run'].includes(report.test_result)) {
-    fail('test_result', `unknown test_result ${report.test_result}`)
   }
   if ((taskType === 'implement' || taskType === 'test') && report.status === 'done' && !report.commit_sha) {
     fail('commit_sha', 'done report must carry commit_sha (commit discipline D4)')

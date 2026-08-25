@@ -27,6 +27,7 @@ import type {
   WorkerProgressEvent,
 } from '../core/types.js'
 import { execCommandRunner } from './preflight.js'
+import { renderReportPromptFragment } from '../core/report-schema.js'
 
 export type StreamJsonEvent = Record<string, unknown> & { type?: string }
 
@@ -172,19 +173,7 @@ export interface TaskPromptOptions {
   }
 }
 
-const REPORT_SCHEMA_HINT = `## MISSION_REPORT（必须输出，JSON）
-{
-  "task_id": "<id>", "task_type": "<任务类型>", "status": "done | blocked | need_clarify",
-  "summary": "≤5 句事实陈述（禁止成功叙事）", "files_changed": ["相对 worktree 根的路径"],
-  "commit_sha": "<40位 sha，非写码任务可省略>", "diff_path": "out/task-<id>.diff", "test_command": "npm test",
-  "test_result": "pass | fail | not_run", "test_evidence": "12/12 ✓（输出路径 out/task-<id>.testlog）",
-  "decisions": [], "blockers": [], "questions": [], "usage": { "tokens_in": 0, "tokens_out": 0 }
-}
-
-test_result 判定（CR-06-8，务必遵守）：
-- 仓库有测试框架且测试真实失败 → fail（test_evidence 附失败输出）
-- 仓库无测试框架 / 测试命令不存在（如 npm test 报 ENOENT、无 package.json）→ 必须填 not_run（禁止 fail），
-  test_evidence 注明原因（如：npm ENOENT：仓库无 package.json，测试框架不存在）`
+const REPORT_SCHEMA_HINT = renderReportPromptFragment('<任务类型>')
 
 const COMMIT_DISCIPLINE = `完成后必须：运行测试 → git add -A && git commit（message 含 task-<task_id>）→ 生成 diff → 输出 MISSION_REPORT。禁止：合并主树、改动任务范围外文件、遗留脏 diff。`
 

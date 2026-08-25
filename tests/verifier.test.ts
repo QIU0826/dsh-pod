@@ -119,11 +119,11 @@ describe('checkReportCompleteness（附录 C schema 强制字段）', () => {
     })
     expect(checkNarrativeMatch(task, report).some((f) => f.check === 'narrative_match')).toBe(true)
   })
-  it('status 非法枚举 → 失败', () => {
+  it('status 非法枚举 → 失败（schema 单一事实源裁决，DoD-16）', () => {
     const failures = checkReportCompleteness(
       doneReport({ status: 'whatever' as MissionReport['status'] }),
     )
-    expect(failures.some((f) => f.check === 'status')).toBe(true)
+    expect(failures.some((f) => f.check === 'report_schema')).toBe(true)
   })
 })
 
