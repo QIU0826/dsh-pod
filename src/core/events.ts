@@ -33,10 +33,12 @@ const replyCursor = new Map<string, string>()
 /**
  * worker 进度 → PodEvent（带 reply_id/seq 落盘，供聚合重建）。
  * 同 slot 同任务共享 reply_id；新任务重置游标（瞬时/跨任务语义）。
+ * missionId 可选注入（orchestrator 场景必填，事件顶层可路由）。
  */
 export function emitWorkerProgress(
   progress: WorkerProgressEvent,
   append: (event: PodEvent) => void,
+  missionId?: string,
 ): PodEvent {
   const cursorKey = `${progress.slot_id}:${progress.task_id}`
   let replyId = replyCursor.get(cursorKey)
@@ -47,7 +49,7 @@ export function emitWorkerProgress(
   const seq = nextSeq(progress.slot_id)
   const event: PodEvent = {
     id: `ev-progress-${progress.ts}-${seq}`,
-    mission_id: '',
+    mission_id: missionId ?? '',
     ts: progress.ts,
     kind: 'worker_progress',
     slot_id: progress.slot_id,

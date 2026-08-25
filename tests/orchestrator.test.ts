@@ -541,3 +541,32 @@ describe('humanResolve（3.4 节转人工接管，CR-06-8）', () => {
     expect(() => orchestrator.humanResolve('T-1', { outcome: 'done' })).toThrowError(/escalated/i)
   })
 })
+
+describe('DoD-19：进度事件经 emitWorkerProgress 落 reply_id（事件→消息态重建）', () => {
+  it('worker_progress 事件带 reply_id/seq，可按 slot+reply 聚合重建员工回复', async () => {
+    const orchestrator = makeOrchestrator(fixture, {
+      'T-1': {
+        progress: [
+          { slot_id: 'M-1-S-1', task_id: 'T-1', ts: 1, kind: 'text', text: '第一步' },
+          { slot_id: 'M-1-S-1', task_id: 'T-1', ts: 2, kind: 'tool_call', tool: 'Read' },
+          { slot_id: 'M-1-S-1', task_id: 'T-1', ts: 3, kind: 'text', text: '第二步' },
+        ],
+        completion: {
+          exit: 'done',
+          report: doneReport('T-1'),
+          usage: { tokens_in: 10, tokens_out: 5, source: 'measured' },
+          artifacts: [],
+        },
+      },
+    })
+    orchestrator.launch(launchInput({ cwd: fixture.repo }))
+    orchestrator.createTasks([{ id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'] }])
+    await orchestrator.run()
+    const events = fixture.store.listEvents('M-1').filter((e) => e.kind === 'worker_progress')
+    expect(events.length).toBeGreaterThanOrEqual(3)
+    const replyIds = new Set(events.map((e) => e.payload.reply_id as string))
+    expect(replyIds.size).toBe(1) // 同任务共享 reply_id
+    const seqs = events.map((e) => e.payload.seq as number)
+    expect(seqs.every((s) => typeof s === 'number')).toBe(true)
+  })
+})

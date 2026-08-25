@@ -18,6 +18,7 @@
 
 import { ApprovalEngine } from './approvals.js'
 import { routeTask } from './dispatcher.js'
+import { emitWorkerProgress, resetReplyCursor } from './events.js'
 import { ConcurrencyLimitError, InvalidTransitionError, NotFoundError, PodError } from './errors.js'
 import { Ledger } from './ledger.js'
 import { MissionMachine } from './mission.js'
@@ -395,6 +396,8 @@ export class MissionOrchestrator {
     const enriched: Task = { ...task, spec }
     this.taskMachine.dispatch(task.id, slot.id)
     this.taskMachine.start(task.id)
+    // DoD-19：新派发 = 新 reply（重置聚合游标）
+    resetReplyCursor(slot.id, task.id)
     this.watchdog.arm({
       key: `task-idle:${task.id}`,
       kind: 'task-idle',
@@ -428,15 +431,9 @@ export class MissionOrchestrator {
       deadline: this.clock() + this.watchdog.thresholdMs('task-idle'),
     })
     void slot
-    this.store.appendEvent(this.missionId, {
-      id: `ev-progress-${task.id}-${event.ts}`,
-      mission_id: this.missionId,
-      ts: event.ts,
-      kind: 'worker_progress',
-      task_id: task.id,
-      slot_id: event.slot_id,
-      payload: { kind: event.kind, text: event.text, tool: event.tool },
-    })
+    // DoD-19：进度事件经 emitWorkerProgress 落 reply_id/seq（事件→消息态重建的数据基础）
+    const podEvent = emitWorkerProgress(event, (e) => this.store.appendEvent(this.missionId, e), this.missionId)
+    void podEvent
   }
 
   private async handleCompletion(taskId: string, completion: WorkerCompletion): Promise<void> {
