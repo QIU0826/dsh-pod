@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { JsonStore } from '../src/core/store.js'
@@ -20,7 +20,7 @@ describe('PodService 宿主闭环（CR-05-6）', () => {
     clockNow = 1_700_000_000_000
     store = new JsonStore({ rootDir: root, clock: () => clockNow })
     store.open()
-    service = new PodService({ store, backends: {}, clock: () => clockNow })
+    service = new PodService({ store, backends: {}, clock: () => clockNow, dataDir: root })
   })
 
   afterEach(() => {
@@ -71,5 +71,19 @@ describe('PodService 宿主闭环（CR-05-6）', () => {
     expect(plan).toHaveLength(2)
     expect(plan[0]!.title.length).toBeLessThanOrEqual(41)
     expect(plan[1]!.type).toBe('review')
+  })
+
+  it('DoD-2：launch 将 plan 落盘为 plan.md（mission 数据目录，唯一事实源）', () => {
+    const mission = service.launch({ name: 'm', goal: '实现 multiply 函数', cwd: 'C:\\repo', budgetUsd: 2, slots: [] })
+    const planPath = join(root, 'missions', mission.id, 'plan.md')
+    expect(existsSync(planPath)).toBe(true)
+    const content = readFileSync(planPath, 'utf8')
+    expect(content).toContain('# Mission Plan:')
+    expect(content).toContain('T-1')
+    expect(content).toContain('T-2')
+    expect(content).toContain('实现 multiply 函数')
+    // 与 store 中的任务 DAG 一致（唯一事实源可回溯）
+    const tasks = store.listTasks(mission.id)
+    expect(tasks.map((t) => t.id)).toEqual(['T-1', 'T-2'])
   })
 })

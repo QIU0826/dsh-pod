@@ -10,7 +10,7 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { ApprovalEngine } from './core/approvals.js'
 import { ApplyPatch, execGitRunner, type ApplyResult } from './core/apply-patch.js'
 import { Ledger } from './core/ledger.js'
@@ -37,6 +37,7 @@ export class PodService {
   private readonly store: JsonStore
   private readonly clock: () => number
   private readonly backends: Partial<Record<Vendor, WorkerBackend>>
+  private readonly dataDir: string
   private orchestrator: MissionOrchestrator | undefined
   private running: Promise<RunSummary> | undefined
   private commanderLauncher: CommanderLauncher | undefined
@@ -44,6 +45,7 @@ export class PodService {
   constructor(options: PodServiceOptions) {
     this.store = options.store
     this.clock = options.clock ?? (() => Date.now())
+    this.dataDir = options.dataDir ?? join(homedir(), '.dsh', 'pod')
     // Windows 专项：宿主 PATH 可能被外部程序改写（CR-03-7），worker spawn 前修复
     repairPath()
     this.backends = options.backends ?? {
@@ -74,6 +76,9 @@ export class PodService {
     // 表单/工具未给任务 DAG 也能跑出完整链，而非空 mission 静默转人工
     const plan = input.plan !== undefined && input.plan.length > 0 ? input.plan : defaultPlan(input.goal)
     orchestrator.createTasks(plan)
+    // DoD-2：plan.md 落盘（唯一事实源，charter planner.md 契约）——mission 数据目录下持久化，
+    // 跨重启可回溯；Canvas 任务列表即该 plan 的可视化
+    this.writePlanFile(missionId, goalTitle(input.goal), plan)
     this.orchestrator = orchestrator
     this.running = orchestrator.run().catch((error) => {
       this.store.appendEvent(missionId, {
@@ -101,6 +106,40 @@ export class PodService {
       })
     }
     return mission
+  }
+
+  /** DoD-2：plan.md 落盘（mission 数据目录，唯一事实源）。序列化任务 DAG，可读且可回溯。 */
+  private writePlanFile(missionId: string, title: string, plan: PlanTaskInput[]): void {
+    try {
+      const dir = join(this.dataDir, 'missions', missionId)
+      mkdirSync(dir, { recursive: true })
+      const lines: string[] = [
+        `# Mission Plan: ${title}`,
+        '',
+        `> mission: ${missionId}`,
+        `> 生成时间: ${new Date(this.clock()).toISOString()}`,
+        '> 本文件由 Pod 自动生成（plan.md 唯一事实源，DoD-2）；Canvas 任务列表即其可视化。',
+        '',
+      ]
+      for (const task of plan) {
+        lines.push(`## ${task.id} · ${task.title}`)
+        lines.push(`- type: ${task.type}`)
+        if (task.skill_tags !== undefined && task.skill_tags.length > 0) lines.push(`- skill_tags: ${task.skill_tags.join(', ')}`)
+        if (task.depends_on !== undefined && task.depends_on.length > 0) lines.push(`- depends_on: ${task.depends_on.join(', ')}`)
+        lines.push(`- spec: ${task.spec}`)
+        lines.push('')
+      }
+      writeFileSync(join(dir, 'plan.md'), lines.join('\n'), 'utf8')
+    } catch (error) {
+      // plan.md 落盘失败不阻断 launch：仅记事件（Canvas 任务列表仍在，DoD-2 的主链路不依赖文件）
+      this.store.appendEvent(missionId, {
+        id: `ev-plan-write-error-${this.clock()}`,
+        mission_id: missionId,
+        ts: this.clock(),
+        kind: 'plan_write_error',
+        payload: { error: error instanceof Error ? error.message : String(error) },
+      })
+    }
   }
 
   /** 宿主周期巡检：watchdog + 审批超期（CR-05-6）。 */
@@ -313,6 +352,11 @@ export function defaultPlan(goal: string): PlanTaskInput[] {
 /** 默认数据根（插件与 CLI 共用）。 */
 export function defaultPodDataDir(): string {
   return join(homedir(), '.dsh', 'pod')
+}
+
+/** goal 截断为标题（与 defaultPlan 同规则，plan.md 头行用）。 */
+function goalTitle(goal: string): string {
+  return goal.length > 40 ? `${goal.slice(0, 40)}…` : goal
 }
 
 export function ensureDataDir(): string {
