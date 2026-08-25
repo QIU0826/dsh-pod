@@ -53,6 +53,13 @@ const COL_LABEL: Record<string, string> = {
   escalated: '转人工',
 }
 
+/** DoD-9 预设阵型：一键填充 slots（与手输同构，产物等价可改）。 */
+const PRESETS: Array<{ id: string; label: string; slots: string }> = [
+  { id: 'pair', label: '实现+审查（默认）', slots: 'claude implementer 编码; codex reviewer 审查' },
+  { id: 'fullstack', label: '实现+测试+审查', slots: 'claude implementer 编码; claude tester 测试; codex reviewer 审查' },
+  { id: 'research', label: '调研+实现', slots: 'claude researcher 调研; claude implementer 编码' },
+]
+
 function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString()
 }
@@ -271,6 +278,24 @@ export function PodPanel(): ReactElement {
         value: slots,
         onChange: (e) => setSlots(e.target.value),
       }),
+      // DoD-9 预设组队：一键填充 slots（与手输同构，产物等价可改）
+      createElement(
+        'div',
+        { style: { display: 'flex', gap: 6, alignItems: 'center' } },
+        createElement('span', { style: { fontSize: 12, opacity: 0.7 } }, '预设阵型：'),
+        PRESETS.map((preset) =>
+          createElement(
+            'button',
+            {
+              key: preset.id,
+              style: styles.button,
+              'aria-label': `预设 ${preset.label}`,
+              onClick: () => setSlots(preset.slots),
+            },
+            preset.label,
+          ),
+        ),
+      ),
       createElement('button', { style: styles.button, onClick: () => void handleLaunch() }, '组队 Launch'),
     ),
     createElement(
