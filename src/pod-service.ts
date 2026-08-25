@@ -109,6 +109,29 @@ export class PodService {
     return this.orchestrator.maintenanceTick()
   }
 
+  /** 转人工接管 + 恢复驱动（3.4 节）：人工裁决 escalated 任务后重新驱动 DAG。 */
+  humanResolveAndResume(
+    taskId: string,
+    resolution: { outcome: 'done' | 'blocked'; commit_sha?: string; parent_sha?: string; note?: string },
+  ): Promise<RunSummary> {
+    const orch = this.requireOrchestrator()
+    orch.humanResolve(taskId, resolution)
+    const missionId = this.store.getActiveMission()?.id ?? ''
+    // 重新驱动：完成/重试后继续派发依赖链
+    this.running = orch.run().catch((error) => {
+      const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+      this.store.appendEvent(missionId, {
+        id: `ev-resume-error-${Date.now()}`,
+        mission_id: missionId,
+        ts: Date.now(),
+        kind: 'mission_run_error',
+        payload: { error: message },
+      })
+      return { status: 'aborted' as const, doneTasks: [], escalatedTasks: [], pendingApprovals: [], reason: message }
+    })
+    return this.running
+  }
+
   private makeOrchestrator(missionId: string): MissionOrchestrator {
     return new MissionOrchestrator(missionId, {
       store: this.store,

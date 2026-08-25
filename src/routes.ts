@@ -293,6 +293,40 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
     },
     {
       kind: 'exact',
+      path: '/api/dsh-pod/resolve',
+      handler: async (req, res) => {
+        if (!isLoopback(req)) {
+          writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        const current = service()
+        if (current === undefined) {
+          writeJson(res, 503, { error: 'pod runtime not initialized' })
+          return
+        }
+        const body = await readJsonBody(req)
+        const taskId = body?.task_id
+        const outcome = body?.outcome
+        if (typeof taskId !== 'string' || taskId.length === 0 || (outcome !== 'done' && outcome !== 'blocked')) {
+          writeJson(res, 422, { error: 'task_id and outcome (done|blocked) are required' })
+          return
+        }
+        try {
+          // 转人工接管（3.4 节）：人工裁决 escalated 任务并恢复驱动（CR-06-8）
+          const summary = await current.humanResolveAndResume(taskId, {
+            outcome,
+            commit_sha: typeof body?.commit_sha === 'string' ? body.commit_sha : undefined,
+            parent_sha: typeof body?.parent_sha === 'string' ? body.parent_sha : undefined,
+            note: typeof body?.note === 'string' ? body.note : undefined,
+          })
+          writeJson(res, 200, { ok: true, run_status: summary.status })
+        } catch (error) {
+          writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
+      kind: 'exact',
       path: '/api/dsh-pod/abort',
       handler: async (req, res) => {
         if (!isLoopback(req)) {

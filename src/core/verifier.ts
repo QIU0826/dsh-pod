@@ -106,7 +106,14 @@ export function checkNarrativeMatch(task: Task, report: MissionReport): { check:
     failures.push({ check: 'narrative_match', detail: `task ${task.id} claims done but changed no files` })
   }
   if (producesArtifacts && report.status === 'done' && report.test_result === 'fail') {
-    failures.push({ check: 'narrative_match', detail: `task ${task.id} claims done but tests failed` })
+    // 证据化宽容（CR-06-8）：fail 但 test_evidence 证明是「缺测试框架」而非真实测试失败
+    // （npm ENOENT / no package.json / 无测试命令）→ 属 not_run 语义，不判 mismatch。
+    const missingFramework = /enoent|not found|no test (framework|command)|no package\.json|没有测试|无测试框架|缺少测试/i.test(
+      report.test_evidence ?? '',
+    )
+    if (!missingFramework) {
+      failures.push({ check: 'narrative_match', detail: `task ${task.id} claims done but tests failed` })
+    }
   }
   return failures
 }

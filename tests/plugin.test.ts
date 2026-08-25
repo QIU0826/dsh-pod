@@ -100,8 +100,8 @@ describe('plugin 宿主契约', () => {
     }
     await ctx.plugin(plugin)
     expect(mocks.section).not.toHaveBeenCalled()
-    // ping + status/events/launch/steer/approve/deny/dispatch/abort 九条宿主路由
-    expect(mocks.register).toHaveBeenCalledTimes(9)
+    // ping + status/events/launch/steer/approve/deny/dispatch/resolve/abort 十条宿主路由
+    expect(mocks.register).toHaveBeenCalledTimes(10)
     expect(mocks.toolNames).toHaveLength(8)
     ctx.registry.delete(plugin)
     rmSync(dataDir, { recursive: true, force: true })

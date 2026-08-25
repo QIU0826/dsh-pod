@@ -18,7 +18,7 @@
 
 import { ApprovalEngine } from './approvals.js'
 import { routeTask } from './dispatcher.js'
-import { ConcurrencyLimitError, InvalidTransitionError, PodError } from './errors.js'
+import { ConcurrencyLimitError, InvalidTransitionError, NotFoundError, PodError } from './errors.js'
 import { Ledger } from './ledger.js'
 import { MissionMachine } from './mission.js'
 import { estimateCtxUsage } from './session-tiers.js'
@@ -646,6 +646,50 @@ export class MissionOrchestrator {
   abortMission(reason: string): void {
     this.stopRequested = true
     this.missionMachine.abort(reason)
+  }
+
+  /**
+   * 转人工接管（3.4 节接管卡）：人工裁决 escalated 任务去向。
+   *   outcome=done   → 以证据（commit_sha/parent_sha）完成该任务，后续依赖可继续
+   *   outcome=blocked → 置回 blocked（保留 attempts），按重试规则可重新派发
+   * 这是「转人工」的唯一恢复路径：LLM 无此权限，代码裁决 + 人工证据落盘（CR-06-8）。
+   */
+  humanResolve(
+    taskId: string,
+    resolution: { outcome: 'done' | 'blocked'; commit_sha?: string; parent_sha?: string; note?: string },
+  ): void {
+    const task = this.store.getTask(taskId)
+    if (task === undefined) throw new NotFoundError('task', taskId)
+    if (task.status !== 'escalated') {
+      throw new InvalidTransitionError(task.status, 'human-resolved', 'only escalated tasks can be human-resolved')
+    }
+    const now = this.clock()
+    if (resolution.outcome === 'done') {
+      this.store.updateTask(taskId, {
+        status: 'done',
+        commit_sha: resolution.commit_sha,
+        parent_sha: resolution.parent_sha,
+        done_at: now,
+        fault: undefined,
+        last_error: undefined,
+      })
+    } else {
+      this.store.updateTask(taskId, {
+        status: 'blocked',
+        fault: undefined,
+        last_error: resolution.note ?? 'human takeover: retry',
+        next_retry_at: now,
+      })
+    }
+    this.store.appendEvent(this.missionId, {
+      id: `ev-human-resolve-${taskId}-${now}`,
+      mission_id: this.missionId,
+      ts: now,
+      kind: 'task_human_resolved',
+      task_id: taskId,
+      payload: { outcome: resolution.outcome, note: resolution.note ?? null, commit_sha: resolution.commit_sha ?? null },
+    })
+    this.signalCompletion()
   }
 
   /** 由 done 实现任务汇总审批 patch（合并执行属 W5 apply_patch；此处仅生成待批卡）。 */

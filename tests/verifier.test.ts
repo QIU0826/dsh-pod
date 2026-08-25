@@ -101,6 +101,24 @@ describe('checkReportCompleteness（附录 C schema 强制字段）', () => {
     const narrative = checkNarrativeMatch(reviewTask, reviewReport)
     expect(narrative).toEqual([])
   })
+
+  it('done + fail 但证据为缺测试框架 → 不判 mismatch（CR-06-8 证据化宽容）', () => {
+    const task = makeTask()
+    const report = doneReport({
+      test_result: 'fail',
+      test_evidence: 'npm error ENOENT：仓库无 package.json，测试框架不存在',
+    })
+    expect(checkNarrativeMatch(task, report)).toEqual([])
+  })
+
+  it('done + fail 且证据为真实测试失败 → mismatch', () => {
+    const task = makeTask()
+    const report = doneReport({
+      test_result: 'fail',
+      test_evidence: '1/2 tests failed: expect(1).toBe(2)',
+    })
+    expect(checkNarrativeMatch(task, report).some((f) => f.check === 'narrative_match')).toBe(true)
+  })
   it('status 非法枚举 → 失败', () => {
     const failures = checkReportCompleteness(
       doneReport({ status: 'whatever' as MissionReport['status'] }),

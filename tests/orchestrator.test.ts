@@ -499,3 +499,45 @@ describe('maintenanceTick（CR-05-6：宿主周期巡检 = watchdog + 审批超�
     expect(fixture.store.getTask('T-1')!.fault).toBe('idle_timeout')
   })
 })
+
+describe('humanResolve（3.4 节转人工接管，CR-06-8）', () => {
+  function makeEscalated(orchestrator: MissionOrchestrator): void {
+    // 「无人可派」（能力缺口）→ ready→escalated，attempts 不消费
+    orchestrator.createTasks([{ id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['翻译'] }])
+  }
+
+  it('escalated → done：以证据（commit/parent）完成，事件落盘', async () => {
+    const orchestrator = makeOrchestrator(fixture, {})
+    orchestrator.launch(launchInput({ cwd: fixture.repo }))
+    makeEscalated(orchestrator)
+    await orchestrator.dispatchNext()
+    expect(fixture.store.getTask('T-1')!.status).toBe('escalated')
+    fixture.clockNow += 1
+    orchestrator.humanResolve('T-1', { outcome: 'done', commit_sha: 'abc123', parent_sha: 'def456', note: '人工核验 worktree 实现真实' })
+    const task = fixture.store.getTask('T-1')!
+    expect(task.status).toBe('done')
+    expect(task.commit_sha).toBe('abc123')
+    expect(task.parent_sha).toBe('def456')
+    expect(fixture.store.listEvents('M-1').some((e) => e.kind === 'task_human_resolved')).toBe(true)
+  })
+
+  it('escalated → blocked：保留 attempts 可重试（下一轮派发）', async () => {
+    const orchestrator = makeOrchestrator(fixture, {})
+    orchestrator.launch(launchInput({ cwd: fixture.repo }))
+    makeEscalated(orchestrator)
+    await orchestrator.dispatchNext()
+    expect(fixture.store.getTask('T-1')!.status).toBe('escalated')
+    fixture.clockNow += 1
+    orchestrator.humanResolve('T-1', { outcome: 'blocked', note: '人工判定需返工' })
+    const task = fixture.store.getTask('T-1')!
+    expect(task.status).toBe('blocked')
+    expect(task.fault).toBeUndefined()
+  })
+
+  it('非 escalated 任务不可接管（状态机裁决）', () => {
+    const orchestrator = makeOrchestrator(fixture, {})
+    orchestrator.launch(launchInput({ cwd: fixture.repo }))
+    orchestrator.createTasks([{ id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'] }])
+    expect(() => orchestrator.humanResolve('T-1', { outcome: 'done' })).toThrowError(/escalated/i)
+  })
+})
