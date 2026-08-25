@@ -638,6 +638,21 @@ export class MissionOrchestrator {
     this.missionMachine.approve(approvalId, by)
   }
 
+  /** W5：仅裁决卡 approved（合并前确认，ApplyPatch 校验依赖此状态）。 */
+  approveCard(approvalId: string, by: string): void {
+    this.missionMachine.approveCard(approvalId, by)
+  }
+
+  /** W5：合并成功 → mission done。 */
+  completeAfterMerge(approvalId: string, by: string): void {
+    this.missionMachine.completeAfterMerge(approvalId, by)
+  }
+
+  /** W5：合并失败 → 卡回滚 pending（mission 保持 awaiting_approval）。 */
+  rollbackApproval(approvalId: string): void {
+    this.missionMachine.rollbackApproval(approvalId)
+  }
+
   deny(approvalId: string, by: string, reason: string): void {
     this.missionMachine.deny(approvalId, by, reason)
   }

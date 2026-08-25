@@ -194,6 +194,42 @@ describe('审批与 mission 状态联动', () => {
     machine.start()
     expect(() => machine.approve('A-1', 'user')).toThrowError(InvalidTransitionError)
   })
+
+  it('approveCard：仅裁决卡 approved，mission 保持 awaiting_approval（合并前确认）', () => {
+    machine.start()
+    setupDoneChain()
+    machine.tasksCompleted()
+    const approval = approvals.request('M-1', { slot_id: 'S-1', worktree_path: 'x', summary: 'merge' })
+    machine.approveCard(approval.id, 'user')
+    expect(store.getApproval(approval.id)!.status).toBe('approved')
+    expect(store.getMission('M-1')!.status).toBe('awaiting_approval')
+  })
+
+  it('completeAfterMerge：合并成功 → mission done（不重复裁决）', () => {
+    machine.start()
+    setupDoneChain()
+    machine.tasksCompleted()
+    const approval = approvals.request('M-1', { slot_id: 'S-1', worktree_path: 'x', summary: 'merge' })
+    machine.approveCard(approval.id, 'user')
+    machine.completeAfterMerge(approval.id, 'user')
+    expect(store.getMission('M-1')!.status).toBe('done')
+    expect(store.getApproval(approval.id)!.status).toBe('approved')
+  })
+
+  it('rollbackApproval：合并失败 → 卡回 pending（mission 保持 awaiting_approval，可重试）', () => {
+    machine.start()
+    setupDoneChain()
+    machine.tasksCompleted()
+    const approval = approvals.request('M-1', { slot_id: 'S-1', worktree_path: 'x', summary: 'merge' })
+    machine.approveCard(approval.id, 'user')
+    machine.rollbackApproval(approval.id)
+    expect(store.getApproval(approval.id)!.status).toBe('pending')
+    expect(store.getApproval(approval.id)!.decided_by).toBeUndefined()
+    expect(store.getMission('M-1')!.status).toBe('awaiting_approval')
+    // 回滚后可再次裁决（防误双击后的恢复路径）
+    machine.approveCard(approval.id, 'user')
+    expect(store.getApproval(approval.id)!.status).toBe('approved')
+  })
 })
 
 describe('暂停/恢复/中止', () => {

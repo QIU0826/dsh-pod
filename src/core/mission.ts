@@ -146,6 +146,32 @@ export class MissionMachine {
     this.emit(mission, 'mission_done', { approval_id: approvalId, by })
   }
 
+  /**
+   * W5 合并前确认（3.3 节不变量 3：合并必须已批准）：
+   * 仅裁决审批卡 → approved，mission 状态不变（仍 awaiting_approval）。
+   * ApplyPatch.apply 校验卡已 approved 后才执行 git merge。
+   */
+  approveCard(approvalId: string, by: string): void {
+    const mission = this.getMission()
+    this.guard(mission, 'approve')
+    this.approvals.decide(approvalId, 'approved', by)
+  }
+
+  /** 合并成功 → mission done（卡已 approved，不再重复裁决）。 */
+  completeAfterMerge(approvalId: string, by: string): void {
+    const mission = this.getMission()
+    this.guard(mission, 'approve')
+    this.store.updateMission(mission.id, { status: 'done' })
+    this.emit(mission, 'mission_done', { approval_id: approvalId, by })
+  }
+
+  /** 合并失败 → 审批卡回滚 pending（mission 保持 awaiting_approval，可重试或驳回）。 */
+  rollbackApproval(approvalId: string): void {
+    const approval = this.store.getApproval(approvalId)
+    if (approval === undefined) throw new NotFoundError('approval', approvalId)
+    this.store.updateApproval(approvalId, { status: 'pending', decided_at: undefined, decided_by: undefined })
+  }
+
   /** 拒绝 → 回到 running（补任务重跑；审批卡记录 deny 原因）。 */
   deny(approvalId: string, by: string, reason: string): void {
     const mission = this.getMission()

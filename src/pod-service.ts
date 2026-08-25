@@ -260,10 +260,17 @@ export class PodService {
     if (approval === undefined) {
       return Promise.resolve({ ok: false, conflict: false, message: `approval not found: ${approvalId}` })
     }
-    // apply_patch 单入口（3.3 节不变量 3）：合并成功才裁决 mission done；冲突保持 awaiting_approval
+    // apply_patch 单入口（3.3 节不变量 3）：合并前必须已批准。
+    // 先裁决卡 approved（mission 仍 awaiting_approval），ApplyPatch 校验通过后执行 merge；
+    // 合并成功才 mission done；失败回滚卡 pending（可重试或驳回）。
+    orch.approveCard(approvalId, by)
     const applyPatch = new ApplyPatch({ store: this.store, git: execGitRunner() })
     return applyPatch.apply(approval.mission_id, approval).then((result) => {
-      if (result.ok) orch.approve(approvalId, by)
+      if (result.ok) {
+        orch.completeAfterMerge(approvalId, by)
+      } else {
+        orch.rollbackApproval(approvalId)
+      }
       return result
     })
   }
