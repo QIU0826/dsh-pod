@@ -116,8 +116,10 @@ export class PodService {
    * DoD-15 后端版本锁定（Berd-A）：launch 前对照 ~/.dsh/pod/backends.lock.json。
    *   ok/unlocked（首次）→ 放行并 pin；mismatch → 拒绝 launch（CLI 版本漂移 = R1）。
    *   POD_*_BIN 覆盖 → override 绕过（显式逃生门）。
+   *   测试注入空 backends（{}）时跳过（无真实 CLI 可锁，避免 shell 探测拖慢单测）。
    */
   private enforceBackendLock(): void {
+    if (Object.keys(this.backends).length === 0) return
     const lock = new BackendsLock({ filePath: join(this.dataDir, 'backends.lock.json') })
     const snapshot = this.detectBackendVersions()
     const check = lock.check(snapshot, this.binOverrides())
@@ -130,8 +132,10 @@ export class PodService {
     }
   }
 
-  /** 探测 claude/codex 版本快照（preflight 语义：已装才记版本）。 */
+  /** 探测 claude/codex 版本快照（preflight 语义：已装才记版本；进程级缓存避免每次 launch 重探）。 */
+  private cachedBackendVersions: Record<string, { installed: boolean; version?: string; bin: string }> | undefined
   private detectBackendVersions(): Record<string, { installed: boolean; version?: string; bin: string }> {
+    if (this.cachedBackendVersions !== undefined) return this.cachedBackendVersions
     const result: Record<string, { installed: boolean; version?: string; bin: string }> = {
       claude: { installed: false, bin: 'claude' },
       codex: { installed: false, bin: 'codex' },
@@ -149,6 +153,7 @@ export class PodService {
     } catch {
       /* 未装 → 如实 recorded */
     }
+    this.cachedBackendVersions = result
     return result
   }
 
