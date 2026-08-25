@@ -136,6 +136,19 @@ export interface VerifyTaskArtifactsOptions {
   worktreeRoot?: string
 }
 
+/** 在 repoDir 的常见产物目录（out/ 及根）按 basename 查找测试日志（容忍提示词措辞差异）。 */
+function findFileByBasename(repoDir: string, basename: string): boolean {
+  const candidates = [
+    join(repoDir, basename),
+    join(repoDir, 'out', basename),
+    join(repoDir, 'artifacts', basename),
+    join(repoDir, 'logs', basename),
+    join(repoDir, 'reports', basename),
+    join(repoDir, 'test-results', basename),
+  ]
+  return candidates.some((p) => existsSync(p))
+}
+
 /** 任务 done 报告的全量产物校验 → TaskVerifyResult（task-machine 注入点）。 */
 export async function verifyTaskArtifacts(
   options: VerifyTaskArtifactsOptions,
@@ -171,12 +184,21 @@ export async function verifyTaskArtifacts(
 
   if (report.test_result !== 'not_run' && report.test_evidence) {
     // test_evidence 可能是「12/12 ✓（输出路径 out/x.log）」形式，取括号内路径；无括号按原值。
-    const match = /\(([^)]+)\)/.exec(report.test_evidence)
-    const rawPath = match?.[1] ?? report.test_evidence
+    // 中文输出用全角括号（）、提示词会把「输出路径」前缀带进括号 → 全角/半角都解析，
+    // 并剥离前缀与首尾空白（CR-06-12 实证：bakeoff pod 条件 test_log_exists 误判）。
+    const match = /[（(]([^）)]+)[）)]/.exec(report.test_evidence)
+    const rawPath = (match?.[1] ?? report.test_evidence)
+      .replace(/^(输出路径|日志路径|测试输出|路径|详见|见|at|output(?: path)?:?)\s*[:：]?\s*/i, '')
+      .trim()
     // 相对路径必须相对 repo/worktree 根解析（worker 的 cwd），绝不能用宿主进程 cwd。
     const logPath = isAbsolute(rawPath) ? rawPath : join(options.repoDir, rawPath)
     if (!exists(logPath)) {
-      failures.push({ check: 'test_log_exists', detail: `test log not found: ${rawPath}` })
+      // 精确路径未命中 → basename 模糊匹配（out/ 下按文件名查找），容忍提示词措辞差异（CR-06-12）
+      const basename = rawPath.split(/[\\/]/).pop() ?? rawPath
+      const found = findFileByBasename(options.repoDir, basename)
+      if (!found) {
+        failures.push({ check: 'test_log_exists', detail: `test log not found: ${rawPath}` })
+      }
     }
   }
 

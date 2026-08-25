@@ -239,4 +239,27 @@ describe.runIf(gitAvailable)('verifyTaskArtifacts × 真实 git 仓库', () => {
     expect(missing.failures.some((f) => f.check === 'test_log_exists')).toBe(true)
     expect(existsSync(join(repo, 'out', 't.log'))).toBe(true)
   })
+
+  it('test_evidence 含中文前缀「输出路径」→ 解析剥离前缀后通过（CR-06-12 实证）', async () => {
+    mkdirSync(join(repo, 'out'))
+    writeFileSync(join(repo, 'out', 'task-T-1.testlog'), '12/12 ✓')
+    const verdict = await verifyTaskArtifacts(
+      { git: execGitClient(), repoDir: repo },
+      makeTask(),
+      doneReport({ commit_sha: headSha(), test_evidence: '12/12 ✓（输出路径 out/task-T-1.testlog）' }),
+    )
+    expect(verdict.ok).toBe(true)
+  })
+
+  it('test_evidence 精确路径未命中 → basename 模糊匹配 out/ 下同名文件（容忍措辞差异）', async () => {
+    mkdirSync(join(repo, 'out'))
+    writeFileSync(join(repo, 'out', 'task-T-1.testlog'), '12/12 ✓')
+    // 报告写的是子目录路径（提示词措辞漂移），实际文件在 out/ 根
+    const verdict = await verifyTaskArtifacts(
+      { git: execGitClient(), repoDir: repo },
+      makeTask(),
+      doneReport({ commit_sha: headSha(), test_evidence: '12/12 ✓（output: sub/task-T-1.testlog）' }),
+    )
+    expect(verdict.ok).toBe(true)
+  })
 })
