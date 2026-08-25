@@ -160,4 +160,31 @@ describe('JsonStore mutations', () => {
     store.createMission(makeMission({ id: 'M-live', status: 'running' }))
     expect(store.getActiveMission()?.id).toBe('M-live')
   })
+
+  it('DoD-11 跨重启恢复：关闭后重新 open，mission/任务/审批卡从磁盘原样重建', () => {
+    const store = makeStore()
+    store.open()
+    store.createMission(makeMission({ id: 'M-1', status: 'awaiting_approval' }))
+    store.createTask({
+      id: 'T-1', mission_id: 'M-1', title: 't', spec: 's', skill_tags: ['编码'], type: 'implement',
+      depends_on: [], status: 'done', attempts: 0, soft_attempts: 0,
+      max_wall_clock_ms: 3600_000, created_at: clockNow, updated_at: clockNow,
+      owner_slot_id: 'S-1', commit_sha: 'abc123',
+    })
+    store.createApproval({
+      id: 'A-1', mission_id: 'M-1', status: 'pending', created_at: clockNow,
+      patch: { slot_id: 'S-1', worktree_path: 'C:\\w\\S-1', base_commit: 'b', head_commit: 'abc123', summary: 'merge' },
+    })
+    store.flush()
+    // 模拟宿主/浏览器重启：全新实例重新 open（磁盘唯一事实源）
+    const reopened = makeStore()
+    reopened.open()
+    expect(reopened.getMission('M-1')!.status).toBe('awaiting_approval')
+    expect(reopened.getTask('T-1')!.commit_sha).toBe('abc123')
+    const approval = reopened.getApproval('A-1')!
+    expect(approval.status).toBe('pending')
+    expect(approval.patch.worktree_path).toBe('C:\\w\\S-1')
+    // 审批卡可继续裁决（跨重启审批闭环不丢）
+    expect(reopened.listApprovals('M-1')).toHaveLength(1)
+  })
 })
