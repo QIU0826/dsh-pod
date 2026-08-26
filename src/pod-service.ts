@@ -65,8 +65,14 @@ export class PodService {
     this.store = options.store
     this.clock = options.clock ?? (() => Date.now())
     this.dataDir = options.dataDir ?? join(homedir(), '.dsh', 'pod')
-    // 灰度开关（Berd-E）：~/.dsh/pod/experiments.json，默认关、fail-closed；cheap load
-    this.experiments = new Experiments({ filePath: join(this.dataDir, 'experiments.json') })
+    // 灰度开关（Berd-E）：~/.dsh/pod/experiments.json，默认关、fail-closed；cheap load。
+    // 方案书 942 行「默认关、dev 构建默认开」：非 production 时注入 UI 类灰度默认开
+    // （拓扑/第三栏），审批模式 2/3 保持保守关（涉及行为变更，须显式开启）。
+    const devDefaults =
+      (process.env.NODE_ENV ?? 'development') !== 'production'
+        ? { 'topology-animation': true, 'canvas-third-column': true }
+        : undefined
+    this.experiments = new Experiments({ filePath: join(this.dataDir, 'experiments.json'), defaults: devDefaults })
     this.experiments.load()
     // 长期记忆子系统（2.8.1）：优先注入共享实例（SQLite 引擎时与 store 同 pod.db）；
     // 缺省按 ~/.dsh/pod/memory.json（JSON 回退）自建，主动策展 + 图谱 + reflection
