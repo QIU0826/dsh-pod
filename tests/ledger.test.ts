@@ -137,3 +137,22 @@ describe('usage source 类型安全', () => {
     expect(good).toBe('measured')
   })
 })
+
+describe('estimateTaskCostUsd（AgentScope-F / DC-4：派发前预算短路预估）', () => {
+  it('implement 任务按类型 token 量 × 模型价目估算（claude-sonnet）', () => {
+    // implement: 120k total（96k in + 24k out）× sonnet(3/15) = (96k*3 + 24k*15)/1e6 = 0.648
+    const estimate = ledger.estimateTaskCostUsd('M-1', 'implement', 'claude-sonnet')
+    expect(estimate).toBeCloseTo(0.648, 4)
+  })
+
+  it('review 任务明显低于 implement（审查只读，token 量小）', () => {
+    const implement = ledger.estimateTaskCostUsd('M-1', 'implement', 'claude-sonnet')
+    const review = ledger.estimateTaskCostUsd('M-1', 'review', 'claude-sonnet')
+    expect(review).toBeLessThan(implement)
+  })
+
+  it('未知模型价目 → 固定保守下限 $0.05（宁可告警不放行）', () => {
+    const estimate = ledger.estimateTaskCostUsd('M-1', 'implement', 'no-such-model')
+    expect(estimate).toBe(0.05)
+  })
+})

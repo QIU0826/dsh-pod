@@ -123,6 +123,31 @@ export class Ledger {
     }
   }
 
+  /**
+   * 派发前预算短路（AgentScope-F / 迁移计划 DC-4）：预估单任务成本（USD）。
+   * 估算 = 任务类型预期 token 量 × 模型价目；仅作「剩余预算够不够跑一个任务」的
+   * 预防性闸门，不作为计费。未知模型/类型退回保守上限（估算可被高估触发告警，绝不低估）。
+   */
+  estimateTaskCostUsd(missionId: string, taskType: string, model: string): number {
+    this.requireMission(missionId)
+    const totalTokensByType: Record<string, number> = {
+      implement: 120_000,
+      review: 30_000,
+      plan: 20_000,
+      test: 50_000,
+      doc: 25_000,
+      research: 40_000,
+    }
+    const total = totalTokensByType[taskType] ?? 60_000
+    const rate = this.priceTable.rates[model] ?? this.priceTable.rates.unknown ?? { in: 0, out: 0 }
+    const tokensIn = Math.floor(total * 0.8)
+    const tokensOut = total - tokensIn
+    const estimate = (tokensIn * rate.in + tokensOut * rate.out) / 1_000_000
+    // 未知模型价目（0/0）→ 固定保守下限 $0.05（宁可告警不放行，防预算静默超支）
+    if (!Number.isFinite(estimate) || estimate <= 0) return 0.05
+    return estimate
+  }
+
   /** Debrief 数据源：按员工/模型拆解。 */
   summary(missionId: string): {
     total_tokens: number

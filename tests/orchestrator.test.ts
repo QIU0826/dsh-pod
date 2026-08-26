@@ -470,6 +470,33 @@ describe('审批闭环', () => {
   })
 })
 
+describe('派发前预算短路（AgentScope-F / DC-4）', () => {
+  it('剩余预算 < 任务预估成本 → 不派发 + budget_short_circuit 告警事件', async () => {
+    const orchestrator = makeOrchestrator(fixture, {})
+    orchestrator.launch(launchInput({ cwd: fixture.repo, budgetUsd: 2 }))
+    orchestrator.createTasks([{ id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'] }])
+    // 模拟预算几乎耗尽：剩余 0.05 < implement 预估（deepseek-v4-pro → ~0.077）
+    fixture.store.updateMission('M-1', { spent_equiv_usd: 1.95 })
+    await orchestrator.run()
+    const events = fixture.store.listEvents('M-1')
+    const short = events.find((e) => e.kind === 'budget_short_circuit' && e.task_id === 'T-1')
+    expect(short).toBeDefined()
+    expect((short!.payload as { remaining_usd: number }).remaining_usd).toBeCloseTo(0.05, 4)
+    // 任务保持 ready 未派发；后端未被调用
+    expect(fixture.store.getTask('T-1')!.status).toBe('ready')
+    expect(fixture.backends['claude']!.started).toHaveLength(0)
+  })
+
+  it('预算充足 → 正常派发执行', async () => {
+    const orchestrator = makeOrchestrator(fixture, {})
+    orchestrator.launch(launchInput({ cwd: fixture.repo, budgetUsd: 2 }))
+    orchestrator.createTasks([{ id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'] }])
+    await orchestrator.run()
+    expect(fixture.store.getTask('T-1')!.status).toBe('done')
+    expect(fixture.store.listEvents('M-1').some((e) => e.kind === 'budget_short_circuit')).toBe(false)
+  })
+})
+
 describe('watchdog 接线（任务空闲 kill + 故障分类）', () => {
   it('短阈值 idle → kill + blocked(idle_timeout)', async () => {
     const orchestrator = makeOrchestrator(fixture, { 'T-1': { hang: true } })

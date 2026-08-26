@@ -363,6 +363,28 @@ export class MissionOrchestrator {
       throw new PodError(`no backend registered for vendor ${slot.vendor}`, 'BACKEND_MISSING', { vendor: slot.vendor })
     }
 
+    // 派发前预算短路（AgentScope-F / DC-4）：剩余预算 < 任务预估成本 → 不派发 + 告警事件
+    const remainingUsd = mission.budget_usd - mission.spent_equiv_usd
+    const estimate = this.ledger.estimateTaskCostUsd(this.missionId, task.type, slot.model)
+    if (remainingUsd < estimate) {
+      this.store.appendEvent(this.missionId, {
+        id: `ev-budget-short-${task.id}-${this.clock()}`,
+        mission_id: this.missionId,
+        ts: this.clock(),
+        kind: 'budget_short_circuit',
+        task_id: task.id,
+        slot_id: slot.id,
+        payload: {
+          task_type: task.type,
+          estimate_usd: Number(estimate.toFixed(4)),
+          remaining_usd: Number(remainingUsd.toFixed(4)),
+          budget_usd: mission.budget_usd,
+          spent_equiv_usd: Number(mission.spent_equiv_usd.toFixed(4)),
+        },
+      })
+      return false
+    }
+
     // worktree 隔离（3.7 节：默认每员工一个）
     let worktreePath = slot.worktree_path
     if (worktreePath === undefined || worktreePath.length === 0) {
