@@ -38,6 +38,8 @@ interface LaunchArgs {
   budget_usd?: number
   /** 审批模式（1 默认 / 2 交接确认 / 3 全自动）。模式 2/3 需 experiments 灰度开关开启。 */
   approval_mode?: number
+  /** 并行执行上限（默认 2，v0.2 并行强化；clamp 1-8）。 */
+  parallel?: number
   slots: Array<{
     id: string
     vendor: Vendor
@@ -67,6 +69,7 @@ export function makePodTools(service: PodService): PodToolBundle {
         cwd: { type: 'string', required: true, description: '目标 git 仓库绝对路径（主树）' },
         budget_usd: { type: 'number', description: '美元预算上限（默认 3）' },
         approval_mode: { type: 'number', description: '审批模式：1（默认，合并前确认）/ 2（交接确认）/ 3（全自动）。模式 2/3 需 ~/.dsh/pod/experiments.json 对应开关开启。' },
+        parallel: { type: 'number', description: '并行执行上限（默认 2；v0.2 并行强化，clamp 1-8）' },
         slots: {
           type: 'array',
           required: true,
@@ -120,6 +123,7 @@ export function makePodTools(service: PodService): PodToolBundle {
           cwd: input.cwd,
           budgetUsd: input.budget_usd ?? 3,
           approvalMode: input.approval_mode === 2 || input.approval_mode === 3 ? input.approval_mode : 1,
+          parallel: input.parallel,
           slots: input.slots,
           plan: input.plan,
         })

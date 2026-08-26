@@ -70,6 +70,11 @@ export interface LaunchInput {
    * 否则 launch 拒绝（Berd-E 灰度纪律，默认关、fail-closed）。
    */
   approvalMode?: 1 | 2 | 3
+  /**
+   * 并行执行上限（v0.2 并行强化）：同一轮派发的并发任务数，默认 2（MAX_PARALLEL_TASKS）。
+   * clamp 到 [1, MAX_PARALLEL_CEILING]。提升并行不改质量门/状态机，只放宽 fan-out。
+   */
+  parallel?: number
   slots: SlotInput[]
 }
 
@@ -120,6 +125,9 @@ export interface OrchestratorDeps {
 /** 注入审查提示词的 diff 长度上限（超限截断并标注，防窗口爆炸）。 */
 export const MAX_REVIEW_DIFF_CHARS = 120_000
 
+/** 并行执行上限的硬顶（v0.2 并行强化，防 fan-out 失控；仍受 MAX_SLOTS 约束）。 */
+export const MAX_PARALLEL_CEILING = 8
+
 /** 灰度开关的极小结构化接口（避免硬依赖 Experiments 实现，测试可注入桩）。 */
 export interface ExperimentsLike {
   isEnabled(key: string): boolean
@@ -147,7 +155,7 @@ export class MissionOrchestrator {
   private readonly taskMachine: TaskMachine
   private readonly watchdog: Watchdog
   private readonly missionId: string
-  private readonly maxParallel: number
+  private maxParallel: number
   private readonly diffProvider: ((task: Task) => Promise<string>) | undefined
   private readonly experiments: ExperimentsLike
   private readonly handles = new Map<string, WorkerHandle>()
@@ -180,6 +188,10 @@ export class MissionOrchestrator {
     }
     if (input.slots.length > MAX_SLOTS) {
       throw new ConcurrencyLimitError(MAX_SLOTS, `slot count ${input.slots.length}`)
+    }
+    // v0.2 并行强化：launch 级 `parallel` 覆盖注入式默认 maxParallel，clamp 到 [1, MAX_PARALLEL_CEILING]
+    if (input.parallel !== undefined) {
+      this.maxParallel = Math.max(1, Math.min(MAX_PARALLEL_CEILING, Math.floor(input.parallel)))
     }
     // 审批模式灰度门（Berd-E）：模式 2/3 需对应 experiments 开关开启；默认关，fail-closed。
     // 未开启却请求模式 2/3 → 拒绝 launch（不静默降级回 1，纪律明确）。
@@ -311,7 +323,8 @@ export class MissionOrchestrator {
     }
     this.stopRequested = false
     while (!this.stopRequested) {
-      const dispatched = await this.dispatchNext()
+      // v0.2 并行强化：每轮尽量填满 maxParallel 个就绪任务（双路+），而非单路派 1 个即等
+      const dispatched = await this.dispatchBatch()
       // 循环继续条件：还有活跃任务等待完成，或刚完成/派发失败后仍有可派任务
       if (!dispatched && this.activeTasks().length === 0) break
       if (this.activeTasks().length > 0) {
@@ -356,6 +369,20 @@ export class MissionOrchestrator {
       if (done + fail > 0) rates[slot.id] = done / (done + fail)
     }
     return rates
+  }
+
+  /**
+   * v0.2 并行强化：同一轮内连派就绪任务直到填满 maxParallel（或无可派/被卡）。
+   * 派发门（模式 2）卡住时 dispatchNext 返回 false → 提前停，等人工放行。
+   */
+  async dispatchBatch(): Promise<boolean> {
+    let any = false
+    while (this.activeTasks().length < this.maxParallel) {
+      const d = await this.dispatchNext()
+      if (!d) break
+      any = true
+    }
+    return any
   }
 
   /** 派发一个就绪任务；无任务可派返回 false。 */

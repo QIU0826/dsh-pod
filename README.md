@@ -58,6 +58,7 @@ node scripts/demo-chain.mjs --repo <dir>   # 自定义靶场仓库
 | 审批模式 2/3 经 experiments 灰度接入（Berd-E） | ✅ | `launch approvalMode` 校验：模式 2（交接确认，跨 agent 派活前弹卡）/ 模式 3（全自动，质量门通过即 done）需对应 `approval-mode-2`/`approval-mode-3` 开关开启；默认模式 1 行为不变；dispatch 卡经 `pod_approve` 分支裁决 |
 | 记忆子系统 2.8.1（CR-07 / NOOA 借鉴） | ✅ | `src/core/memory.ts`：MemoryStore（`~/.dsh/pod/memory.json` 原子写）+ 类型化图谱（supports/contradicts/derived-from）+ 三工具 `pod_mem_write/query/correct` + 后台 reflection（合并/补边/剪枝，接入 maintenanceTick） |
 | Ledger→路由权重（历史成功率，2.7 节） | ✅ | `dispatcher.routeTask` 增 `slotSuccess` 因子：能力 > 负载 > 单任务成本 > 历史成功率（降序），无数据视为中性 0.5 不劣化；orchestrator 按槽位统计 done/(done+blocked+escalated) 注入 |
+| 并行执行强化（双路+，4.3） | ✅ | `LaunchInput.parallel`（默认 2，clamp 1-8，pod_launch 可传）+ `run()` 用 `dispatchBatch` 每轮填满 maxParallel 而非单路派 1 即等；依赖链仍串行不破坏拓扑；FakeBackend 增 delayMs/并发峰值验证 peakActive |
 
 ## 核心域层（src/core，全部纯逻辑 + 注入式副作用，可离线测试）
 

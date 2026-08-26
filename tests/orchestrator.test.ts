@@ -31,15 +31,18 @@ class FakeBackend implements WorkerBackend {
   readonly vendor: Vendor
   readonly started: Array<{ slot: AgentSlot; task: Task; worktree: string }> = []
   readonly kills: string[] = []
-  private readonly script: Record<string, { progress?: WorkerProgressEvent[]; completion?: WorkerCompletion; next?: WorkerCompletion; hang?: boolean }>
+  /** v0.2 并行强化：并发峰值（同一时刻 active 任务数）——验证双路+ 派发进同轮。 */
+  activeCount = 0
+  peakActive = 0
+  private readonly script: Record<string, { progress?: WorkerProgressEvent[]; completion?: WorkerCompletion; next?: WorkerCompletion; hang?: boolean; delayMs?: number }>
   private readonly calls = new Map<string, number>()
 
-  constructor(vendor: Vendor, script: Record<string, { progress?: WorkerProgressEvent[]; completion?: WorkerCompletion; next?: WorkerCompletion; hang?: boolean }>) {
+  constructor(vendor: Vendor, script: Record<string, { progress?: WorkerProgressEvent[]; completion?: WorkerCompletion; next?: WorkerCompletion; hang?: boolean; delayMs?: number }>) {
     this.vendor = vendor
     this.script = script
   }
 
-  private scriptedFor(taskId: string): { progress?: WorkerProgressEvent[]; completion?: WorkerCompletion; hang?: boolean } {
+  private scriptedFor(taskId: string): { progress?: WorkerProgressEvent[]; completion?: WorkerCompletion; hang?: boolean; delayMs?: number } {
     const entry = this.script[taskId]
     const count = (this.calls.get(taskId) ?? 0) + 1
     this.calls.set(taskId, count)
@@ -49,7 +52,7 @@ class FakeBackend implements WorkerBackend {
     return entry.next !== undefined ? { ...entry, completion: entry.next } : this.defaultEntry(taskId)
   }
 
-  private defaultEntry(taskId: string): { progress?: WorkerProgressEvent[]; completion?: WorkerCompletion; hang?: boolean } {
+  private defaultEntry(taskId: string): { progress?: WorkerProgressEvent[]; completion?: WorkerCompletion; hang?: boolean; delayMs?: number } {
     return {
       completion: {
         exit: 'done',
@@ -71,12 +74,17 @@ class FakeBackend implements WorkerBackend {
     callbacks: { onProgress?(event: WorkerProgressEvent): void; onExit?(completion: WorkerCompletion): void } = {},
   ): Promise<WorkerHandle> {
     this.started.push({ slot, task, worktree })
+    this.activeCount += 1
+    if (this.activeCount > this.peakActive) this.peakActive = this.activeCount
     const entry = this.scriptedFor(task.id)
     if (entry.hang !== true) {
-      queueMicrotask(() => {
+      const fire = () => {
         for (const progress of entry.progress ?? []) callbacks.onProgress?.(progress)
         if (entry.completion !== undefined) callbacks.onExit?.(entry.completion)
-      })
+        this.activeCount = Math.max(0, this.activeCount - 1)
+      }
+      if (entry.delayMs !== undefined) setTimeout(fire, entry.delayMs)
+      else queueMicrotask(fire)
     }
     return { pid: 1000 + this.started.length, session_ref: `${this.vendor}-session-${task.id}` }
   }
@@ -191,7 +199,7 @@ afterEach(() => {
 
 function makeOrchestrator(
   fixture: Fixture,
-  script: Record<string, { progress?: WorkerProgressEvent[]; completion?: WorkerCompletion; hang?: boolean }>,
+  script: Record<string, { progress?: WorkerProgressEvent[]; completion?: WorkerCompletion; hang?: boolean; delayMs?: number }>,
   missionId = 'M-1',
 ) {
   const backends: Record<string, FakeBackend> = {
@@ -217,7 +225,7 @@ function makeOrchestrator(
 
 function makeOrchestratorWithDiff(
   fixture: Fixture,
-  script: Record<string, { progress?: WorkerProgressEvent[]; completion?: WorkerCompletion; hang?: boolean }>,
+  script: Record<string, { progress?: WorkerProgressEvent[]; completion?: WorkerCompletion; hang?: boolean; delayMs?: number }>,
   missionId = 'M-1',
 ) {
   const backends: Record<string, FakeBackend> = {
@@ -738,4 +746,56 @@ describe('v0.2 审批模式经 experiments 灰度（Berd-E）', () => {
     expect(fixture.store.getTask('T-1')!.status).toBe('escalated')
   })
 })
+})
+
+describe('v0.2 并行执行强化（双路+，dispatchBatch 填满 maxParallel）', () => {
+  const twoImplementers = [
+    { id: 'S-1', vendor: 'claude' as const, role: 'implementer', capabilities: ['编码'], model: 'm', session_tier: 'per-mission' as const },
+    { id: 'S-2', vendor: 'claude' as const, role: 'implementer', capabilities: ['编码'], model: 'm', session_tier: 'per-mission' as const },
+  ]
+  const twoIndepTasks = () => [
+    { id: 'T-1', title: 'A', spec: 's', type: 'implement' as const, skill_tags: ['编码'] },
+    { id: 'T-2', title: 'B', spec: 's', type: 'implement' as const, skill_tags: ['编码'] },
+  ]
+  const doneX = (id: string) => ({
+    exit: 'done' as const,
+    report: doneReport(id),
+    usage: { tokens_in: 10, tokens_out: 5, source: 'measured' as const },
+    artifacts: [],
+  })
+
+  it('launch parallel=2：两个独立实现任务同轮并行派发（peakActive=2）', async () => {
+    const orch = makeOrchestrator(fixture, { 'T-1': { delayMs: 40, completion: doneX('T-1') }, 'T-2': { delayMs: 40, completion: doneX('T-2') } })
+    orch.launch(launchInput({ cwd: fixture.repo, parallel: 2, slots: twoImplementers }))
+    orch.createTasks(twoIndepTasks())
+    await orch.run()
+    // 两任务同轮派满 2 个槽位 → 并发峰值为 2（而非单路串行）
+    expect(fixture.backends.claude!.peakActive).toBe(2)
+    expect(fixture.store.getTask('T-1')!.status).toBe('done')
+    expect(fixture.store.getTask('T-2')!.status).toBe('done')
+    expect(fixture.store.getTask('T-1')!.owner_slot_id).not.toBe(fixture.store.getTask('T-2')!.owner_slot_id)
+  })
+
+  it('launch parallel=1：并行上限收紧到单路（clamp 下限）→ peakActive=1', async () => {
+    const orch = makeOrchestrator(fixture, { 'T-1': { delayMs: 40, completion: doneX('T-1') } })
+    orch.launch(launchInput({ cwd: fixture.repo, parallel: 1, slots: twoImplementers }))
+    orch.createTasks(twoIndepTasks())
+    await orch.run()
+    expect(fixture.backends.claude!.peakActive).toBe(1)
+    expect(fixture.store.getTask('T-1')!.status).toBe('done')
+    expect(fixture.store.getTask('T-2')!.status).toBe('done')
+  })
+
+  it('依赖链在 dispatchBatch 下仍保持串行（review 依赖实现，不提前并发）', async () => {
+    const orch = makeOrchestrator(fixture, { 'T-1': { delayMs: 40, completion: doneX('T-1') }, 'T-2': { delayMs: 40, completion: doneX('T-2') } })
+    orch.launch(launchInput({ cwd: fixture.repo, parallel: 2, slots: twoImplementers }))
+    orch.createTasks([
+      { id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'] },
+      { id: 'T-2', title: '依赖 T-1', spec: 's', type: 'implement', skill_tags: ['编码'], depends_on: ['T-1'] },
+    ])
+    await orch.run()
+    expect(fixture.backends.claude!.peakActive).toBe(1) // 依赖使然，并行不破坏拓扑
+    expect(fixture.store.getTask('T-1')!.status).toBe('done')
+    expect(fixture.store.getTask('T-2')!.status).toBe('done')
+  })
 })
