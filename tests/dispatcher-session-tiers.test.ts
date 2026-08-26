@@ -78,6 +78,44 @@ describe('Dispatcher 路由（能力 > 负载 > 单任务成本）', () => {
     expect(result.slotId).toBeNull()
     expect(result.reason).toMatch(/unavailable/i)
   })
+
+  it('历史成功率（Ledger→路由权重，v0.2）：同负载同成本 → 高成功率槽位优先', () => {
+    const a = makeSlot('S-a', { capabilities: ['编码'], model: 'same-model' })
+    const b = makeSlot('S-b', { capabilities: ['编码'], model: 'same-model' })
+    const result = routeTask(makeTask('T-x', { skill_tags: ['编码'] }), {
+      slots: [a, b],
+      tasks: [],
+      slotSuccess: { 'S-a': 0.2, 'S-b': 0.9 }, // 同负载同模型 → 成功率 0.9 优先
+    })
+    expect(result.slotId).toBe('S-b')
+  })
+
+  it('历史成功率：无数据视为中性 0.5，不劣化原路由（缺省时按稳定序）', () => {
+    const a = makeSlot('S-a', { capabilities: ['编码'], model: 'same-model' })
+    const b = makeSlot('S-b', { capabilities: ['编码'], model: 'same-model' })
+    // 缺省 slotSuccess：成功率同（0.5）→ 回落稳定序（S-a 在前）
+    const r1 = routeTask(makeTask('T-x', { skill_tags: ['编码'] }), { slots: [a, b], tasks: [] })
+    expect(r1.slotId).toBe('S-a')
+    // 显式 0.5 = 0.5：同值 → 稳定序
+    const r2 = routeTask(makeTask('T-x', { skill_tags: ['编码'] }), {
+      slots: [a, b],
+      tasks: [],
+      slotSuccess: { 'S-a': 0.5, 'S-b': 0.5 },
+    })
+    expect(r2.slotId).toBe('S-a')
+  })
+
+  it('成功率收敛到 [0,1]：越界值被 clamp（不参与排序越界）', () => {
+    const a = makeSlot('S-a', { capabilities: ['编码'], model: 'm' })
+    const b = makeSlot('S-b', { capabilities: ['编码'], model: 'm' })
+    // -0.5 → 0，1.5 → 1：正常槽位仍优先
+    const result = routeTask(makeTask('T-x', { skill_tags: ['编码'] }), {
+      slots: [a, b],
+      tasks: [],
+      slotSuccess: { 'S-a': -0.5, 'S-b': 1.5 },
+    })
+    expect(result.slotId).toBe('S-b')
+  })
 })
 
 describe('会话档位（3.2 节三档制 / O7）', () => {

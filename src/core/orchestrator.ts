@@ -343,6 +343,21 @@ export class MissionOrchestrator {
     return candidates.filter((t) => t.depends_on.every((dep) => done.has(dep)))
   }
 
+  /**
+   * Ledger→路由权重（2.7 节 v0.2 起生效）：按槽位统计历史任务成功率。
+   * rate：done / (done + blocked + escalated)。无相关任务/全异常 → 无数据（不参与排序，中性）。
+   */
+  private slotSuccessRates(): Record<string, number> {
+    const rates: Record<string, number> = {}
+    for (const slot of this.store.listSlots(this.missionId)) {
+      const own = this.store.listTasks(this.missionId).filter((t) => t.owner_slot_id === slot.id)
+      const done = own.filter((t) => t.status === 'done').length
+      const fail = own.filter((t) => t.status === 'blocked' || t.status === 'escalated').length
+      if (done + fail > 0) rates[slot.id] = done / (done + fail)
+    }
+    return rates
+  }
+
   /** 派发一个就绪任务；无任务可派返回 false。 */
   async dispatchNext(): Promise<boolean> {
     if (this.activeTasks().length >= this.maxParallel) return false
@@ -378,7 +393,12 @@ export class MissionOrchestrator {
       )
       availableSlots = availableSlots.filter((s) => !targetOwners.has(s.id))
     }
-    const routed = routeTask(task, { slots: availableSlots, tasks: this.store.listTasks(this.missionId) })
+    const routed = routeTask(task, {
+      slots: availableSlots,
+      tasks: this.store.listTasks(this.missionId),
+      // Ledger→路由权重（2.7 节 v0.2 起生效）：槽位历史成功率（完成任务占比），无数据中性不劣化
+      slotSuccess: this.slotSuccessRates(),
+    })
     if (routed.slotId === null) {
       // 无人可派（能力缺口 / 审查者唯一）→ 转人工，不消费 attempts
       this.taskMachine.escalate(task.id)
