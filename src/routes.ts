@@ -124,6 +124,7 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
             attempts: t.attempts,
             owner: t.owner_slot_id ?? null,
             commit: t.commit_sha?.slice(0, 8) ?? null,
+            depends_on: t.depends_on,
           })),
           slots: snapshot.slots.map((s) => ({
             id: s.id,
@@ -138,6 +139,7 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
             worktree_path: a.patch.worktree_path,
           })),
           ledger: current.ledgerTail(),
+          experiments: snapshot.experiments,
           message: snapshot.mission?.status ?? 'no active mission',
         })
       },

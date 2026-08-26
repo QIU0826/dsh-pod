@@ -11,6 +11,8 @@ export interface StatusTask {
   attempts: number
   owner: string | null
   commit: string | null
+  /** v0.2 拓扑动画：任务 DAG 依赖（Canvas 拓扑图布局用）。 */
+  depends_on: string[]
 }
 
 export interface StatusSlot {
@@ -33,6 +35,7 @@ export interface StatusResponse {
   tasks: StatusTask[]
   slots: StatusSlot[]
   pending_approvals: Array<{ id: string; summary: string; worktree_path: string }>
+  experiments: { topology_animation: boolean }
   ledger: Array<{
     slot_id: string
     task_id: string | null

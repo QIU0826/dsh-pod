@@ -16,8 +16,10 @@ import {
   postSteer,
   type PodEvent,
   type StatusResponse,
+  type StatusTask,
 } from './api.js'
 import { openEventStream } from './event-stream.js'
+import { TopologyCanvas, type TopologyPoint } from './TopologyCanvas.js'
 
 const POLL_MS = 2000
 
@@ -79,6 +81,11 @@ export function PodPanel(): ReactElement {
   const lastTs = useRef(0)
   const [steerSlot, setSteerSlot] = useState('')
   const [steerText, setSteerText] = useState('')
+  // v0.2 拓扑动画/自由画布（Berd-E 灰度 key: topology-animation）
+  const [view, setView] = useState<'board' | 'topology' | 'canvas'>('board')
+  const [topoPos, setTopoPos] = useState<Record<string, TopologyPoint>>({})
+  const [draftTasks, setDraftTasks] = useState<StatusTask[]>([])
+  const [draftPos, setDraftPos] = useState<Record<string, TopologyPoint>>({})
 
   const runAction = async (action: () => Promise<unknown>): Promise<void> => {
     try {
@@ -120,6 +127,18 @@ export function PodPanel(): ReactElement {
   }
 
   useEffect(() => {
+    // v0.2 拓扑动画 CSS（一次性注入；dsb-pod 无独立样式表，动画 keyframes 内联）
+    if (!document.getElementById('pod-topo-anim')) {
+      const style = document.createElement('style')
+      style.id = 'pod-topo-anim'
+      style.textContent = [
+        '@keyframes pod-dash-flow { to { stroke-dashoffset: -16; } }',
+        '@keyframes pod-node-pulse { 0% { opacity: .9; } 50% { opacity: .25; } 100% { opacity: .9; } }',
+        '.pod-edge-running { animation: pod-dash-flow 1s linear infinite; }',
+        '.pod-node-pulse { animation: pod-node-pulse 1.4s ease-in-out infinite; }',
+      ].join('\n')
+      document.head.appendChild(style)
+    }
     void poll()
     const statusTimer = setInterval(() => void poll(), POLL_MS)
     // EV-2（AgentScope-I）：优先 SSE（replay + live）；失败回退 2s 事件轮询
@@ -246,6 +265,25 @@ export function PodPanel(): ReactElement {
     recoveryNote !== null
       ? createElement('div', { style: { padding: 6, marginBottom: 4, borderRadius: 6, border: '1px dashed rgba(180,83,9,.4)', color: recoveryNote.tone, fontSize: 12, background: 'rgba(180,83,9,.06)' } }, '↻ ' + recoveryNote.text)
       : null,
+    // v0.2 拓扑动画/自由画布（Berd-E 灰度：topology-animation 开启才显示入口）
+    status?.experiments?.topology_animation === true
+      ? createElement(
+          'div',
+          { style: { display: 'flex', gap: 6, alignItems: 'center' } },
+          (['board', 'topology', 'canvas'] as const).map((v) =>
+            createElement(
+              'button',
+              {
+                key: v,
+                style: { ...styles.button, ...(view === v ? { background: 'var(--ds-color-bg-2, rgba(0,0,0,.08))', fontWeight: 700 } : {}) },
+                'aria-label': `视图 ${v}`,
+                onClick: () => setView(v),
+              },
+              v === 'board' ? '看板' : v === 'topology' ? '拓扑动画' : '自由画布',
+            ),
+          ),
+        )
+      : null,
     (status?.pending_approvals ?? []).length > 0
       ? createElement(
           'div',
@@ -349,26 +387,51 @@ export function PodPanel(): ReactElement {
     createElement(
       'div',
       { style: styles.columns },
-      createElement(
-        'div',
-        { style: styles.board },
-        BOARD_COLS.map((col) =>
-          createElement(
+      view === 'board'
+        ? createElement(
             'div',
-            { key: col, style: styles.col },
-            createElement('div', { style: styles.colTitle }, COL_LABEL[col] ?? col),
-            (status?.tasks ?? [])
-              .filter((t) => t.status === col)
-              .map((t) =>
-                createElement(
-                  'div',
-                  { key: t.id, style: styles.task },
-                  `${t.id} ${t.title}${t.owner ? ` [${t.owner}]` : ''}${t.fault ? ` ⚠${t.fault}` : ''}${t.attempts > 0 ? ` (×${t.attempts})` : ''}`,
-                ),
+            { style: styles.board },
+            BOARD_COLS.map((col) =>
+              createElement(
+                'div',
+                { key: col, style: styles.col },
+                createElement('div', { style: styles.colTitle }, COL_LABEL[col] ?? col),
+                (status?.tasks ?? [])
+                  .filter((t) => t.status === col)
+                  .map((t) =>
+                    createElement(
+                      'div',
+                      { key: t.id, style: styles.task },
+                      `${t.id} ${t.title}${t.owner ? ` [${t.owner}]` : ''}${t.fault ? ` ⚠${t.fault}` : ''}${t.attempts > 0 ? ` (×${t.attempts})` : ''}`,
+                    ),
+                  ),
               ),
+            ),
+          )
+        : createElement(
+            'div',
+            { style: { ...styles.board, flexDirection: 'column' } },
+            // v0.2 拓扑动画/自由画布：同一 SVG 组件，canvas 模式可拖拽 + 手画 DAG
+            createElement(TopologyCanvas, {
+              tasks: status?.tasks ?? [],
+              draggable: view === 'canvas',
+              positions: topoPos,
+              onMove: (id, x, y) => setTopoPos((prev) => ({ ...prev, [id]: { id, x, y } })),
+              draftTasks,
+              draftPositions: draftPos,
+              onDraftMove: (id, x, y) => setDraftPos((prev) => ({ ...prev, [id]: { id, x, y } })),
+              onAddTask:
+                view === 'canvas'
+                  ? (id, title) => {
+                      setDraftTasks((prev) => [...prev, { id, title, type: 'implement', status: 'ready', fault: null, attempts: 0, owner: null, commit: null, depends_on: [] }])
+                    }
+                  : undefined,
+              onDeleteDraft:
+                view === 'canvas'
+                  ? (id) => setDraftTasks((prev) => prev.filter((d) => d.id !== id))
+                  : undefined,
+            }),
           ),
-        ),
-      ),
       createElement(
         'div',
         { style: styles.events },
