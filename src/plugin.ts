@@ -21,7 +21,9 @@ import type {} from '@deepseek-ai/dsh-tools'
 import { ApprovalEngine } from './core/approvals.js'
 import { PodError } from './core/errors.js'
 import { Ledger } from './core/ledger.js'
-import { JsonStore } from './core/store.js'
+import { openPodData, type StoreEngine } from './core/store-open.js'
+import type { PodStore } from './core/store.js'
+import type { MemoryStore } from './core/memory.js'
 import { makePodTools, makeCommanderStartTool } from './pod-tools.js'
 import { PodService } from './pod-service.js'
 import { createCommanderSession } from './commander.js'
@@ -56,22 +58,34 @@ export interface PodConfig {
 }
 
 export interface PodRuntime {
-  store: JsonStore
+  store: PodStore
+  memory: MemoryStore
   approvals: ApprovalEngine
   ledger: Ledger
   dataDir: string
+  engine: StoreEngine
+  /** 释放磁盘句柄（SQLite 连接/JSON 引用）。插件卸载与测试清理必须调用。 */
+  close(): void
 }
 
-/** 构造运行时（磁盘唯一事实源）。Store 损坏时显式抛出，调用方降级并留证。 */
-export function createPodRuntime(dataDir?: string): PodRuntime {
+/**
+ * 构造运行时（磁盘唯一事实源）。SQLite 默认（pod.db），better-sqlite3 不可用回退 JSON；
+ * store 损坏时显式抛出，调用方降级并留证。
+ */
+export function createPodRuntime(dataDir?: string, engine?: StoreEngine): PodRuntime {
   const root = dataDir && dataDir.length > 0 ? dataDir : join(homedir(), '.dsh', 'pod')
-  const store = new JsonStore({ rootDir: root })
-  store.open()
+  const opened = openPodData({ rootDir: root, engine })
   return {
-    store,
-    approvals: new ApprovalEngine(store),
-    ledger: new Ledger(store),
+    store: opened.store,
+    memory: opened.memory,
+    approvals: new ApprovalEngine(opened.store),
+    ledger: new Ledger(opened.store),
     dataDir: root,
+    engine: opened.engine,
+    close: () => {
+      opened.memory.close()
+      opened.store.close()
+    },
   }
 }
 
@@ -114,7 +128,7 @@ export function apply(ctx: Context, config?: PodConfig): void {
   try {
     runtime = createPodRuntime(config?.dataDir)
     if (runtime !== undefined) {
-      service = new PodService({ store: runtime.store, dataDir: runtime.dataDir })
+      service = new PodService({ store: runtime.store, memory: runtime.memory, dataDir: runtime.dataDir })
     }
   } catch (error) {
     const podError = error instanceof PodError ? error : new PodError(String(error), 'INTERNAL', { error })
@@ -130,6 +144,8 @@ export function apply(ctx: Context, config?: PodConfig): void {
       const disposers = routes.map((route) => ctx.webServer.register(route))
       return () => {
         for (const dispose of disposers) dispose()
+        // 释放磁盘句柄（SQLite WAL 连接不关会锁文件，导致测试/重载 EBUSY）
+        if (runtime !== undefined) runtime.close()
       }
     },
     'dsh-pod: routes',

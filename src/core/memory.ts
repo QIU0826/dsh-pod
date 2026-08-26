@@ -6,8 +6,9 @@
  * 类型化关系（supports/contradicts/derived-from）连成知识图谱而非平铺日志；
  * 后台 reflection 合并/关联/剪枝（输入 = 主动写入的策展记录，非原始对话转录）。
  *
- * MVP（v0.2）持久化 = 单个人类可读 JSON 文件（~/.dsh/pod/memory.json，原子写，可备份/审计）；
- * 与 3.9 节 Store 一致，SQLite 迁移时实现同一 MemoryStore 接口即可（O12 决策）。
+ * v0.2 迁移：持久化抽成 MemoryPersistence 接口，JsonMemoryPersistence（memory.json，
+ * 原子写）与 SqliteMemoryPersistence（~/.dsh/pod/pod.db 的 memory_* 表）双实现，
+ * MemoryStore 算法与 API 完全不变（O12/R12：Store 抽象隔离，调用方零改动）。
  *
  * 关键纪律（CR-07-4）
  *   - 只注入与当前任务相关（importance+标签+关系匹配）的记录，不做万能全量注入；
@@ -17,10 +18,14 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import type Database from 'better-sqlite3'
 import { MemoryRecord, MemoryRelation, MemoryType } from './types.js'
 
 export interface MemoryStoreOptions {
-  filePath: string
+  /** JSON 持久化路径（v0.1/v0.2 默认 memory.json）。 */
+  filePath?: string
+  /** SQLite 持久化（v0.2 迁移：与 PodStore 共享 pod.db 连接）。传入即用 SQLite 后端。 */
+  db?: Database.Database
   clock?: () => number
   idFn?: () => string
 }
@@ -77,34 +82,55 @@ export interface ReflectionResult {
   pruned: number
 }
 
+function emptyMemoryData(): MemoryData {
+  return { schemaVersion: 1, records: {}, edges: [], history: {} }
+}
 
-/**
- * 记忆存储：JSON + 原子写（tmp→bak→rename），注入式副作用、可离线单测。
- * 「多 agent 共享存储但各自拥有」——records 按 owner_slot_id 隔离，
- * 查询可跨 owner 读公共经验（不传 owner_slot_id 即全量）。
- */
-export class MemoryStore {
+function clampImportance(v: number): 1 | 2 | 3 | 4 | 5 {
+  const n = Math.max(1, Math.min(5, Math.round(v)))
+  return n as 1 | 2 | 3 | 4 | 5
+}
+
+function diffRecord(before: MemoryRecord, after: MemoryRecord): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  if (before.type !== after.type) out.type = after.type
+  if (before.importance !== after.importance) out.importance = after.importance
+  if (before.content_ref !== after.content_ref) out.content_ref = after.content_ref
+  if (before.live_ref !== after.live_ref) out.live_ref = after.live_ref
+  if (JSON.stringify(before.tags) !== JSON.stringify(after.tags)) out.tags = after.tags
+  return out
+}
+
+/** 记忆持久化抽象（O12：SQLite 迁移只换后端，算法不变）。 */
+export interface MemoryPersistence {
+  open(): void
+  /** 读取全量数据；无数据/损坏返回 undefined（fail-closed 空）。 */
+  load(): MemoryData | undefined
+  save(data: MemoryData): void
+  close(): void
+}
+
+export interface JsonMemoryPersistenceOptions {
+  filePath: string
+}
+
+/** JSON 后端（v0.1 默认）：tmp→bak→rename 原子写，可备份/审计。 */
+export class JsonMemoryPersistence implements MemoryPersistence {
   private readonly filePath: string
-  private readonly clock: () => number
-  private readonly idFn: () => string
-  private data: MemoryData | undefined
 
-  constructor(options: MemoryStoreOptions) {
+  constructor(options: JsonMemoryPersistenceOptions) {
     this.filePath = options.filePath
-    this.clock = options.clock ?? (() => Date.now())
-    this.idFn = options.idFn ?? (() => `MEM-${this.clock()}-${Math.floor(Math.random() * 1e6)}`)
   }
 
   open(): void {
     mkdirSync(dirname(this.filePath), { recursive: true })
-    if (!existsSync(this.filePath)) {
-      this.data = { schemaVersion: 1, records: {}, edges: [], history: {} }
-      this.persist()
-      return
-    }
+  }
+
+  load(): MemoryData | undefined {
+    if (!existsSync(this.filePath)) return undefined
     try {
       const parsed = JSON.parse(readFileSync(this.filePath, 'utf8')) as Partial<MemoryData>
-      this.data = {
+      return {
         schemaVersion: parsed.schemaVersion ?? 1,
         records: (parsed.records as Record<string, MemoryRecord>) ?? {},
         edges: (parsed.edges as MemoryData['edges']) ?? [],
@@ -112,8 +138,106 @@ export class MemoryStore {
       }
     } catch {
       // 损坏的 memory.json 视为空（fail-closed），不阻断插件启动（与 store 一致）
-      this.data = { schemaVersion: 1, records: {}, edges: [], history: {} }
+      return undefined
     }
+  }
+
+  save(data: MemoryData): void {
+    const tmp = join(dirname(this.filePath), `.memory.tmp-${process.pid}`)
+    writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8')
+    if (existsSync(this.filePath)) renameSync(this.filePath, `${this.filePath}.bak`)
+    renameSync(tmp, this.filePath)
+  }
+
+  close(): void {}
+}
+
+/**
+ * SQLite 后端（v0.2 迁移，方案书 251 行：memory 进同一 pod.db 单文件）：
+ * memory_records / memory_edges / memory_history 三表，每行 JSON 存整条记录；
+ * save 走事务整体替换（单机单用户数据量极小，简单可靠）。
+ */
+export class SqliteMemoryPersistence implements MemoryPersistence {
+  private readonly db: Database.Database
+
+  constructor(db: Database.Database) {
+    this.db = db
+  }
+
+  open(): void {
+    this.db.exec([
+      'CREATE TABLE IF NOT EXISTS memory_records (id TEXT PRIMARY KEY, data TEXT NOT NULL)',
+      'CREATE TABLE IF NOT EXISTS memory_edges (id TEXT PRIMARY KEY, data TEXT NOT NULL)',
+      'CREATE TABLE IF NOT EXISTS memory_history (id TEXT PRIMARY KEY, data TEXT NOT NULL)',
+    ].join(';'))
+  }
+
+  load(): MemoryData | undefined {
+    const records: Record<string, MemoryRecord> = {}
+    const edges: MemoryData['edges'] = []
+    const history: Record<string, MemoryChange[]> = {}
+    const recRows = this.db.prepare('SELECT id, data FROM memory_records').all() as Array<{ id: string; data: string }>
+    for (const r of recRows) {
+      try { records[r.id] = JSON.parse(r.data) as MemoryRecord } catch { /* 单条损坏跳过 */ }
+    }
+    const edgeRows = this.db.prepare('SELECT id, data FROM memory_edges').all() as Array<{ id: string; data: string }>
+    for (const r of edgeRows) {
+      try { edges.push(JSON.parse(r.data) as MemoryData['edges'][number]) } catch { /* skip */ }
+    }
+    const histRows = this.db.prepare('SELECT id, data FROM memory_history').all() as Array<{ id: string; data: string }>
+    for (const r of histRows) {
+      try { history[r.id] = JSON.parse(r.data) as MemoryChange[] } catch { /* skip */ }
+    }
+    if (recRows.length === 0 && edgeRows.length === 0 && histRows.length === 0) return undefined
+    return { schemaVersion: 1, records, edges, history }
+  }
+
+  save(data: MemoryData): void {
+    const replace = this.db.transaction(() => {
+      this.db.prepare('DELETE FROM memory_records').run()
+      this.db.prepare('DELETE FROM memory_edges').run()
+      this.db.prepare('DELETE FROM memory_history').run()
+      const insRec = this.db.prepare('INSERT INTO memory_records (id, data) VALUES (?, ?)')
+      for (const [id, rec] of Object.entries(data.records)) insRec.run(id, JSON.stringify(rec))
+      const insEdge = this.db.prepare('INSERT INTO memory_edges (id, data) VALUES (?, ?)')
+      for (const e of data.edges) insEdge.run(e.id, JSON.stringify(e))
+      const insHist = this.db.prepare('INSERT INTO memory_history (id, data) VALUES (?, ?)')
+      for (const [id, changes] of Object.entries(data.history)) insHist.run(id, JSON.stringify(changes))
+    })
+    replace()
+  }
+
+  close(): void {
+    // 连接由 PodStore 拥有（pod.db 单文件共享），此处不关
+  }
+}
+
+/**
+ * 记忆存储：算法与 API 与 v0.1 完全一致，仅持久化后端可换（JSON 或 SQLite）。
+ * 「多 agent 共享存储但各自拥有」——records 按 owner_slot_id 隔离，
+ * 查询可跨 owner 读公共经验（不传 owner_slot_id 即全量）。
+ */
+export class MemoryStore {
+  private readonly persistence: MemoryPersistence
+  private readonly clock: () => number
+  private readonly idFn: () => string
+  private data: MemoryData | undefined
+
+  constructor(options: MemoryStoreOptions) {
+    this.clock = options.clock ?? (() => Date.now())
+    this.idFn = options.idFn ?? (() => `MEM-${this.clock()}-${Math.floor(Math.random() * 1e6)}`)
+    if (options.db !== undefined) {
+      this.persistence = new SqliteMemoryPersistence(options.db)
+    } else if (options.filePath !== undefined) {
+      this.persistence = new JsonMemoryPersistence({ filePath: options.filePath })
+    } else {
+      throw new Error('MemoryStore requires either filePath (JSON) or db (SQLite)')
+    }
+  }
+
+  open(): void {
+    this.persistence.open()
+    this.data = this.persistence.load() ?? emptyMemoryData()
   }
 
   private require(): MemoryData {
@@ -122,11 +246,7 @@ export class MemoryStore {
   }
 
   private persist(): void {
-    const data = this.require()
-    const tmp = join(dirname(this.filePath), `.memory.tmp-${process.pid}`)
-    writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8')
-    if (existsSync(this.filePath)) renameSync(this.filePath, `${this.filePath}.bak`)
-    renameSync(tmp, this.filePath)
+    this.persistence.save(this.require())
   }
 
   /** pod_mem_write：主动写入策展记录（type/importance/tags/content_ref/live_ref）。 */
@@ -318,20 +438,8 @@ export class MemoryStore {
 
   close(): void {
     this.data = undefined
+    this.persistence.close()
   }
 }
 
-function clampImportance(v: number): 1 | 2 | 3 | 4 | 5 {
-  const n = Math.max(1, Math.min(5, Math.round(v)))
-  return n as 1 | 2 | 3 | 4 | 5
-}
-
-function diffRecord(before: MemoryRecord, after: MemoryRecord): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  if (before.type !== after.type) out.type = after.type
-  if (before.importance !== after.importance) out.importance = after.importance
-  if (before.content_ref !== after.content_ref) out.content_ref = after.content_ref
-  if (before.live_ref !== after.live_ref) out.live_ref = after.live_ref
-  if (JSON.stringify(before.tags) !== JSON.stringify(after.tags)) out.tags = after.tags
-  return out
-}
+export { emptyMemoryData }

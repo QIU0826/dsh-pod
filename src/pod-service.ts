@@ -20,7 +20,7 @@ import { PodError } from './core/errors.js'
 import { Ledger } from './core/ledger.js'
 import { MissionOrchestrator, type LaunchInput, type PlanTaskInput, type RunSummary } from './core/orchestrator.js'
 import { execGitClient, verifyTaskArtifacts } from './core/verifier.js'
-import type { JsonStore } from './core/store.js'
+import type { PodStore } from './core/store.js'
 import { ClaudeHeadlessBackend } from './workers/claude-headless.js'
 import { CodexHeadlessBackend, codexBinaryCandidates } from './workers/codex-headless.js'
 import { repairPath } from './workers/preflight.js'
@@ -30,9 +30,11 @@ import type { ApprovalRequest, ApprovalRule, AgentSlot, Handoff, MemoryRecord, M
 export const REFLECTION_INTERVAL_MS = 60_000
 
 export interface PodServiceOptions {
-  store: JsonStore
+  store: PodStore
   /** 默认数据根（~/.dsh/pod）。 */
   dataDir?: string
+  /** 记忆实例（v0.2 SQLite：与 store 共享 pod.db；缺省按 dataDir 自建 memory.json）。 */
+  memory?: MemoryStore
   backends?: Partial<Record<Vendor, WorkerBackend>>
   clock?: () => number
 }
@@ -41,7 +43,7 @@ export interface PodServiceOptions {
 export type CommanderLauncher = (goal: string, cwd: string, agentPreset?: string) => Promise<{ sessionId: string }>
 
 export class PodService {
-  private readonly store: JsonStore
+  private readonly store: PodStore
   private readonly clock: () => number
   private readonly backends: Partial<Record<Vendor, WorkerBackend>>
   private readonly dataDir: string
@@ -60,8 +62,9 @@ export class PodService {
     // 灰度开关（Berd-E）：~/.dsh/pod/experiments.json，默认关、fail-closed；cheap load
     this.experiments = new Experiments({ filePath: join(this.dataDir, 'experiments.json') })
     this.experiments.load()
-    // 长期记忆子系统（2.8.1）：~/.dsh/pod/memory.json，主动策展 + 图谱 + reflection
-    this.memory = new MemoryStore({ filePath: join(this.dataDir, 'memory.json'), clock: this.clock })
+    // 长期记忆子系统（2.8.1）：优先注入共享实例（SQLite 引擎时与 store 同 pod.db）；
+    // 缺省按 ~/.dsh/pod/memory.json（JSON 回退）自建，主动策展 + 图谱 + reflection
+    this.memory = options.memory ?? new MemoryStore({ filePath: join(this.dataDir, 'memory.json'), clock: this.clock })
     this.memory.open()
     // Windows 专项：宿主 PATH 可能被外部程序改写（CR-03-7），worker spawn 前修复
     repairPath()
@@ -544,6 +547,6 @@ export function ensureDataDir(): string {
 }
 
 /** 供工具层使用的审批引擎（跨重启重建审批卡的读面）。 */
-export function approvalsFor(store: JsonStore): ApprovalEngine {
+export function approvalsFor(store: PodStore): ApprovalEngine {
   return new ApprovalEngine(store)
 }

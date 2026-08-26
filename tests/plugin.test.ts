@@ -109,6 +109,8 @@ describe('plugin 宿主契约', () => {
     expect(mocks.register).toHaveBeenCalledTimes(13)
     expect(mocks.toolNames).toHaveLength(12) // 7 原 pod_* + 3 mem + reassign + commander_start
     ctx.registry.delete(plugin)
+    // 等 effect disposer 异步执行（SQLite WAL 句柄释放）再清理目录
+    await new Promise((resolve) => setTimeout(resolve, 10))
     rmSync(dataDir, { recursive: true, force: true })
   })
 
@@ -124,6 +126,8 @@ describe('plugin 宿主契约', () => {
       }
       await expect(ctx.plugin(plugin)).resolves.toBeDefined()
       ctx.registry.delete(plugin)
+      // 等 disposer 释放 SQLite 句柄
+      await new Promise((resolve) => setTimeout(resolve, 10))
     } finally {
       rmSync(badRoot, { recursive: true, force: true })
     }
@@ -132,20 +136,24 @@ describe('plugin 宿主契约', () => {
 
 describe('createPodRuntime', () => {
   let dataDir: string
+  let runtimeRef: ReturnType<typeof createPodRuntime> | undefined
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'pod-rt-'))
+    runtimeRef = undefined
   })
 
   afterEach(() => {
+    // 释放 SQLite 连接（WAL 句柄不关会导致 rmSync EBUSY）
+    runtimeRef?.close()
     rmSync(dataDir, { recursive: true, force: true })
   })
 
   it('构造后 store 就绪、schema v1、approvals/ledger 可用', () => {
-    const runtime = createPodRuntime(dataDir)
-    expect(runtime.store.getSchemaVersion()).toBe(1)
-    expect(runtime.approvals).toBeDefined()
-    expect(runtime.ledger).toBeDefined()
+    runtimeRef = createPodRuntime(dataDir)
+    expect(runtimeRef.store.getSchemaVersion()).toBe(1)
+    expect(runtimeRef.approvals).toBeDefined()
+    expect(runtimeRef.ledger).toBeDefined()
   })
 
   it('插件导出契约：name/inject/apply 与版本号格式', () => {
