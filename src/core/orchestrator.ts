@@ -785,8 +785,8 @@ export class MissionOrchestrator {
   }
 
   /** W5：仅裁决卡 approved（合并前确认，ApplyPatch 校验依赖此状态）。 */
-  approveCard(approvalId: string, by: string, editedParams?: Record<string, string>): void {
-    this.missionMachine.approveCard(approvalId, by, editedParams)
+  approveCard(approvalId: string, by: string, editedParams?: Record<string, string>, rememberRule = true): void {
+    this.missionMachine.approveCard(approvalId, by, editedParams, rememberRule)
   }
 
   /**

@@ -120,9 +120,9 @@ export function postSteer(slotId: string, instruction: string): Promise<{ ok: bo
   return postJson('/api/dsh-pod/steer', { slot_id: slotId, instruction })
 }
 
-/** 审批卡 approve（apply_patch 单入口合并；冲突返回 409）。edited = AS-3 人工编辑参数。 */
-export function postApprove(approvalId: string, edited?: Record<string, string>): Promise<{ ok: boolean; message?: string }> {
-  return postJson('/api/dsh-pod/approve', { approval_id: approvalId, edited })
+/** 审批卡 approve（apply_patch 单入口合并；冲突返回 409）。edited = AS-3 人工编辑参数；rememberRule = W4 记住规则（默认 true）。 */
+export function postApprove(approvalId: string, edited?: Record<string, string>, rememberRule = true): Promise<{ ok: boolean; message?: string }> {
+  return postJson('/api/dsh-pod/approve', { approval_id: approvalId, edited, remember_rule: rememberRule })
 }
 
 /** 审批卡 deny（带原因落盘）。 */

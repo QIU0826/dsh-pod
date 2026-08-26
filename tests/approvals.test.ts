@@ -142,6 +142,20 @@ describe('ApprovalEngine.decide', () => {
     const decided = engine.decide(approval.id, 'approved', 'user')
     expect(decided.edited_params).toBeUndefined()
   })
+
+  it('W4 记住规则：approve 默认生成同类免弹卡规则（rule-auto-*）', () => {
+    const approval = engine.request('M-1', patch)
+    engine.decide(approval.id, 'approved', 'user')
+    const rules = store.listRules()
+    expect(rules.some((r) => r.id === `rule-auto-${approval.id}`)).toBe(true)
+    expect(rules.find((r) => r.id === `rule-auto-${approval.id}`)?.decision).toBe('allow')
+  })
+
+  it('W4 记住规则：rememberRule=false 批准时不生成规则（每次仍弹卡）', () => {
+    const approval = engine.request('M-1', patch)
+    engine.decide(approval.id, 'approved', 'user', undefined, undefined, false)
+    expect(store.listRules().some((r) => r.id === `rule-auto-${approval.id}`)).toBe(false)
+  })
 })
 
 describe('ApprovalEngine 恢复与过期', () => {

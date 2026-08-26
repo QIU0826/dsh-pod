@@ -222,7 +222,9 @@ export function PodPanel(): ReactElement {
     // AS-3（AgentScope-C）：批准前可编辑参数（merge note 备注，留痕在审批事件）
     const note = window.prompt('批准合并（可选合并备注，直接回车放行）：', '')
     const edited = note !== null && note.trim().length > 0 ? { merge_note: note.trim() } : undefined
-    void runAction(() => postApprove(approvalId, edited))
+    // W4「记住规则」：批准时是否生成同类免弹卡规则（取消=不记住，每次仍弹卡）
+    const remember = window.confirm('记住此规则？（同类合并免弹卡；取消=不记住）')
+    void runAction(() => postApprove(approvalId, edited, remember))
   }
 
   const handleDeny = (approvalId: string): void => {

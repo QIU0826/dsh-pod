@@ -363,8 +363,10 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
                 ),
               ) as Record<string, string>)
             : undefined
+        // W4「记住规则」：approve 可选是否生成同类免弹卡规则（默认 true）
+        const rememberRule = body?.remember_rule !== false
         // apply_patch 单入口：合并成功才裁决 mission done；冲突保持 awaiting_approval（CR-05-3）
-        const result = await current.approve(approvalId, 'canvas-ui', edited)
+        const result = await current.approve(approvalId, 'canvas-ui', edited, rememberRule)
         if (!result.ok) {
           writeJson(res, result.conflict ? 409 : 404, { error: result.message, conflict: result.conflict })
           return

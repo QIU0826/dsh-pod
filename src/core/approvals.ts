@@ -102,6 +102,7 @@ export class ApprovalEngine {
     by: string,
     reason?: string,
     editedParams?: Record<string, string>,
+    rememberRule = true,
   ): ApprovalRequest {
     const approval = this.store.getApproval(id)
     if (approval === undefined) throw new NotFoundError('approval', id)
@@ -119,9 +120,10 @@ export class ApprovalEngine {
     }
     this.store.updateApproval(id, decided)
     this.store.updateMission(approval.mission_id, { approval_stale_at: undefined })
-    // AS-2（AgentScope-B）：审批通过 → 生成 mission 级建议规则（同类免弹卡；
-    // mission 结束由 mission 层清理 scope=mission 的 auto 规则）
-    if (decision === 'approved') {
+    // AS-2（AgentScope-B，W4「记住规则」入口）：审批通过 → 生成 mission 级建议规则
+    // （同类免弹卡；mission 结束由 mission 层清理 scope=mission 的 auto 规则）。
+    // rememberRule=false 时跳过（用户显式不记住，保持每次弹卡）。
+    if (decision === 'approved' && rememberRule) {
       try {
         const rule = buildSuggestedRuleFromApproval(approval.patch, () => `rule-auto-${id}`)
         this.store.createRule(rule)

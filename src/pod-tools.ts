@@ -277,6 +277,7 @@ export function makePodTools(service: PodService): PodToolBundle {
         reason: { type: 'string', description: 'deny 时的原因（必填）' },
         by: { type: 'string', description: '决定人（默认 user）' },
         edited: { type: 'object', description: 'approve 时的人工编辑参数（如 { merge_note: "…" }，AS-3/AgentScope-C）', additionalProperties: true },
+        remember_rule: { type: 'boolean', description: 'approve 时是否生成同类免弹卡规则（W4 记住规则；默认 true）' },
       },
       output: {
         schema: {
@@ -306,7 +307,7 @@ export function makePodTools(service: PodService): PodToolBundle {
           }
           if (args.decision === 'approve') {
             const edited = args.edited !== undefined ? (args.edited as Record<string, string>) : undefined
-            const result = await service.approve(args.approval_id, args.by ?? 'user', edited)
+            const result = await service.approve(args.approval_id, args.by ?? 'user', edited, args.remember_rule !== false)
             if (!result.ok) {
               return {
                 decided: false,
