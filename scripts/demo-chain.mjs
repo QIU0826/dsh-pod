@@ -7,7 +7,7 @@
  * 合并（apply_patch）属 W5 切片，本演示止于审批卡（方案书 4.2 节 W2 产物边界）。
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { JsonStore } from '../dist/core/store.js'
@@ -41,6 +41,14 @@ const codexBin = codexBinaryCandidates('win32').find((c) => existsSync(c)) ?? 'c
 
 const dataDir = join(homedir(), '.dsh', 'pod', 'demo')
 mkdirSync(dataDir, { recursive: true })
+// 幂等重跑：清掉上次演示的 store（mission/tasks/事件/审批全随旧 store 走，演示是即弃证明）
+for (const name of ['store.json', 'store.json.bak']) {
+  const file = join(dataDir, name)
+  if (existsSync(file)) {
+    console.log('[demo] 重置演示 store：' + name)
+    rmSync(file, { force: true })
+  }
+}
 const store = new JsonStore({ rootDir: dataDir })
 store.open()
 
@@ -96,14 +104,6 @@ const orch = new MissionOrchestrator('M-DEMO-1', {
   diffProvider,
   clock: () => Date.now(),
 })
-
-// 清理上次演示的 mission 状态（幂等重跑）
-for (const old of store.listMissions()) {
-  if (old.id === 'M-DEMO-1' && old.status !== 'done') {
-    console.log('[demo] 上次演示未完成，重新开始')
-    break
-  }
-}
 
 function logEvents(seen) {
   for (const event of store.listEvents('M-DEMO-1')) {
