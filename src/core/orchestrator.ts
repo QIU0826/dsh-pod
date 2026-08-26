@@ -20,6 +20,7 @@ import { ApprovalEngine } from './approvals.js'
 import { routeTask } from './dispatcher.js'
 import { emitWorkerProgress, resetReplyCursor } from './events.js'
 import { ConcurrencyLimitError, InvalidTransitionError, NotFoundError, PodError } from './errors.js'
+import { buildHandoff } from './handoff.js'
 import { Ledger } from './ledger.js'
 import { MissionMachine } from './mission.js'
 import { estimateCtxUsage } from './session-tiers.js'
@@ -29,6 +30,7 @@ import type {
   AgentSlot,
   ApprovalRequest,
   FaultKind,
+  Handoff,
   Mission,
   MissionReport,
   SessionTier,
@@ -898,6 +900,68 @@ export class MissionOrchestrator {
       payload: { outcome: resolution.outcome, note: resolution.note ?? null, commit_sha: resolution.commit_sha ?? null },
     })
     this.signalCompletion()
+  }
+
+  /**
+   * v0.2 任务中途换人正式化（4.3 / 2.5 交接协议）：
+   * 把任务所有权从旧槽位转到目标槽位 → kill 旧进程 → 生成交接四件套落盘（buildHandoff）→
+   * 事件 task_reassigned 审计 → 任务置回 ready，由 dispatchBatch 重派到新槽位。
+   * done 已终态拒绝；目标槽位不可用（error/stopped/rate_limited/waiting_approval）拒绝。
+   */
+  async reassignTask(taskId: string, toSlotId: string, reason: string): Promise<Handoff> {
+    const task = this.store.getTask(taskId)
+    if (task === undefined) throw new NotFoundError('task', taskId)
+    if (task.mission_id !== this.missionId) throw new PodError('task not in this mission', 'MISSION_MISMATCH', { id: taskId })
+    if (task.status === 'done') {
+      throw new PodError('cannot reassign a done task', 'TASK_TERMINAL', { status: 'done' })
+    }
+    const to = this.store.getSlot(toSlotId)
+    if (to === undefined) throw new NotFoundError('slot', toSlotId)
+    if (to.mission_id !== this.missionId) throw new PodError('slot not in this mission', 'MISSION_MISMATCH', { id: toSlotId })
+    if (to.status === 'error' || to.status === 'stopped' || to.status === 'rate_limited' || to.status === 'waiting_approval') {
+      throw new PodError(`target slot unavailable (${to.status})`, 'SLOT_UNAVAILABLE', { status: to.status })
+    }
+    const from = task.owner_slot_id !== undefined ? this.store.getSlot(task.owner_slot_id) : undefined
+    if (task.status === 'dispatched' || task.status === 'running') {
+      await this.killTask(taskId)
+    }
+    if (from !== undefined) this.store.updateSlot(from.id, { status: 'idle' })
+    const handoff = buildHandoff(this.store, {
+      from_slot: from?.id ?? 'unknown',
+      to_slot: to.id,
+      task_id: task.id,
+      mode: 'queue',
+      payload: {
+        intent: { brief: `任务 ${task.id} 中途换人：${reason}`, constraints: [], acceptance: task.spec },
+        artifacts: {
+          spec: task.spec,
+          context_files: [],
+          base_commit: task.parent_sha,
+          diff_range: task.parent_sha !== undefined && task.commit_sha !== undefined ? `${task.parent_sha}..${task.commit_sha}` : undefined,
+        },
+        state: { tried: [], blockers: [reason] },
+        expected_output: task.spec,
+        verify: ['commit_exists', 'report_fields_complete'],
+      },
+    })
+    this.store.updateTask(taskId, {
+      owner_slot_id: to.id,
+      status: 'ready',
+      fault: undefined,
+      last_error: undefined,
+      started_at: undefined,
+      dispatched_at: undefined,
+    })
+    this.store.appendEvent(this.missionId, {
+      id: `ev-reassign-${taskId}-${this.clock()}`,
+      mission_id: this.missionId,
+      ts: this.clock(),
+      kind: 'task_reassigned',
+      task_id: taskId,
+      slot_id: to.id,
+      payload: { from: from?.id ?? null, to: to.id, reason, handoff_id: handoff.id },
+    })
+    return handoff
   }
 
   /** 由 done 实现任务汇总审批 patch（合并执行属 W5 apply_patch；此处仅生成待批卡）。 */

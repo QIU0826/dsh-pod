@@ -43,9 +43,10 @@ describe('pod_* 工具注册面（3.3 节工具作用域清单，七件套）', 
       'pod_mem_write',
       'pod_mem_query',
       'pod_mem_correct',
+      'pod_reassign',
       'pod_abort',
     ])
-    expect(tools).toHaveLength(10)
+    expect(tools).toHaveLength(11)
   })
 
   it('每个工具带参数 schema 与输出渲染（契约完整）', () => {
@@ -167,7 +168,7 @@ describe('工具薄壳行为（副作用全部走 PodService）', () => {
     const dispatchResult = await run(dispatch, {})
     expect(dispatchResult.dispatched).toBe(true)
 
-    const abort = tools[9]!
+    const abort = tools[10]!
     const abortResult = await run(abort, { reason: 'stop' })
     expect(abortResult.aborted).toBe(true)
     expect(service.abort).toHaveBeenCalledWith('stop')
@@ -207,7 +208,7 @@ describe('工具薄壳行为（副作用全部走 PodService）', () => {
       throw new Error('INVALID_TRANSITION')
     })
     const { tools } = makePodTools(service)
-    const abort = tools[9]!
+    const abort = tools[10]!
     const result = await run(abort, {})
     expect(result.aborted).toBe(false)
     expect(result.message).toContain('INVALID_TRANSITION')

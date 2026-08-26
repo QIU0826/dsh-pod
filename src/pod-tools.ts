@@ -427,6 +427,34 @@ export function makePodTools(service: PodService): PodToolBundle {
       },
     }),
     defineTool({
+      name: 'pod_reassign',
+      description: '任务中途换人正式化（v0.2）：把任务所有权从我（旧槽位）转到目标槽位——kill 旧进程 + 交接四件套落盘 + 事件审计，任务置 ready 由 dispatchNext 重派。done 已终态不可换；目标槽位不可用拒绝。触发词：换人 / 换个人干 / 转派。',
+      parameters: {
+        task_id: { type: 'string', required: true, description: '要换人任务 id' },
+        to_slot_id: { type: 'string', required: true, description: '目标槽位 id' },
+        reason: { type: 'string', required: true, description: '换人原因（进入交接 intent 与事件审计）' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            handoff_id: { type: 'string', required: true },
+            message: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value: { handoff_id: string; message: string }) => text('换人完成：' + value.message + '（交接 ' + value.handoff_id + '）'),
+      },
+      async execute(args, _exec) {
+        try {
+          const h = await service.reassign(args.task_id, args.to_slot_id, args.reason)
+          return { handoff_id: h.id, message: `任务 ${args.task_id} 已转给 ${args.to_slot_id}` }
+        } catch (error) {
+          return { handoff_id: '', message: error instanceof Error ? error.message : String(error) }
+        }
+      },
+    }),
+    defineTool({
       name: 'pod_abort',
       description: '中止当前 mission（终态，不可恢复）；所有运行中的员工进程会被终止。触发词：Pod 中止 / 终止 mission。',
       parameters: {

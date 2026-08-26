@@ -70,6 +70,7 @@ describe('plugin 宿主契约', () => {
       'pod_mem_write',
       'pod_mem_query',
       'pod_mem_correct',
+      'pod_reassign',
       'pod_abort',
       'pod_commander_start',
     ])
@@ -106,7 +107,7 @@ describe('plugin 宿主契约', () => {
     // ping + status/events/launch/steer/approve/deny/dispatch/resolve/rules/abort 十一条宿主路由
     // AS-4/EV-2：+ /assets 与 /events/stream 两条只读流路由 → 13 条
     expect(mocks.register).toHaveBeenCalledTimes(13)
-    expect(mocks.toolNames).toHaveLength(11) // 7 原 pod_* + 3 mem + commander_start
+    expect(mocks.toolNames).toHaveLength(12) // 7 原 pod_* + 3 mem + reassign + commander_start
     ctx.registry.delete(plugin)
     rmSync(dataDir, { recursive: true, force: true })
   })

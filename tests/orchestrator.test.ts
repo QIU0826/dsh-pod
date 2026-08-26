@@ -747,6 +747,47 @@ describe('v0.2 审批模式经 experiments 灰度（Berd-E）', () => {
   })
 })
 })
+describe('v0.2 任务中途换人正式化（reassignTask）', () => {
+  const imp = () => [
+    { id: 'S-1', vendor: 'claude' as const, role: 'implementer', capabilities: ['编码'], model: 'm', session_tier: 'per-mission' as const },
+    { id: 'S-2', vendor: 'claude' as const, role: 'implementer', capabilities: ['编码'], model: 'm', session_tier: 'per-mission' as const },
+  ]
+  const doneR = (id: string) => ({
+    exit: 'done' as const,
+    report: doneReport(id),
+    usage: { tokens_in: 10, tokens_out: 5, source: 'measured' as const },
+    artifacts: [],
+  })
+
+  it('reassign：blocked 任务转给 S-2 → 交接落盘 + owner 转移 + ready + 重派到 S-2 完成', async () => {
+    const orch = makeOrchestrator(fixture, { 'T-1': { delayMs: 40, completion: doneR('T-1') } })
+    orch.launch(launchInput({ cwd: fixture.repo, slots: imp() }))
+    orch.createTasks([{ id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'] }])
+    // 制造 T-1 已归属 S-1 且失败（blocked）——人工换人的前置（同 humanResolve 合法写）
+    fixture.store.updateTask('T-1', { owner_slot_id: 'M-1-S-1', status: 'blocked', fault: 'crash' })
+    const h = await orch.reassignTask('T-1', 'M-1-S-2', '原槽位卡死')
+    expect(h.id).toMatch(/^H-/)
+    expect(h.to_slot).toBe('M-1-S-2')
+    expect(fixture.store.listHandoffs('M-1')).toHaveLength(1)
+    expect(h.payload.intent.brief).toContain('原槽位卡死')
+    expect(fixture.store.getTask('T-1')!.owner_slot_id).toBe('M-1-S-2')
+    expect(fixture.store.getTask('T-1')!.status).toBe('ready')
+    expect(fixture.store.listEvents('M-1').some((e) => e.kind === 'task_reassigned')).toBe(true)
+    await orch.run()
+    expect(fixture.store.getTask('T-1')!.status).toBe('done')
+  })
+
+  it('reassign：done 已终态拒绝；目标槽位不可用拒绝', async () => {
+    const orch = makeOrchestrator(fixture, {})
+    orch.launch(launchInput({ cwd: fixture.repo, slots: imp() }))
+    orch.createTasks([{ id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'] }])
+    fixture.store.updateTask('T-1', { status: 'done' })
+    await expect(orch.reassignTask('T-1', 'M-1-S-2', 'x')).rejects.toThrow(/cannot reassign a done task/)
+    fixture.store.updateTask('T-1', { status: 'ready', owner_slot_id: undefined })
+    fixture.store.updateSlot('M-1-S-2', { status: 'error' })
+    await expect(orch.reassignTask('T-1', 'M-1-S-2', 'x')).rejects.toThrow(/target slot unavailable/)
+  })
+})
 
 describe('v0.2 并行执行强化（双路+，dispatchBatch 填满 maxParallel）', () => {
   const twoImplementers = [

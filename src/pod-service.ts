@@ -24,7 +24,7 @@ import type { JsonStore } from './core/store.js'
 import { ClaudeHeadlessBackend } from './workers/claude-headless.js'
 import { CodexHeadlessBackend, codexBinaryCandidates } from './workers/codex-headless.js'
 import { repairPath } from './workers/preflight.js'
-import type { ApprovalRequest, ApprovalRule, AgentSlot, MemoryRecord, MemoryRelation, Mission, Task, Vendor, WorkerBackend } from './core/types.js'
+import type { ApprovalRequest, ApprovalRule, AgentSlot, Handoff, MemoryRecord, MemoryRelation, Mission, Task, Vendor, WorkerBackend } from './core/types.js'
 
 /** 记忆后台 reflection 节流间隔（2.8.1：MT 周期内不频繁跑 pass）。 */
 export const REFLECTION_INTERVAL_MS = 60_000
@@ -389,6 +389,14 @@ export class PodService {
         usage_source: e.usage_source,
       })),
     }
+  }
+
+  /**
+   * v0.2 任务中途换人正式化（4.3）：把任务所有权转到目标槽位（kill 旧进程 + 交接四件套落盘 + 事件审计）。
+   * 换人后任务置 ready，由接下来 run()/dispatchNext() 重派到新槽位。
+   */
+  reassign(taskId: string, toSlotId: string, reason: string): Promise<Handoff> {
+    return this.requireOrchestrator().reassignTask(taskId, toSlotId, reason)
   }
 
   /** 手动模式（3.3 节）：UI/工具直连状态机接口，绕开 LLM 编排。 */
