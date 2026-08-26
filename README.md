@@ -6,14 +6,15 @@
 
 开工基线：[DSH-Pod-项目方案书-v2.0.md](../../DSH-Pod-项目方案书-v2.0.md)（含 CR-01 设计变更记录）
 
-## 当前状态（v0.1 W0/W2 核心骨架）
+## 当前状态（v0.1.0 MVP 发布候选）
 
 | 切片 | 状态 | 产物 |
 |---|---|---|
 | W0 仓库骨架 + 插件注册 + Store 决策（JSON 原子写回退） | ✅ | 本仓库；`/api/dsh-pod/ping` 健康路由 |
-| W1 WorkerBackend 抽象 + codex 验证 + claude 打通 | ✅ 全链路 | `src/workers/claude-headless.ts` / `codex-headless.ts`；双后端跨进程会话连续性实证（claude --session-id/-r、codex exec resume，夹具留档 tests/fixtures/）；claude stream-json/报告/故障分类（result.is_error 优先于退出码）；CR-02 见方案书 |
+| W1 WorkerBackend 抽象 + codex 验证 + claude 打通 | ✅ 全链路 | `src/workers/claude-headless.ts` / `codex-headless.ts`；双后端跨进程会话连续性实证；claude stream-json/报告/故障分类；CR-02 见方案书 |
 | W2 交接协议 + 状态机 + Verifier + **Commander 编排器 + 最小可演示链** | ✅ | `src/core/orchestrator.ts`；`scripts/demo-chain.mjs` 真实跑通「claude 实现 → codex 独立 review → 审批卡」（CR-03-6） |
-| W3 Team Builder / W4 Canvas / W5 审批+worktree+账本 UI / W6 Bake-off | ⬜ | 待开发（界面切片） |
+| W3 Team Builder / W4 Canvas 两栏 / W5 审批+worktree+账本 / W6 Bake-off+DoD | ✅ | Team Builder 预设阵型（DoD-9）+ Mission Canvas 两栏（看板/事件流/steer/审批/手动模式）+ apply_patch 串行合并 + 账本双列 + **DoD 1–19 全部达成**（见 docs/DoD-1-14-核对表.md + 差距审计-vs-方案书.md） |
+| Bake-off（DoD-10） | ✅ 已发布 | 10/10 运行留档；[汇总报告](reports/bakeoff/SUMMARY.md)（9 done + 1 负向样本，含负向结果公开） |
 
 > 环境注意（CR-02/03）：claude 已切至 api.deepseek.com/anthropic + deepseek-v4-pro；本机 codex = ChatGPT 桌面应用内置（模型名留空走默认 gpt-5.6-sol；缺 code-mode host → 审查任务走宿主机 diff 注入）。多模型配置采用 ccswitch 共存方案（进程级 env 覆盖，不改全局 settings.json）。
 
@@ -68,6 +69,16 @@ $env:POD_LIVE_PREFLIGHT='1'; npx vitest run tests/preflight.live.test.ts  # 真�
 - 宿主：`src/plugin.ts` —— PodRuntime（Store/审批/账本）+ 系统提示播报 + `/api/dsh-pod/ping`；初始化失败只降级（503），绝不拖垮宿主（R6/R10）。
 - 浏览器：`src/web/client.ts` —— locale 注册；Team Builder / Canvas 界面随 W3/W4 切片开放。
 - `cordis.patch.yml`：bundle patch（`dsh.bundle.patch` manifest），`dsh plugin add` 一键挂载。
+
+## Bake-off（DoD-10：有效性自证）
+
+> 完整报告：[reports/bakeoff/SUMMARY.md](reports/bakeoff/SUMMARY.md)（10/10 运行原始数据 + 负向结果公开）
+> 运行器：`scripts/bakeoff-all.mjs` / `bakeoff-run.mjs`；任务集：`tasks/bakeoff-tasks.json`
+
+**一句话结论**：本批 5 任务 × 2 条件的实测数据**不支持「多 agent 无条件更强」**，支持 **cockpit-first** 定位——
+小任务编排开销吞噬收益（成本 +37~95%）；medium-1 上 Pod 节省 13% wall-clock（成本 +74%）；
+长任务（long-1）的独立 review 因本机 codex 审查者缺 code-mode host（命令执行不可用）转人工（负向样本，
+见 NEGATIVE-FINDING-codex-code-mode-host.md）。「何时该用 Pod」的可执行阈值详见报告 §4。
 
 ## 许可证
 
