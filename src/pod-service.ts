@@ -18,6 +18,7 @@ import { Experiments } from './core/experiments.js'
 import { MemoryStore, type ReflectionResult } from './core/memory.js'
 import { PodError } from './core/errors.js'
 import { Ledger } from './core/ledger.js'
+import { Notifier } from './core/notifier.js'
 import { MissionOrchestrator, type LaunchInput, type PlanTaskInput, type RunSummary } from './core/orchestrator.js'
 import { execGitClient, verifyTaskArtifacts } from './core/verifier.js'
 import type { PodStore } from './core/store.js'
@@ -37,6 +38,8 @@ export interface PodServiceOptions {
   memory?: MemoryStore
   backends?: Partial<Record<Vendor, WorkerBackend>>
   clock?: () => number
+  /** CR-01-10 桌面通知送达回调（宿主注入；缺省仅日志）。 */
+  notify?: (n: { kind: string; mission_id: string; title: string; detail: string }) => void
 }
 
 /** commander 会话启动器（插件层注入：ctx.agents.create + agentCtx 作用域注册，CR-05-2）。 */
@@ -51,6 +54,9 @@ export class PodService {
   private running: Promise<RunSummary> | undefined
   /** 记忆 reflection 节流（2.8.1：MT 周期内不频繁跑后台 pass）。 */
   private lastReflectionAt = 0
+  /** CR-01-10 桌面通知游标：上次已扫描的事件 ts（增量扫描防重复送达）。 */
+  private lastNotifiedTs = 0
+  private readonly notifier: Notifier
   private commanderLauncher: CommanderLauncher | undefined
   private readonly experiments: Experiments
   private readonly memory: MemoryStore
@@ -66,6 +72,11 @@ export class PodService {
     // 缺省按 ~/.dsh/pod/memory.json（JSON 回退）自建，主动策展 + 图谱 + reflection
     this.memory = options.memory ?? new MemoryStore({ filePath: join(this.dataDir, 'memory.json'), clock: this.clock })
     this.memory.open()
+    // CR-01-10：桌面通知（注入 send，缺省宿主日志 console.warn）
+    this.notifier = new Notifier({
+      clock: this.clock,
+      send: (n) => { options.notify?.(n); console.warn('[dsh-pod] notify:', n.title, '-', n.detail) },
+    })
     // Windows 专项：宿主 PATH 可能被外部程序改写（CR-03-7），worker spawn 前修复
     repairPath()
     this.backends = options.backends ?? {
@@ -217,7 +228,7 @@ export class PodService {
   }
 
   /** 宿主周期巡检：watchdog + 审批超期（CR-05-6）。 */
-  maintenanceTick(): { staleApprovals: string[]; watchdogFired: number } {
+  maintenanceTick(): { staleApprovals: string[]; watchdogFired: number; notified?: number } {
     // 记忆后台 reflection（2.8.1：任务空闲/周期时合并重复、补 supports、剪枝过时）；
     // 节流避免每 tick 都跑（默认 60s）。任务完成/空闲时由插件在空闲时段触发。
     const now = this.clock()
@@ -226,7 +237,18 @@ export class PodService {
       this.memory.runReflection()
     }
     if (this.orchestrator === undefined) return { staleApprovals: [], watchdogFired: 0 }
-    return this.orchestrator.maintenanceTick()
+    const result = this.orchestrator.maintenanceTick()
+    // CR-01-10：扫描新增「需人工动作」事件 → 桌面通知（增量游标 + kind/mission 去重）
+    const missions = this.store.listMissions()
+    const newEvents = missions.flatMap((m) =>
+      this.store.listEvents(m.id).filter((e) => e.ts > this.lastNotifiedTs),
+    )
+    let notified = 0
+    if (newEvents.length > 0) {
+      this.lastNotifiedTs = Math.max(...newEvents.map((e) => e.ts))
+      notified = this.notifier.scanEvents(newEvents)
+    }
+    return { staleApprovals: result.staleApprovals, watchdogFired: result.watchdogFired, notified }
   }
 
   /** 转人工接管 + 恢复驱动（3.4 节）：人工裁决 escalated 任务后重新驱动 DAG。 */
