@@ -61,6 +61,7 @@ node scripts/demo-chain.mjs --repo <dir>   # 自定义靶场仓库
 | 并行执行强化（双路+，4.3） | ✅ | `LaunchInput.parallel`（默认 2，clamp 1-8，pod_launch 可传）+ `run()` 用 `dispatchBatch` 每轮填满 maxParallel 而非单路派 1 即等；依赖链仍串行不破坏拓扑；FakeBackend 增 delayMs/并发峰值验证 peakActive |
 | 任务中途换人正式化（4.3） | ✅ | `reassignTask`（kill 旧进程 + 交接四件套落盘 + 事件 task_reassigned 审计 + owner 转移 + 置 ready 由 dispatchBatch 重派）；`pod_reassign` 工具；done 终态/目标槽位不可用拒绝 |
 | mission 崩溃恢复 UI 完善（4.3） | ✅ | PodPanel 顶栏加「恢复/需人工动作」横幅：跨重启重建（DoD-11 审批卡）/ 模式 2 派发门待放行 / paused 暂停提示；dist/client.ts 重建 |
+| cross-review / bake-off 阵型强化（4.3） | ✅ | PodPanel capabilities 改多能力解析（`'编码 审查'`→`['编码','审查']`）+ 双实现互审预设（claude/codex 异构、审查者≠实现者，防 R5 假共识）；orchestrator 增互审端到端测试（双实现并行 + 交叉审查 + 质量门后进审批） |
 
 ## 核心域层（src/core，全部纯逻辑 + 注入式副作用，可离线测试）
 
