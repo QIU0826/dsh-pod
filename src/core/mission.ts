@@ -137,6 +137,24 @@ export class MissionMachine {
     this.emit(mission, 'mission_awaiting_approval', {})
   }
 
+  /**
+   * 模式 3（全自动，经 experiments 灰度）：质量门通过后无审批门，直接 done。
+   * 复用 tasksCompleted 的校验（质量门不可关，DoD-5），只是跳过硬性 awaiting_approval。
+   */
+  autoComplete(): void {
+    const mission = this.getMission()
+    this.guard(mission, 'tasksCompleted')
+    // 复用同一质量门：review 存在必须 done、审查者≠实现者、全任务 done（DoD-5）。
+    this.tasksCompleted()
+    // tasksCompleted 会把状态置 awaiting_approval；模式 3 直接越过为 done。
+    const after = this.getMission()
+    if (after.status === 'awaiting_approval') {
+      this.store.updateMission(mission.id, { status: 'done' })
+      this.cleanupMissionRules()
+      this.emit(mission, 'mission_done', { mode: 3 })
+    }
+  }
+
   /** 批准合并 → done。审批卡裁决由 ApprovalEngine 持久化（2.6 节模式 1）。 */
   approve(approvalId: string, by: string): void {
     const mission = this.getMission()

@@ -14,6 +14,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { ApprovalEngine } from './core/approvals.js'
 import { ApplyPatch, execGitRunner, type ApplyResult } from './core/apply-patch.js'
 import { BackendsLock } from './core/backends-lock.js'
+import { Experiments } from './core/experiments.js'
 import { PodError } from './core/errors.js'
 import { Ledger } from './core/ledger.js'
 import { MissionOrchestrator, type LaunchInput, type PlanTaskInput, type RunSummary } from './core/orchestrator.js'
@@ -43,11 +44,15 @@ export class PodService {
   private orchestrator: MissionOrchestrator | undefined
   private running: Promise<RunSummary> | undefined
   private commanderLauncher: CommanderLauncher | undefined
+  private readonly experiments: Experiments
 
   constructor(options: PodServiceOptions) {
     this.store = options.store
     this.clock = options.clock ?? (() => Date.now())
     this.dataDir = options.dataDir ?? join(homedir(), '.dsh', 'pod')
+    // 灰度开关（Berd-E）：~/.dsh/pod/experiments.json，默认关、fail-closed；cheap load
+    this.experiments = new Experiments({ filePath: join(this.dataDir, 'experiments.json') })
+    this.experiments.load()
     // Windows 专项：宿主 PATH 可能被外部程序改写（CR-03-7），worker spawn 前修复
     repairPath()
     this.backends = options.backends ?? {
@@ -245,6 +250,7 @@ export class PodService {
         const repoDir = slot?.worktree_path ?? ''
         return verifyTaskArtifacts({ git: execGitClient(), repoDir }, task, report)
       },
+      experiments: this.experiments,
       diffProvider: async (task) => {
         const parts: string[] = []
         for (const targetId of task.depends_on) {
@@ -401,6 +407,21 @@ export class PodService {
 
   deny(approvalId: string, by: string, reason: string): void {
     this.requireOrchestrator().deny(approvalId, by, reason)
+  }
+
+  /** 模式 2 派发确认门：人工批准放行 → 授权对应任务派发（灰度）。 */
+  approveDispatchGate(approvalId: string, by: string): void {
+    this.requireOrchestrator().approveDispatchGate(approvalId, by)
+  }
+
+  /** 模式 2 派发确认门：驳回（对应任务转人工，不派发）。 */
+  denyDispatchGate(approvalId: string, by: string, reason: string): void {
+    this.requireOrchestrator().denyDispatchGate(approvalId, by, reason)
+  }
+
+  /** 审批卡读面（pod_approve 判断 merge vs dispatch 门用）。 */
+  getApproval(approvalId: string): ApprovalRequest | undefined {
+    return this.store.getApproval(approvalId)
   }
 
   // ── 审批规则层（AgentScope-A/B：查询 + suggested-rules 落 Store）──

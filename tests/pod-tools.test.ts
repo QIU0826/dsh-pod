@@ -13,6 +13,9 @@ function fakeService() {
     deny: vi.fn(),
     abort: vi.fn(),
     waitRun: vi.fn(() => undefined),
+    getApproval: vi.fn(() => undefined),
+    approveDispatchGate: vi.fn(),
+    denyDispatchGate: vi.fn(),
   } as unknown as PodService
 }
 
@@ -112,6 +115,38 @@ describe('工具薄壳行为（副作用全部走 PodService）', () => {
     expect(result.decided).toBe(false)
     expect(result.message).toContain('主树未动')
     expect(result.message).toContain('a.txt')
+  })
+
+  it('pod_approve 派发确认卡（模式 2）→ 走 approveDispatchGate 而非合并', async () => {
+    const service = fakeService()
+    ;(service.getApproval as ReturnType<typeof vi.fn>).mockReturnValue({
+      id: 'A-2',
+      kind: 'dispatch',
+      patch: { slot_id: 'M-1-S-1', worktree_path: '', summary: '放行派发' },
+    })
+    const { tools } = makePodTools(service)
+    const approve = tools[5]!
+    const result = await run(approve, { approval_id: 'A-2', decision: 'approve' })
+    expect(result.decided).toBe(true)
+    expect(service.approveDispatchGate).toHaveBeenCalledWith('A-2', 'user')
+    expect(service.approve).not.toHaveBeenCalled()
+    expect(result.message).toContain('已放行')
+  })
+
+  it('pod_approve 派发确认卡驳回 → 走 denyDispatchGate 且 reject 转人工', async () => {
+    const service = fakeService()
+    ;(service.getApproval as ReturnType<typeof vi.fn>).mockReturnValue({
+      id: 'A-3',
+      kind: 'dispatch',
+      task_id: 'T-1',
+      patch: { slot_id: 'M-1-S-1', worktree_path: '', summary: '放行派发' },
+    })
+    const { tools } = makePodTools(service)
+    const approve = tools[5]!
+    const result = await run(approve, { approval_id: 'A-3', decision: 'deny', reason: '不该派' })
+    expect(result.decided).toBe(true)
+    expect(service.denyDispatchGate).toHaveBeenCalledWith('A-3', 'user', '不该派')
+    expect(result.message).toContain('转人工')
   })
 
   it('pod_steer 排队指令；pod_dispatch 手动派发；pod_abort 透传原因', async () => {

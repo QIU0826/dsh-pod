@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ApprovalConflictError, NotFoundError, UnsupportedError } from '../src/core/errors.js'
+import { ApprovalConflictError, NotFoundError } from '../src/core/errors.js'
 import { JsonStore } from '../src/core/store.js'
 import { ApprovalEngine } from '../src/core/approvals.js'
 import { decidePermission, DEFAULT_RULES } from '../src/core/permission-rules.js'
@@ -80,9 +80,21 @@ describe('ApprovalEngine.request', () => {
     expect(() => engine.request('nope', patch)).toThrowError(NotFoundError)
   })
 
-  it('审批模式 2/3 未实现 → UnsupportedError（显式拒绝，不静默降级）', () => {
+  it('模式 2（灰度）：request 仍可创建 merge 卡；requestDispatch 创建派发确认卡', () => {
+    // 模式 2/3 的灰度门在 launch 层经 experiments 校验（Berd-E），
+    // ApprovalEngine 不按 mode 硬拒——request 对 mode 2 照常生成 merge 卡。
     store.updateMission('M-1', { approval_mode: 2 })
-    expect(() => engine.request('M-1', patch)).toThrowError(UnsupportedError)
+    const merge = engine.request('M-1', patch)
+    expect(merge.status).toBe('pending')
+    expect(merge.kind).toBe('merge')
+    const dispatch = engine.requestDispatch('M-1', {
+      slot_id: 'M-1-S-1',
+      task_id: 'T-1',
+      summary: '放行派发 T-1',
+    })
+    expect(dispatch.kind).toBe('dispatch')
+    expect(dispatch.task_id).toBe('T-1')
+    expect(store.getApproval(dispatch.id)?.patch.slot_id).toBe('M-1-S-1')
   })
 })
 

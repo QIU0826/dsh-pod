@@ -661,4 +661,81 @@ describe('DoD-19：进度事件经 emitWorkerProgress 落 reply_id（事件→�
     const seqs = events.map((e) => e.payload.seq as number)
     expect(seqs.every((s) => typeof s === 'number')).toBe(true)
   })
+
+describe('v0.2 审批模式经 experiments 灰度（Berd-E）', () => {
+  // 带 experiments 桩的编排器：enabled 数组 = 已开启的灰度 key
+  function orchWithExp(enabled: string[]) {
+    const backends = {
+      claude: new FakeBackend('claude', {}),
+      codex: new FakeBackend('codex', {}),
+    }
+    fixture.backends = backends
+    return new MissionOrchestrator('M-1', {
+      store: fixture.store,
+      backends,
+      worktree: makeWorktreeManager(fixture),
+      clock: () => fixture.clockNow,
+      experiments: { isEnabled: (k) => enabled.includes(k) },
+      verify: async (task, report) => ({
+        ok: true,
+        commit_sha: report.commit_sha,
+        parent_sha: `${task.id}-parent`,
+        failures: [],
+        mismatch: false,
+      }),
+    })
+  }
+
+  it('模式 3 灰度未开 → launch 拒绝（APPROVAL_MODE_DISABLED，fail-closed）', () => {
+    const orch = orchWithExp([])
+    expect(() => orch.launch(launchInput({ cwd: fixture.repo, approvalMode: 3 as const }))).toThrow(/gated behind experiments/)
+  })
+
+  it('模式 3 灰度开启 → 质量门通过后全自动直通 done（无审批卡）', async () => {
+    const orch = orchWithExp(['approval-mode-3'])
+    orch.launch(launchInput({ cwd: fixture.repo, approvalMode: 3 as const }))
+    orch.createTasks(plan())
+    const summary = await orch.run()
+    expect(summary.status).toBe('done')
+    expect(summary.pendingApprovals).toHaveLength(0)
+    expect(fixture.store.listApprovals('M-1').filter((a) => a.kind === 'merge')).toHaveLength(0)
+    expect(fixture.store.getMission('M-1')!.status).toBe('done')
+  })
+
+  it('模式 2 灰度未开 → launch 拒绝', () => {
+    const orch = orchWithExp([])
+    expect(() => orch.launch(launchInput({ cwd: fixture.repo, approvalMode: 2 as const }))).toThrow(/gated behind experiments/)
+  })
+
+  it('模式 2 灰度开启 → 派发前弹卡 awaiting_dispatch；批准后执行，最终仍走 merge 门', async () => {
+    const orch = orchWithExp(['approval-mode-2'])
+    orch.launch(launchInput({ cwd: fixture.repo, approvalMode: 2 as const }))
+    orch.createTasks([{ id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'] }])
+    let summary = await orch.run()
+    expect(summary.status).toBe('awaiting_dispatch')
+    const gate = fixture.store.listApprovals('M-1').find((a) => a.kind === 'dispatch')!
+    expect(gate).toBeDefined()
+    expect(gate.task_id).toBe('T-1')
+    // 未放行前任务保持 ready（不派发）
+    expect(fixture.store.getTask('T-1')!.status).toBe('ready')
+    // 人工批准派发门 → 重新驱动执行
+    orch.approveDispatchGate(gate.id, 'user')
+    summary = await orch.run()
+    expect(fixture.store.getTask('T-1')!.status).toBe('done')
+    // 模式 2 的合并交付仍是 merge 门（awaiting_approval）
+    expect(summary.status).toBe('awaiting_approval')
+    const mergeCard = fixture.store.listApprovals('M-1').find((a) => a.kind === 'merge')!
+    expect(mergeCard).toBeDefined()
+  })
+
+  it('模式 2 派发门驳回 → 对应任务转人工（escalated）', async () => {
+    const orch = orchWithExp(['approval-mode-2'])
+    orch.launch(launchInput({ cwd: fixture.repo, approvalMode: 2 as const }))
+    orch.createTasks([{ id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'] }])
+    await orch.run()
+    const gate = fixture.store.listApprovals('M-1').find((a) => a.kind === 'dispatch')!
+    orch.denyDispatchGate(gate.id, 'user', '不该派')
+    expect(fixture.store.getTask('T-1')!.status).toBe('escalated')
+  })
+})
 })

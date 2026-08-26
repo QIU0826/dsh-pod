@@ -36,6 +36,8 @@ interface LaunchArgs {
   goal: string
   cwd: string
   budget_usd?: number
+  /** 审批模式（1 默认 / 2 交接确认 / 3 全自动）。模式 2/3 需 experiments 灰度开关开启。 */
+  approval_mode?: number
   slots: Array<{
     id: string
     vendor: Vendor
@@ -64,6 +66,7 @@ export function makePodTools(service: PodService): PodToolBundle {
         goal: { type: 'string', required: true, description: '一句话可验收目标' },
         cwd: { type: 'string', required: true, description: '目标 git 仓库绝对路径（主树）' },
         budget_usd: { type: 'number', description: '美元预算上限（默认 3）' },
+        approval_mode: { type: 'number', description: '审批模式：1（默认，合并前确认）/ 2（交接确认）/ 3（全自动）。模式 2/3 需 ~/.dsh/pod/experiments.json 对应开关开启。' },
         slots: {
           type: 'array',
           required: true,
@@ -116,6 +119,7 @@ export function makePodTools(service: PodService): PodToolBundle {
           goal: input.goal,
           cwd: input.cwd,
           budgetUsd: input.budget_usd ?? 3,
+          approvalMode: input.approval_mode === 2 || input.approval_mode === 3 ? input.approval_mode : 1,
           slots: input.slots,
           plan: input.plan,
         })
@@ -286,6 +290,16 @@ export function makePodTools(service: PodService): PodToolBundle {
           return { decided: false, message: 'deny 必须提供 reason' }
         }
         try {
+          // 模式 2 派发确认门（kind='dispatch'）：批准=授权派发，驳回=对应任务转人工。
+          const approval = service.getApproval(args.approval_id)
+          if (approval !== undefined && approval.kind === 'dispatch') {
+            if (args.decision === 'approve') {
+              service.approveDispatchGate(args.approval_id, args.by ?? 'user')
+              return { decided: true, message: `派发确认卡 ${args.approval_id} 已放行，任务待派发（pod_dispatch 继续）` }
+            }
+            service.denyDispatchGate(args.approval_id, args.by ?? 'user', args.reason!)
+            return { decided: true, message: `派发确认卡 ${args.approval_id} 已驳回，对应任务转人工` }
+          }
           if (args.decision === 'approve') {
             const edited = args.edited !== undefined ? (args.edited as Record<string, string>) : undefined
             const result = await service.approve(args.approval_id, args.by ?? 'user', edited)

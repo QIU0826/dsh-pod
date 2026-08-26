@@ -193,7 +193,15 @@ export interface LedgerEntry {
 export interface ApprovalRequest {
   id: string
   mission_id: string
-  /** 待合并的 patch 描述：worktree 路径 + commit 区间。 */
+  /**
+   * 审批门类型（2.6 节 v2.2）：'merge' = 模式 1/2 的合并回主树门（apply_patch 前）；
+   * 'dispatch' = 模式 2 的跨 agent 派发确认门（pod_dispatch 入口，agent 派活前弹卡）。
+   * 缺省按 'merge' 处理（MVP 语义）。
+   */
+  kind?: 'merge' | 'dispatch'
+  /** 模式 2 派发确认门引用的任务（dispatch 卡必填）。 */
+  task_id?: string
+  /** 待合并的 patch 描述：worktree 路径 + commit 区间（dispatch 卡可仅用 slot_id/summary）。 */
   patch: {
     slot_id: string
     worktree_path: string
@@ -209,6 +217,40 @@ export interface ApprovalRequest {
   deny_reason?: string
   /** AgentScope-C（AS-3）：批准时携带的人工编辑参数（如 merge_note），审计留痕。 */
   edited_params?: Record<string, string>
+}
+
+/** 长期记忆记录类型（2.8.1 节，借鉴 NVIDIA NOOA 记忆设计，CR-07）。 */
+export type MemoryType = 'lesson' | 'pattern' | 'decision' | 'fact' | 'episode'
+/** 记忆图谱关系（2.8.1 节：类型化关系而非平铺日志）。 */
+export type MemoryRelation = 'supports' | 'contradicts' | 'derived-from'
+
+/**
+ * 长期记忆子系统记录（2.8.1 节 v2.1）：
+ * 员工通过模型可调用工具主动策展的「知识层」存储（与 2.8 事实层并存、不重叠）。
+ */
+export interface MemoryRecord {
+  id: string
+  /** 拥有者槽位（owner_slot_id 隔离；跨 agent 查询公共经验仍可）。 */
+  owner_slot_id: string
+  type: MemoryType
+  /** 1-5，越高越重要（reflection 剪枝与「按需浮入上下文」的优先级依据）。 */
+  importance: 1 | 2 | 3 | 4 | 5
+  tags: string[]
+  /** 内容引用（文件/路径/摘要，非原始对话转录）。 */
+  content_ref: string
+  /** 可选的实时状态引用（live_ref：指向 mission/task/agent 现状，非快照）。 */
+  live_ref?: string
+  ts: number
+  updated_ts: number
+}
+
+/** 记忆图谱边：类型化关系连成知识图谱（可查询：contradicts 且未复核等）。 */
+export interface MemoryEdge {
+  id: string
+  from_record: string
+  to_record: string
+  relation: MemoryRelation
+  ts: number
 }
 
 /** 审批规则（2.6 节 v2.1 / CR-08 AgentScope-B：ApprovalRule 数据模型）。 */

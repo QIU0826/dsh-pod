@@ -65,6 +65,11 @@ export interface LaunchInput {
   cwd: string
   budgetUsd: number
   budgetTokens?: number
+  /**
+   * 审批模式（2.6 节，默认 1）：模式 2/3 需对应 experiments 灰度开关开启，
+   * 否则 launch 拒绝（Berd-E 灰度纪律，默认关、fail-closed）。
+   */
+  approvalMode?: 1 | 2 | 3
   slots: SlotInput[]
 }
 
@@ -82,7 +87,7 @@ export interface WorktreeManager {
   ensure(repoRoot: string, slotId: string): Promise<string>
 }
 
-export type RunStatus = 'awaiting_approval' | 'needs_human' | 'waiting_backoff' | 'budget_exceeded' | 'aborted'
+export type RunStatus = 'awaiting_approval' | 'needs_human' | 'waiting_backoff' | 'budget_exceeded' | 'aborted' | 'done' | 'awaiting_dispatch'
 
 export interface RunSummary {
   status: RunStatus
@@ -100,6 +105,11 @@ export interface OrchestratorDeps {
   verify?: TaskVerifyFn
   maxParallel?: number
   /**
+   * 灰度开关（Berd-E）：审批模式 2/3 是否放行。测试注入内存桩；
+   * 插件层注入 ~/.dsh/pod/experiments.json 承载实例。缺省全关（保守）。
+   */
+  experiments?: ExperimentsLike
+  /**
    * review 任务的 diff 内容提供者（审查者最小上下文的强化实现，CR-03）：
    * 宿主机侧读取 diff 并注入审查提示词，审查者无需仓库命令权限即可独立审查。
    * 未提供时保持指针式交接（审查者自行读取）。
@@ -109,6 +119,17 @@ export interface OrchestratorDeps {
 
 /** 注入审查提示词的 diff 长度上限（超限截断并标注，防窗口爆炸）。 */
 export const MAX_REVIEW_DIFF_CHARS = 120_000
+
+/** 灰度开关的极小结构化接口（避免硬依赖 Experiments 实现，测试可注入桩）。 */
+export interface ExperimentsLike {
+  isEnabled(key: string): boolean
+}
+
+/** 审批模式 → experiments 开关 key 映射（2.6 节 v2.2 / Berd-E）。 */
+export const APPROVAL_MODE_EXPERIMENT_KEYS: Record<2 | 3, string> = {
+  2: 'approval-mode-2',
+  3: 'approval-mode-3',
+}
 
 interface WakeLatch {
   fired: boolean
@@ -128,6 +149,7 @@ export class MissionOrchestrator {
   private readonly missionId: string
   private readonly maxParallel: number
   private readonly diffProvider: ((task: Task) => Promise<string>) | undefined
+  private readonly experiments: ExperimentsLike
   private readonly handles = new Map<string, WorkerHandle>()
   private readonly queuedSteer = new Map<string, string[]>()
   private readonly wakeLatch: WakeLatch = { fired: false }
@@ -141,6 +163,7 @@ export class MissionOrchestrator {
     this.clock = deps.clock ?? (() => Date.now())
     this.maxParallel = deps.maxParallel ?? MAX_PARALLEL_TASKS
     this.diffProvider = deps.diffProvider
+    this.experiments = deps.experiments ?? { isEnabled: () => false }
     this.approvals = new ApprovalEngine(this.store, { clock: this.clock })
     this.ledger = new Ledger(this.store, { clock: this.clock })
     this.missionMachine = new MissionMachine(this.store, this.approvals, missionId, { clock: this.clock })
@@ -158,6 +181,19 @@ export class MissionOrchestrator {
     if (input.slots.length > MAX_SLOTS) {
       throw new ConcurrencyLimitError(MAX_SLOTS, `slot count ${input.slots.length}`)
     }
+    // 审批模式灰度门（Berd-E）：模式 2/3 需对应 experiments 开关开启；默认关，fail-closed。
+    // 未开启却请求模式 2/3 → 拒绝 launch（不静默降级回 1，纪律明确）。
+    const approvalMode: 1 | 2 | 3 = input.approvalMode ?? 1
+    if (approvalMode !== 1) {
+      const key = APPROVAL_MODE_EXPERIMENT_KEYS[approvalMode]
+      if (!this.experiments.isEnabled(key)) {
+        throw new PodError(
+          `approval mode ${approvalMode} is gated behind experiments flag '${key}' (default off; enable in ~/.dsh/pod/experiments.json)`,
+          'APPROVAL_MODE_DISABLED',
+          { approvalMode, experimentKey: key },
+        )
+      }
+    }
     const now = this.clock()
     const mission: Mission = {
       id: this.missionId,
@@ -168,7 +204,7 @@ export class MissionOrchestrator {
       budget_tokens: input.budgetTokens,
       spent_tokens: 0,
       spent_equiv_usd: 0,
-      approval_mode: 1,
+      approval_mode: approvalMode,
       cwd: input.cwd,
       worktree_policy: 'per-slot',
       orchestration_mode: 'commander',
@@ -383,6 +419,48 @@ export class MissionOrchestrator {
         },
       })
       return false
+    }
+
+    // 模式 2（交接确认，灰度）：跨 agent 派活前弹卡（pod_dispatch 入口，2.6 节）。
+    // task 维持 ready；approved 卡授权本次派发，pending 卡阻塞等待人工放行，denied 卡转人工。
+    if (mission.approval_mode === 2) {
+      const dispatchCards = this.store.listApprovals(this.missionId).filter((a) => a.kind === 'dispatch' && a.task_id === task.id)
+      const approved = dispatchCards.some((a) => a.status === 'approved')
+      const pending = dispatchCards.some((a) => a.status === 'pending')
+      const denied = dispatchCards.some((a) => a.status === 'denied')
+      if (denied && !approved) {
+        this.taskMachine.escalate(task.id)
+        this.store.appendEvent(this.missionId, {
+          id: `ev-dispatch-denied-${task.id}`,
+          mission_id: this.missionId,
+          ts: this.clock(),
+          kind: 'task_escalated',
+          task_id: task.id,
+          payload: { reason: 'dispatch gate denied by operator' },
+        })
+        this.signalCompletion()
+        return false
+      }
+      if (!approved && !pending) {
+        const card = this.approvals.requestDispatch(this.missionId, {
+          slot_id: slot.id,
+          worktree_path: slot.worktree_path ?? '',
+          task_id: task.id,
+          summary: `放行派发 ${task.id}（${task.title}）给 ${slot.id}？跨 agent 交接前确认。`,
+        })
+        this.store.appendEvent(this.missionId, {
+          id: `ev-dispatch-gate-${task.id}-${this.clock()}`,
+          mission_id: this.missionId,
+          ts: this.clock(),
+          kind: 'dispatch_awaiting_approval',
+          task_id: task.id,
+          slot_id: slot.id,
+          payload: { approval_id: card.id },
+        })
+        return false
+      }
+      if (pending) return false
+      // approved → 落入下方正常派发
     }
 
     // worktree 隔离（3.7 节：默认每员工一个）
@@ -662,6 +740,45 @@ export class MissionOrchestrator {
     this.missionMachine.approveCard(approvalId, by, editedParams)
   }
 
+  /**
+   * 模式 2 派发确认门：批准一张 dispatch 卡 → 授权对应任务派发。
+   * 卡裁决经 ApprovalEngine 持久化（审计同 merge 门）；任务维持 ready，
+   * 由后续 run()/dispatchNext() 按 approved 卡放行实际派发（不直接启动 worker）。
+   */
+  approveDispatchGate(approvalId: string, by: string): ApprovalRequest {
+    const approval = this.store.getApproval(approvalId)
+    if (approval === undefined) throw new NotFoundError('approval', approvalId)
+    if (approval.kind !== 'dispatch') {
+      throw new PodError('approval is not a dispatch gate', 'NOT_DISPATCH_GATE', { approvalId, kind: approval.kind })
+    }
+    return this.approvals.decide(approvalId, 'approved', by)
+  }
+
+  /** 模式 2 派发确认门：驳回一张 dispatch 卡（depends 任务转人工，不派发）。 */
+  denyDispatchGate(approvalId: string, by: string, reason: string): ApprovalRequest {
+    const approval = this.store.getApproval(approvalId)
+    if (approval === undefined) throw new NotFoundError('approval', approvalId)
+    if (approval.kind !== 'dispatch') {
+      throw new PodError('approval is not a dispatch gate', 'NOT_DISPATCH_GATE', { approvalId, kind: approval.kind })
+    }
+    const decided = this.approvals.decide(approvalId, 'denied', by, reason)
+    if (approval.task_id !== undefined) {
+      const task = this.store.getTask(approval.task_id)
+      if (task !== undefined && task.status === 'ready') {
+        this.taskMachine.escalate(task.id)
+        this.store.appendEvent(this.missionId, {
+          id: `ev-dispatch-gate-denied-${task.id}-${this.clock()}`,
+          mission_id: this.missionId,
+          ts: this.clock(),
+          kind: 'task_escalated',
+          task_id: task.id,
+          payload: { reason: `dispatch gate denied: ${reason}` },
+        })
+      }
+    }
+    return decided
+  }
+
   /** W5：合并成功 → mission done。 */
   completeAfterMerge(approvalId: string, by: string): void {
     this.missionMachine.completeAfterMerge(approvalId, by)
@@ -770,6 +887,33 @@ export class MissionOrchestrator {
     )
     if (waitingBackoff.length > 0) {
       return { status: 'waiting_backoff', doneTasks: done, escalatedTasks: escalated, pendingApprovals: [] }
+    }
+    // 模式 2（交接确认，灰度）：有待批的派发确认卡 → 等待人工放行，先不推进质量门。
+    const pendingDispatch = this.approvals
+      .pendingFor(this.missionId)
+      .filter((a) => a.kind === 'dispatch')
+    if (pendingDispatch.length > 0) {
+      return {
+        status: 'awaiting_dispatch',
+        doneTasks: done,
+        escalatedTasks: escalated,
+        pendingApprovals: pendingDispatch.map((a) => a.id),
+      }
+    }
+    // 模式 3（全自动，灰度）：质量门通过后无审批卡，mission 直通 done。
+    if (this.requireMission().approval_mode === 3) {
+      try {
+        this.missionMachine.autoComplete()
+      } catch (error) {
+        return {
+          status: 'needs_human',
+          doneTasks: done,
+          escalatedTasks: escalated,
+          pendingApprovals: [],
+          reason: error instanceof Error ? error.message : String(error),
+        }
+      }
+      return { status: 'done', doneTasks: done, escalatedTasks: escalated, pendingApprovals: [] }
     }
     try {
       this.missionMachine.tasksCompleted()

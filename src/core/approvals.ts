@@ -11,7 +11,7 @@
  * CR-01-7：审批卡有处理期限（默认 7 天），超期标记 stale，由 mission 层自动 pause。
  */
 
-import { ApprovalConflictError, NotFoundError, UnsupportedError } from './errors.js'
+import { ApprovalConflictError, NotFoundError } from './errors.js'
 import type { PodStore } from './store.js'
 import type { ApprovalRequest, Mission } from './types.js'
 import { APPROVAL_STALE_MS } from './types.js'
@@ -51,16 +51,20 @@ export class ApprovalEngine {
     return mission
   }
 
-  /** 发起审批（模式 1）：持久化 pending 审批卡 + 设置过期时刻。 */
-  request(missionId: string, patch: ApprovalPatch): ApprovalRequest {
-    const mission = this.requireMission(missionId)
-    if (mission.approval_mode !== 1) {
-      throw new UnsupportedError(`approval mode ${mission.approval_mode}`, 'MVP only implements mode 1 (write-before-confirm)')
-    }
+  /**
+   * 发起合并/交付审批卡：持久化 pending 卡 + 设置过期时刻。
+   * 模式 1（写盘前确认）与模式 2（交接确认，kind='merge'）均走此入口；
+   * 模式 3（全自动）由编排层跳过本入口，不经审批门。
+   * 模式灰度在 launch 层经 experiments 校验（Berd-E），此处不再按 mode 硬拒。
+   */
+  request(missionId: string, patch: ApprovalPatch, kind: 'merge' | 'dispatch' = 'merge', taskId?: string): ApprovalRequest {
+    this.requireMission(missionId)
     const now = this.clock()
     const approval: ApprovalRequest = {
       id: this.idFn(),
       mission_id: missionId,
+      kind,
+      task_id: kind === 'dispatch' ? taskId : undefined,
       patch: { ...patch },
       status: 'pending',
       created_at: now,
@@ -72,9 +76,23 @@ export class ApprovalEngine {
       mission_id: missionId,
       ts: now,
       kind: 'approval_requested',
-      payload: { approval_id: approval.id, patch: approval.patch },
+      payload: { approval_id: approval.id, patch: approval.patch, kind: approval.kind ?? 'merge', task_id: approval.task_id },
     })
     return approval
+  }
+
+  /** 模式 2 派发确认门：跨 agent 派活前弹卡（pod_dispatch 入口）。 */
+  requestDispatch(missionId: string, info: { slot_id: string; worktree_path?: string; task_id?: string; summary: string }): ApprovalRequest {
+    return this.request(
+      missionId,
+      {
+        slot_id: info.slot_id,
+        worktree_path: info.worktree_path ?? '',
+        summary: info.summary,
+      },
+      'dispatch',
+      info.task_id,
+    )
   }
 
   /** 裁决审批卡。重复裁决 → ApprovalConflictError（防竞态/防误双击）。 */
