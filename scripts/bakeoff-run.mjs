@@ -136,7 +136,15 @@ async function main() {
             return worktreePath
           },
         },
-        verify: async (t, r) => verifyTaskArtifacts({ git: execGitClient(), repoDir: worktreePath }, t, r),
+        verify: async (t, r) => {
+          const result = await verifyTaskArtifacts({ git: execGitClient(), repoDir: worktreePath }, t, r)
+          if (!result.ok) {
+            console.error('[bakeoff-verify] FAIL task=', t.id, 'failures=', JSON.stringify(result.failures))
+            console.error('[bakeoff-verify] report=', JSON.stringify(r))
+            console.error('[bakeoff-verify] worktree=', worktreePath)
+          }
+          return result
+        },
         diffProvider: async (t) => {
           const target = store.getTask((t.depends_on ?? [])[0] ?? '')
           if (target?.parent_sha === undefined || target?.commit_sha === undefined) return '（无 diff）'
