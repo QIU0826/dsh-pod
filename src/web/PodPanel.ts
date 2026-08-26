@@ -172,6 +172,19 @@ export function PodPanel(): ReactElement {
   }
 
   const mission = status?.mission
+  // v0.2 崩溃恢复 UI：跨 DSH Web 刷新后按 mission.status 派生「恢复/需人工动作」提示（DoD-11 审批卡重建、paused/派发门）
+  let recoveryNote: { text: string; tone: string } | null = null
+  if (status !== null && mission === null && (status.pending_approvals.length > 0)) {
+    recoveryNote = { text: '检测到待办审批卡（跨重启重建，DoD-11）· 审批卡已从磁盘恢复，等待裁决', tone: '#b45309' }
+  } else if (mission != null) {
+    if (mission.status === 'awaiting_approval') {
+      recoveryNote = { text: 'mission 已跨重启重建（DoD-11）：审批卡待人工批准/驳回后合并', tone: '#b45309' }
+    } else if (mission.status === 'awaiting_dispatch' || (status?.pending_approvals ?? []).some((a) => a.summary.includes('放行派发'))) {
+      recoveryNote = { text: '（模式 2）派发确认门待放行：请在下方审批区批准/驳回', tone: '#b45309' }
+    } else if (mission.status === 'paused') {
+      recoveryNote = { text: 'mission 已暂停（预算/审批超期/崩溃）——状态已磁盘化，可恢复/接管后续派发', tone: '#b91c1c' }
+    }
+  }
 
   const handleApprove = (approvalId: string): void => {
     // AS-3（AgentScope-C）：批准前可编辑参数（merge note 备注，留痕在审批事件）
@@ -227,6 +240,9 @@ export function PodPanel(): ReactElement {
         : null,
       error !== null ? createElement('span', { style: styles.msg }, error) : null,
     ),
+    recoveryNote !== null
+      ? createElement('div', { style: { padding: 6, marginBottom: 4, borderRadius: 6, border: '1px dashed rgba(180,83,9,.4)', color: recoveryNote.tone, fontSize: 12, background: 'rgba(180,83,9,.06)' } }, '↻ ' + recoveryNote.text)
+      : null,
     (status?.pending_approvals ?? []).length > 0
       ? createElement(
           'div',
