@@ -39,6 +39,18 @@ npm run verify      # typecheck → coverage → build 一条龙
 $env:POD_LIVE_PREFLIGHT='1'; npx vitest run tests/preflight.live.test.ts  # 真实 CLI 冒烟（可选）
 ```
 
+## 最小可演示链（demo-chain）
+
+```bash
+npm run build
+node scripts/demo-chain.mjs                # 审查者默认 codex（跨厂商异构）
+node scripts/demo-chain.mjs --reviewer claude   # 同厂商异槽独立 review（DoD-5 仍满足：S-1 ≠ S-2）
+node scripts/demo-chain.mjs --repo <dir>   # 自定义靶场仓库
+```
+
+⚠️ `--reviewer` 仅支持 `claude|codex`，传入其他值会警告并回落为 `codex`。
+真实跑通「实现 → 独立 review → 审批卡」链；合并（apply_patch）属 W5 切片，本演示止于审批卡。
+
 ## 核心域层（src/core，全部纯逻辑 + 注入式副作用，可离线测试）
 
 | 模块 | 职责 | 方案书落点 |
