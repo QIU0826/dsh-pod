@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { ApprovalConflictError, NotFoundError, UnsupportedError } from '../src/core/errors.js'
 import { JsonStore } from '../src/core/store.js'
 import { ApprovalEngine } from '../src/core/approvals.js'
+import { decidePermission, DEFAULT_RULES } from '../src/core/permission-rules.js'
 import type { Mission } from '../src/core/types.js'
 import { APPROVAL_STALE_MS } from '../src/core/types.js'
 
@@ -156,5 +157,37 @@ describe('ApprovalEngine 恢复与过期', () => {
     engine.decide(approval.id, 'approved', 'user')
     now += APPROVAL_STALE_MS + 1
     expect(engine.staleCheck('M-1')).toEqual([])
+  })
+})
+
+describe('AS-2：审批通过 → 生成建议规则 → 同类免弹卡（AgentScope-B）', () => {
+  it('approve → 自动落 mission 级规则（tool=apply_patch，pattern=diff 基名，source=auto-from-approval）', () => {
+    const approval = engine.request('M-1', patch)
+    engine.decide(approval.id, 'approved', 'user')
+    const rules = store.listRules().filter((r) => r.source === 'auto-from-approval')
+    expect(rules).toHaveLength(1)
+    expect(rules[0]!.tool).toBe('apply_patch')
+    expect(rules[0]!.pattern).toBe('task-T-3.diff')
+    expect(rules[0]!.decision).toBe('allow')
+    expect(rules[0]!.scope).toBe('mission')
+  })
+
+  it('deny → 不生成规则（只记录拒绝事实）', () => {
+    const approval = engine.request('M-1', patch)
+    engine.decide(approval.id, 'denied', 'user', '测试没过')
+    expect(store.listRules().filter((r) => r.source === 'auto-from-approval')).toHaveLength(0)
+  })
+
+  it('生成的规则可被 decidePermission 命中（同类免弹卡语义）', () => {
+    const approval = engine.request('M-1', { ...patch, summary: '实现 rate limiter' })
+    engine.decide(approval.id, 'approved', 'user')
+    const rule = store.listRules().find((r) => r.source === 'auto-from-approval')!
+    const decision = decidePermission({
+      tool: { name: 'apply_patch', input: { file: 'task-T-3.diff' } },
+      rules: [...DEFAULT_RULES, rule],
+      defaultMode: 'ask',
+    })
+    expect(decision.behavior).toBe('allow')
+    expect(decision.rule_id).toBe('apply_patch:task-T-3.diff')
   })
 })

@@ -37,6 +37,10 @@ demo:
 bakeoff:
     node scripts/bakeoff-all.mjs
 
+# 安装 pre-commit 门禁（EN-3：暂存 src 变更先过 tsc，失败拒绝提交）
+install-hooks:
+    node scripts/pre-commit.mjs --install
+
 # 清理产物
 clean:
     rm -rf dist coverage

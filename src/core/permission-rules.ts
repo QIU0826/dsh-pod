@@ -52,8 +52,9 @@ export function isReadOnlyCommand(command: string): boolean {
 function ruleMatches(rule: PermissionRule, toolName: string, input: Record<string, unknown> | undefined): boolean {
   if (rule.tool !== toolName) return false
   if (rule.pattern === undefined || rule.pattern.length === 0) return true
-  const command = String(input?.command ?? input?.url ?? input?.path ?? '')
-  return command.toLowerCase().includes(rule.pattern.toLowerCase())
+  // apply_patch 类工具命中 file 字段（文件名）；Bash 类命中 command；URL 类命中 url
+  const target = String(input?.file ?? input?.command ?? input?.url ?? input?.path ?? '')
+  return target.toLowerCase().includes(rule.pattern.toLowerCase())
 }
 
 /** 裁决：规则命中优先（mission 级优先于 global），未命中走 defaultMode + 只读放行。 */
@@ -92,4 +93,47 @@ export const DEFAULT_RULES: PermissionRule[] = [
 export function buildSuggestedRule(toolName: string, input: Record<string, unknown> | undefined, decision: PermissionDecisionValue): PermissionRule {
   const pattern = input?.command !== undefined ? String(input.command).split(/\s+/).slice(0, 2).join(' ') : undefined
   return { tool: toolName, pattern, decision, scope: 'global', source: 'user-suggested', ts: Date.now() }
+}
+
+/** 审批卡数据（AS-2 依赖的最小形状，避免硬依赖 approvals 模块）。 */
+export interface ApprovalLikePatch {
+  slot_id: string
+  worktree_path: string
+  base_commit?: string
+  head_commit?: string
+  diff_path?: string
+  summary: string
+}
+
+/**
+ * AS-2（AgentScope-B）：审批通过 → 生成建议规则 → 同类免弹卡。
+ * 从已批准的 patch 推导 mission 级规则：tool=apply_patch（合并唯一入口）、
+ * pattern=被合并文件路径（diff_path 基名；缺省用 summary 首个 token），
+ * decision=allow、scope=mission（mission 结束清理，source 标记自动来源）。
+ */
+export function buildSuggestedRuleFromApproval(patch: ApprovalLikePatch, idFn: () => string): ApprovalRuleLike {
+  const pattern =
+    patch.diff_path !== undefined && patch.diff_path.length > 0
+      ? patch.diff_path.split(/[\\/]/).pop()
+      : patch.summary.trim().split(/\s+/)[0]
+  return {
+    id: idFn(),
+    tool: 'apply_patch',
+    pattern: pattern !== undefined && pattern.length > 0 ? pattern : undefined,
+    decision: 'allow',
+    scope: 'mission',
+    source: 'auto-from-approval',
+    ts: Date.now(),
+  }
+}
+
+/** AS-2 落 Store 的最小形状（与 types.ts ApprovalRule 字段一致）。 */
+export interface ApprovalRuleLike {
+  id: string
+  tool: string
+  pattern?: string
+  decision: 'allow' | 'deny' | 'ask'
+  scope: 'mission' | 'global'
+  source?: string
+  ts: number
 }

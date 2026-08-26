@@ -101,7 +101,8 @@ describe('plugin 宿主契约', () => {
     await ctx.plugin(plugin)
     expect(mocks.section).not.toHaveBeenCalled()
     // ping + status/events/launch/steer/approve/deny/dispatch/resolve/rules/abort 十一条宿主路由
-    expect(mocks.register).toHaveBeenCalledTimes(11)
+    // AS-4/EV-2：+ /assets 与 /events/stream 两条只读流路由 → 13 条
+    expect(mocks.register).toHaveBeenCalledTimes(13)
     expect(mocks.toolNames).toHaveLength(8)
     ctx.registry.delete(plugin)
     rmSync(dataDir, { recursive: true, force: true })

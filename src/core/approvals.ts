@@ -15,6 +15,7 @@ import { ApprovalConflictError, NotFoundError, UnsupportedError } from './errors
 import type { PodStore } from './store.js'
 import type { ApprovalRequest, Mission } from './types.js'
 import { APPROVAL_STALE_MS } from './types.js'
+import { buildSuggestedRuleFromApproval } from './permission-rules.js'
 
 export interface ApprovalPatch {
   slot_id: string
@@ -100,6 +101,16 @@ export class ApprovalEngine {
     }
     this.store.updateApproval(id, decided)
     this.store.updateMission(approval.mission_id, { approval_stale_at: undefined })
+    // AS-2（AgentScope-B）：审批通过 → 生成 mission 级建议规则（同类免弹卡；
+    // mission 结束由 mission 层清理 scope=mission 的 auto 规则）
+    if (decision === 'approved') {
+      try {
+        const rule = buildSuggestedRuleFromApproval(approval.patch, () => `rule-auto-${id}`)
+        this.store.createRule(rule)
+      } catch {
+        // 规则持久化失败不影响审批裁决（审计留痕仍成立）；同类免弹卡退化为「每次仍弹卡」
+      }
+    }
     this.store.appendEvent(approval.mission_id, {
       id: `ev-approval-${id}-${decision}`,
       mission_id: approval.mission_id,

@@ -18,7 +18,8 @@
 | `npm run test:coverage` | 覆盖率门禁（lines/functions/statements 80%，branches 75%） |
 | `npm run build` | tsc（宿主 dist/plugin.js）+ tsdown（浏览器 dist/client.js） |
 | `node scripts/demo-chain.mjs` | 真实最小可演示链（claude 实现 → codex 审查 → 审批卡），**需先 build** |
-| `just verify / demo / bakeoff ...` | justfile 别名入口（见 justfile） |
+| `just verify / demo / bakeoff / install-hooks ...` | justfile 别名入口（见 justfile） |
+| `just install-hooks` | 安装 pre-commit 门禁（暂存 src 变更先过 tsc，失败拒绝提交；EN-3 Berd-F） |
 
 > 只改 src/core、src/routes、tests 时不需要重建浏览器包；改 src/web/* 才需要
 > `npm run build`（tsdown）并在 DSH Web GUI 刷新验证。

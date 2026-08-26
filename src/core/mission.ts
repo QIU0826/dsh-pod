@@ -143,6 +143,7 @@ export class MissionMachine {
     this.guard(mission, 'approve')
     this.approvals.decide(approvalId, 'approved', by)
     this.store.updateMission(mission.id, { status: 'done' })
+    this.cleanupMissionRules()
     this.emit(mission, 'mission_done', { approval_id: approvalId, by })
   }
 
@@ -162,7 +163,17 @@ export class MissionMachine {
     const mission = this.getMission()
     this.guard(mission, 'approve')
     this.store.updateMission(mission.id, { status: 'done' })
+    this.cleanupMissionRules()
     this.emit(mission, 'mission_done', { approval_id: approvalId, by })
+  }
+
+  /** AS-2：mission 结束清理 scope=mission 的 auto 建议规则（同类免弹卡不跨 mission 泄漏）。 */
+  private cleanupMissionRules(): void {
+    for (const rule of this.store.listRules()) {
+      if (rule.scope === 'mission' && rule.source === 'auto-from-approval') {
+        this.store.deleteRule(rule.id)
+      }
+    }
   }
 
   /** 合并失败 → 审批卡回滚 pending（mission 保持 awaiting_approval，可重试或驳回）。 */
@@ -203,6 +214,7 @@ export class MissionMachine {
       throw new InvalidTransitionError(mission.status, 'aborted', 'mission already terminal')
     }
     this.store.updateMission(mission.id, { status: 'aborted' })
+    this.cleanupMissionRules()
     this.emit(mission, 'mission_aborted', { reason })
   }
 

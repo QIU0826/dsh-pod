@@ -93,7 +93,8 @@ describe('工具薄壳行为（副作用全部走 PodService）', () => {
     const approve = tools[5]!
     const result = await run(approve, { approval_id: 'A-1', decision: 'approve' })
     expect(result.decided).toBe(true)
-    expect(service.approve).toHaveBeenCalledWith('A-1', 'user')
+    // AS-3：approve 携带第三个参数 edited（缺省 undefined，审计留痕）
+    expect(service.approve).toHaveBeenCalledWith('A-1', 'user', undefined)
     expect(result.message).toContain('合并回主树')
     expect(result.message).toContain('abc12345')
   })

@@ -444,6 +444,20 @@ describe('审批闭环', () => {
     expect(fixture.store.getMission('M-1')!.status).toBe('done')
   })
 
+  it('approve → 自动规则在 mission 结束时清理（AS-2：scope=mission 不跨 mission 泄漏）', async () => {
+    const orchestrator = makeOrchestrator(fixture, {})
+    orchestrator.launch(launchInput({ cwd: fixture.repo }))
+    orchestrator.createTasks(plan())
+    await orchestrator.run()
+    // 审批前：无 auto 规则
+    expect(fixture.store.listRules().filter((r) => r.source === 'auto-from-approval')).toHaveLength(0)
+    const approval = fixture.store.listApprovals('M-1')[0]!
+    orchestrator.approve(approval.id, 'user')
+    // approve 已裁决并触发清理 → mission done 后无 auto 规则残留
+    expect(fixture.store.getMission('M-1')!.status).toBe('done')
+    expect(fixture.store.listRules().filter((r) => r.source === 'auto-from-approval')).toHaveLength(0)
+  })
+
   it('deny → 回 running（审批卡带原因）', async () => {
     const orchestrator = makeOrchestrator(fixture, {})
     orchestrator.launch(launchInput({ cwd: fixture.repo }))
