@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { makePodRoutes, validateLaunch } from '../src/routes.js'
+import { makePodRoutes, validateLaunch, formatSseFrame } from '../src/routes.js'
 import type { PodService } from '../src/pod-service.js'
 
 /** 手工构造响应捕获对象。 */
@@ -95,6 +95,48 @@ describe('pod 数据面路由（W3/W4）', () => {
     await eventsRoute.handler(loopbackRequest('/api/dsh-pod/events?after=100'), res)
     const body = written[0]!.body as { events: Array<{ id: string }> }
     expect(body.events.map((e) => e.id)).toEqual(['e2'])
+  })
+
+  it('formatSseFrame：SSE 帧格式（event: + data: + 空行）', () => {
+    const frame = formatSseFrame({ id: 'e1', ts: 100, kind: 'task_done', payload: { a: 1 } })
+    expect(frame).toContain('event: task_done')
+    expect(frame).toContain('data: {"id":"e1","ts":100,"kind":"task_done","payload":{"a":1}}')
+    expect(frame.endsWith('\n\n')).toBe(true)
+  })
+
+  it('GET /events/stream：新订阅先收 buffered history（SSE replay，AgentScope-I/EV-2）', async () => {
+    const history = [
+      { id: 'e1', ts: 100, kind: 'task_dispatched', payload: {} },
+      { id: 'e2', ts: 200, kind: 'worker_progress', payload: {} },
+    ]
+    const service = fakeService({ eventsAfter: (after: number) => history.filter((e) => e.ts > after) })
+    const routes = makePodRoutes(() => service)
+    const streamRoute = routes.find((r) => r.path === '/api/dsh-pod/events/stream')!
+    // 捕获流式 write 输出（不结束连接）
+    const writtenChunks: string[] = []
+    const res = {
+      writeHead: () => res,
+      write: (chunk: string) => {
+        writtenChunks.push(String(chunk))
+        return true
+      },
+      end: () => res,
+      writableEnded: false,
+      on: () => res,
+    } as unknown as ServerResponse
+    const req = {
+      url: '/api/dsh-pod/events/stream',
+      method: 'GET',
+      socket: { remoteAddress: '127.0.0.1' },
+      on: () => req,
+    } as unknown as IncomingMessage
+    await streamRoute.handler(req, res)
+    const output = writtenChunks.join('')
+    // replay：两条 history 事件都在（顺序保留）
+    expect(output).toContain('data: {"id":"e1"')
+    expect(output).toContain('data: {"id":"e2"')
+    expect(output.indexOf('e1')).toBeLessThan(output.indexOf('e2'))
+    expect(output.startsWith('retry:')).toBe(true)
   })
 
   it('POST /launch 调 service.launch 并返回 mission id', async () => {

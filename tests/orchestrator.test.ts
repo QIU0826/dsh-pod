@@ -583,6 +583,43 @@ describe('humanResolve（3.4 节转人工接管，CR-06-8）', () => {
   })
 })
 
+describe('HITL 事件汇聚不变量（AgentScope-G / EV-3）', () => {
+  it('所有 HITL 触发事件必进 mission 事件流（无仅内存路径）', async () => {
+    const orchestrator = makeOrchestrator(fixture, {
+      'T-1': {
+        progress: [{ slot_id: 'M-1-S-1', task_id: 'T-1', ts: 1, kind: 'text', text: '开始实现' }],
+        completion: {
+          exit: 'done',
+          report: doneReport('T-1'),
+          usage: { tokens_in: 10, tokens_out: 5, source: 'measured' },
+          artifacts: [],
+        },
+      },
+    })
+    orchestrator.launch(launchInput({ cwd: fixture.repo }))
+    orchestrator.createTasks(plan())
+    await orchestrator.run()
+    const kinds = fixture.store.listEvents('M-1').map((e) => e.kind)
+    // 一次完整链（实现→review→审批卡）应覆盖：派发/进度/完成/审批请求
+    for (const required of ['mission_started', 'task_dispatched', 'worker_progress', 'task_done', 'approval_requested']) {
+      expect(kinds).toContain(required)
+    }
+  })
+
+  it('转人工（escalated）与人工接管事件也进流（commander/Canvas 可见）', async () => {
+    const orchestrator = makeOrchestrator(fixture, {})
+    orchestrator.launch(launchInput({ cwd: fixture.repo }))
+    orchestrator.createTasks([{ id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['翻译'] }])
+    await orchestrator.dispatchNext()
+    expect(fixture.store.getTask('T-1')!.status).toBe('escalated')
+    const kinds = fixture.store.listEvents('M-1').map((e) => e.kind)
+    expect(kinds).toContain('task_escalated')
+    fixture.clockNow += 1
+    orchestrator.humanResolve('T-1', { outcome: 'blocked', note: '能力缺口，人工改配' })
+    expect(fixture.store.listEvents('M-1').map((e) => e.kind)).toContain('task_human_resolved')
+  })
+})
+
 describe('DoD-19：进度事件经 emitWorkerProgress 落 reply_id（事件→消息态重建）', () => {
   it('worker_progress 事件带 reply_id/seq，可按 slot+reply 聚合重建员工回复', async () => {
     const orchestrator = makeOrchestrator(fixture, {

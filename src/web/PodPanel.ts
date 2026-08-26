@@ -17,6 +17,7 @@ import {
   type PodEvent,
   type StatusResponse,
 } from './api.js'
+import { openEventStream } from './event-stream.js'
 
 const POLL_MS = 2000
 
@@ -87,19 +88,30 @@ export function PodPanel(): ReactElement {
     }
   }
 
+  const mergeEvents = (incoming: PodEvent[]): void => {
+    if (incoming.length === 0) return
+    lastTs.current = Math.max(lastTs.current, incoming[incoming.length - 1]!.ts)
+    setEvents((prev) => {
+      const seen = new Set(prev.map((e) => e.id))
+      const merged = [...prev, ...incoming.filter((e) => !seen.has(e.id))]
+      return merged.slice(-300)
+    })
+  }
+
   const poll = async (): Promise<void> => {
     try {
-      const [snapshot, tail] = await Promise.all([fetchStatus(), fetchEvents(lastTs.current)])
+      const snapshot = await fetchStatus()
       setStatus(snapshot)
-      if (tail.length > 0) {
-        lastTs.current = tail[tail.length - 1]!.ts
-        setEvents((prev) => {
-          const seen = new Set(prev.map((e) => e.id))
-          const merged = [...prev, ...tail.filter((e) => !seen.has(e.id))]
-          return merged.slice(-300)
-        })
-      }
       setError(null)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
+  const pollEvents = async (): Promise<void> => {
+    try {
+      const tail = await fetchEvents(lastTs.current)
+      mergeEvents(tail)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     }
@@ -107,8 +119,22 @@ export function PodPanel(): ReactElement {
 
   useEffect(() => {
     void poll()
-    const timer = setInterval(() => void poll(), POLL_MS)
-    return () => clearInterval(timer)
+    const statusTimer = setInterval(() => void poll(), POLL_MS)
+    // EV-2（AgentScope-I）：优先 SSE（replay + live）；失败回退 2s 事件轮询
+    let eventsTimer: ReturnType<typeof setInterval> | undefined
+    const stopStream = openEventStream(
+      (event) => mergeEvents([event]),
+      () => {
+        if (eventsTimer === undefined) eventsTimer = setInterval(() => void pollEvents(), POLL_MS)
+      },
+    )
+    // 先轮询一次补上 SSE 建立前的窗口（id 去重，安全）
+    void pollEvents()
+    return () => {
+      clearInterval(statusTimer)
+      if (eventsTimer !== undefined) clearInterval(eventsTimer)
+      stopStream()
+    }
   }, [])
 
   const handleLaunch = async (): Promise<void> => {

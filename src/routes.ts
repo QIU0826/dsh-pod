@@ -18,6 +18,13 @@ import { resolveAsset, contentTypeFor } from './core/asset-whitelist.js'
 import type { PlanTaskInput } from './core/orchestrator.js'
 import type { TaskType, Vendor } from './core/types.js'
 
+/** SSE 帧格式化（AgentScope-I / EV-2：replay 优先 + live 增量；测试可断言纯函数）。 */
+export function formatSseFrame(
+  event: { id: string; ts: number; kind: string; task_id?: string; slot_id?: string; payload: Record<string, unknown> },
+): string {
+  return `event: ${event.kind}\ndata: ${JSON.stringify(event)}\n\n`
+}
+
 function isLoopback(req: IncomingMessage): boolean {
   const address = req.socket.remoteAddress ?? ''
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
@@ -215,6 +222,49 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
         } catch (error) {
           writeJson(res, 404, { error: error instanceof Error ? error.message : String(error) })
         }
+      },
+    },
+    {
+      // AgentScope-I / EV-2（DC：SSE replay）：新订阅者先收 buffered history 再收 live。
+      // 数据源 = store（磁盘唯一事实源），replay + 1s 增量轮询；客户端按 id 去重。
+      kind: 'exact',
+      path: '/api/dsh-pod/events/stream',
+      handler: async (req, res) => {
+        if (!isLoopback(req)) {
+          writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        const current = service()
+        if (current === undefined) {
+          writeJson(res, 503, { error: 'pod runtime not initialized' })
+          return
+        }
+        res.writeHead(200, {
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-store',
+          connection: 'keep-alive',
+        })
+        res.write('retry: 2000\n\n')
+        let lastTs = 0
+        const push = (events: Array<{ id: string; ts: number; kind: string; task_id?: string; slot_id?: string; payload: Record<string, unknown> }>): void => {
+          for (const event of events) {
+            if (res.writableEnded) return
+            res.write(formatSseFrame(event))
+            if (event.ts > lastTs) lastTs = event.ts
+          }
+        }
+        // 1) replay：新订阅者先收 buffered history（不丢上下文）
+        push(current.eventsAfter(0))
+        // 2) live：增量轮询（ts 游标；客户端按 id 去重，容忍同 ts 重复帧）
+        const timer = setInterval(() => {
+          try {
+            push(current.eventsAfter(lastTs))
+          } catch {
+            /* 订阅期间 store 读取异常：保持连接，下轮重试 */
+          }
+        }, 1_000)
+        req.on('close', () => clearInterval(timer))
+        res.on('close', () => clearInterval(timer))
       },
     },
     {

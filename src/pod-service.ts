@@ -310,6 +310,23 @@ export class PodService {
     return [...new Set(roots)]
   }
 
+  /** 全量事件（SSE replay 用：无上限，新订阅者先收 buffered history 再收 live）。 */
+  eventsAfter(afterTs: number): Array<{ id: string; ts: number; kind: string; task_id?: string; slot_id?: string; payload: Record<string, unknown> }> {
+    const missions = this.store.listMissions().filter((m) => m.status !== 'done' && m.status !== 'aborted')
+    const events = missions.flatMap((m) => this.store.listEvents(m.id))
+    return events
+      .filter((e) => e.ts > afterTs)
+      .sort((a, b) => a.ts - b.ts)
+      .map((e) => ({
+        id: e.id,
+        ts: e.ts,
+        kind: e.kind,
+        task_id: e.task_id,
+        slot_id: e.slot_id,
+        payload: e.payload,
+      }))
+  }
+
   /** Canvas 事件流尾部（after=ts 游标；客户端按 id 去重）。 */
   eventsTail(afterTs: number): Array<{ id: string; ts: number; kind: string; task_id?: string; slot_id?: string; payload: Record<string, unknown> }> {
     const missions = this.store.listMissions().filter((m) => m.status !== 'done' && m.status !== 'aborted')
