@@ -299,6 +299,17 @@ export class PodService {
     }
   }
 
+  /** DoD-17（AS-4）：Canvas 资产读取白名单根集合 = mission cwd + 各员工 worktree 路径。 */
+  worktreeRoots(): string[] {
+    const active = this.store.getActiveMission()
+    if (active === undefined) return []
+    const roots = [active.cwd]
+    for (const slot of this.store.listSlots(active.id)) {
+      if (slot.worktree_path !== undefined && slot.worktree_path.length > 0) roots.push(slot.worktree_path)
+    }
+    return [...new Set(roots)]
+  }
+
   /** Canvas 事件流尾部（after=ts 游标；客户端按 id 去重）。 */
   eventsTail(afterTs: number): Array<{ id: string; ts: number; kind: string; task_id?: string; slot_id?: string; payload: Record<string, unknown> }> {
     const missions = this.store.listMissions().filter((m) => m.status !== 'done' && m.status !== 'aborted')

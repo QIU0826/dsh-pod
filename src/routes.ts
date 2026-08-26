@@ -11,7 +11,10 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
+import { lstatSync, realpathSync, readFileSync, existsSync } from 'node:fs'
+import { join } from 'node:path'
 import type { PodService } from './pod-service.js'
+import { resolveAsset, contentTypeFor } from './core/asset-whitelist.js'
 import type { PlanTaskInput } from './core/orchestrator.js'
 import type { TaskType, Vendor } from './core/types.js'
 
@@ -149,6 +152,69 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
         const after = Number(url.searchParams.get('after') ?? '0')
         const events = current.eventsTail(after)
         writeJson(res, 200, { events })
+      },
+    },
+    {
+      // DoD-17（AS-4，Berd-C）：Canvas 资产读取白名单——只读 mission worktree 根集合，
+      // 穿越（.. / 绝对路径 / 盘符 / 符号链接 / realpath 逃逸）全部 403。
+      kind: 'exact',
+      path: '/api/dsh-pod/assets',
+      handler: async (req, res) => {
+        if (!isLoopback(req)) {
+          writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        const current = service()
+        if (current === undefined) {
+          writeJson(res, 503, { error: 'pod runtime not initialized' })
+          return
+        }
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const rel = url.searchParams.get('path') ?? ''
+        const roots = current.worktreeRoots()
+        if (roots.length === 0) {
+          writeJson(res, 404, { error: 'no active mission worktree roots' })
+          return
+        }
+        const fsApi = {
+          isSymbolicLink: (abs: string): boolean => {
+            try {
+              return lstatSync(abs).isSymbolicLink()
+            } catch {
+              return false
+            }
+          },
+          realpath: (abs: string): string => {
+            try {
+              return realpathSync(abs)
+            } catch {
+              return abs
+            }
+          },
+          exists: (abs: string): boolean => {
+            try {
+              return existsSync(abs)
+            } catch {
+              return false
+            }
+          },
+        }
+        const resolution = resolveAsset(roots, rel, fsApi)
+        if (!resolution.ok) {
+          writeJson(res, 403, { error: `forbidden: ${resolution.reason}` })
+          return
+        }
+        try {
+          const bytes = readFileSync(join(resolution.abs))
+          res.writeHead(200, {
+            'content-type': contentTypeFor(rel),
+            'cache-control': 'no-store',
+            'x-content-type-options': 'nosniff',
+          })
+          res.end(bytes)
+        } catch (error) {
+          writeJson(res, 404, { error: error instanceof Error ? error.message : String(error) })
+        }
       },
     },
     {
