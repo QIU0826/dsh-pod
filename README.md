@@ -67,6 +67,7 @@ node scripts/demo-chain.mjs --repo <dir>   # 自定义靶场仓库
 | Canvas 第三栏·员工详情（W4/Berd-E 灰度 `canvas-third-column`） | ✅ | 员工状态灯（idle/working/waiting_approval/error/stopped/rate_limited 六色）+ 上下文占用 % + 账本（tokens 实测 + 等效美元 + 无价目标注）；status API 暴露 `canvas_third_column`。**开启**：`~/.dsh/pod/experiments.json` 加 `"canvas-third-column": true` |
 | 桌面通知（CR-01-10 Should） | ✅ | `src/core/notifier.ts`：事件流提取需人工动作信号（审批待批/转人工/预算熔断/mission 暂停）→ 宿主送达；kind+mission 去重窗口（默认 5 分钟）防轮询刷屏；pod-service maintenanceTick 增量游标扫描 + `notified` 计数 |
 | 暂停/恢复正式化（W4，方案书 113 行） | ✅ | `pod_pause`/`pod_resume` 工具：orchestrator 透传 mission 状态机（paused ↔ running/awaiting_approval，按 pending 审批卡决定恢复去向）；暂停后状态磁盘化，可恢复/复盘 |
+| 审批卡「记住规则」入口（W4，AgentScope-B 显式化） | ✅ | `approvals.decide` 增 `rememberRule`（默认 true）；`pod_approve` 增 `remember_rule` 参数 + Canvas 审批卡 confirm 勾选；false 时批准不生成同类免弹卡规则（每次仍弹卡） |
 
 ## 核心域层（src/core，全部纯逻辑 + 注入式副作用，可离线测试）
 
