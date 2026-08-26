@@ -66,6 +66,7 @@ node scripts/demo-chain.mjs --repo <dir>   # 自定义靶场仓库
 | 拓扑动画 + 自由画布（4.3，Berd-E 灰度 `topology-animation`） | ✅ | `TopologyCanvas` 组件：任务 DAG 分层布局 + SVG 状态着色 + 运行中流动虚线/脉冲光晕动画；自由画布模式可拖拽节点 + 手画 DAG（添加/删除草稿节点）；status API 暴露 `depends_on` 与 `experiments.topology_animation`；PodPanel 视图切换（看板/拓扑动画/自由画布）。**开启**：`~/.dsh/pod/experiments.json` 加 `"topology-animation": true` |
 | Canvas 第三栏·员工详情（W4/Berd-E 灰度 `canvas-third-column`） | ✅ | 员工状态灯（idle/working/waiting_approval/error/stopped/rate_limited 六色）+ 上下文占用 % + 账本（tokens 实测 + 等效美元 + 无价目标注）；status API 暴露 `canvas_third_column`。**开启**：`~/.dsh/pod/experiments.json` 加 `"canvas-third-column": true` |
 | 桌面通知（CR-01-10 Should） | ✅ | `src/core/notifier.ts`：事件流提取需人工动作信号（审批待批/转人工/预算熔断/mission 暂停）→ 宿主送达；kind+mission 去重窗口（默认 5 分钟）防轮询刷屏；pod-service maintenanceTick 增量游标扫描 + `notified` 计数 |
+| 暂停/恢复正式化（W4，方案书 113 行） | ✅ | `pod_pause`/`pod_resume` 工具：orchestrator 透传 mission 状态机（paused ↔ running/awaiting_approval，按 pending 审批卡决定恢复去向）；暂停后状态磁盘化，可恢复/复盘 |
 
 ## 核心域层（src/core，全部纯逻辑 + 注入式副作用，可离线测试）
 
