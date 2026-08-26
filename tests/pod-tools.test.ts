@@ -16,6 +16,8 @@ function fakeService() {
     getApproval: vi.fn(() => undefined),
     approveDispatchGate: vi.fn(),
     denyDispatchGate: vi.fn(),
+    pauseMission: vi.fn(),
+    resumeMission: vi.fn(),
     memoryWrite: vi.fn((input) => ({ id: 'MEM-1', owner_slot_id: input.owner_slot_id, type: input.type ?? 'fact', importance: input.importance ?? 3, tags: input.tags ?? [], content_ref: input.content_ref ?? '', live_ref: input.live_ref })),
     memoryQuery: vi.fn(() => []),
     memoryCorrect: vi.fn((id) => ({ id })),
@@ -45,8 +47,10 @@ describe('pod_* 工具注册面（3.3 节工具作用域清单，七件套）', 
       'pod_mem_correct',
       'pod_reassign',
       'pod_abort',
+      'pod_pause',
+      'pod_resume',
     ])
-    expect(tools).toHaveLength(11)
+    expect(tools).toHaveLength(13)
   })
 
   it('每个工具带参数 schema 与输出渲染（契约完整）', () => {
@@ -172,6 +176,19 @@ describe('工具薄壳行为（副作用全部走 PodService）', () => {
     const abortResult = await run(abort, { reason: 'stop' })
     expect(abortResult.aborted).toBe(true)
     expect(service.abort).toHaveBeenCalledWith('stop')
+  })
+
+  it('pod_pause / pod_resume 透传 service（W4 暂停/恢复）', async () => {
+    const service = fakeService()
+    const { tools } = makePodTools(service)
+    const pause = tools[11]!
+    const pauseResult = await run(pause, {})
+    expect(pauseResult.paused).toBe(true)
+    expect(service.pauseMission).toHaveBeenCalledTimes(1)
+    const resume = tools[12]!
+    const resumeResult = await run(resume, {})
+    expect(resumeResult.resumed).toBe(true)
+    expect(service.resumeMission).toHaveBeenCalledTimes(1)
   })
 
   it('pod_mem_write 调用 service.memoryWrite 并返回记录 id（v0.2 记忆三件套）', async () => {

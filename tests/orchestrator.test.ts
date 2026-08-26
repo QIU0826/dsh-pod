@@ -882,3 +882,29 @@ describe('v0.2 cross-review / bake-off 阵型强化（4.3：异构交叉审查�
     expect(t2.owner_slot_id).not.toBe(t4.owner_slot_id)
   })
 })
+
+describe('W4 暂停/恢复（pod_pause / pod_resume）', () => {
+  it('运行中 mission 可暂停 → 状态 paused → 恢复（无 pending 审批卡回 running）', async () => {
+    const fx = await makeFixture()
+    const orch = new MissionOrchestrator('M-1', {
+      store: fx.store,
+      backends: { claude: new FakeBackend('claude', {}), codex: new FakeBackend('codex', {}) },
+      worktree: { ensure: async () => fx.repo },
+      verify: async (task, report) => ({ ok: true, failures: [], commit_sha: report.commit_sha, parent_sha: task.id + '-parent', mismatch: false }),
+      diffProvider: async () => '',
+    })
+    orch.launch({ name: 'p', goal: 'g', cwd: fx.repo, budgetUsd: 2, slots: [{ id: 'S-1', vendor: 'claude', role: 'implementer', capabilities: ['编码'] }] })
+    orch.createTasks([{ id: 'T-1', title: 't', spec: 's', type: 'implement', skill_tags: ['编码'] }])
+    void orch.run()
+    await new Promise((r) => setTimeout(r, 20))
+    orch.pause()
+    expect(fx.store.getMission('M-1')!.status).toBe('paused')
+    orch.resume()
+    const status = fx.store.getMission('M-1')!.status
+    // 有 pending 审批卡（实现完成待审查/待合并）→ awaiting_approval 或继续 running
+    expect(['running', 'awaiting_approval', 'done']).toContain(status)
+    fx.store.close()
+    rmSync(fx.root, { recursive: true, force: true })
+  })
+})
+

@@ -251,6 +251,16 @@ export class PodService {
     return { staleApprovals: result.staleApprovals, watchdogFired: result.watchdogFired, notified }
   }
 
+  /** 暂停当前 mission（W4：运行中可暂停，状态磁盘化）。 */
+  pauseMission(): void {
+    this.requireOrchestrator().pause()
+  }
+
+  /** 恢复当前 mission（paused → 继续；取决于审批卡是否 pending）。 */
+  resumeMission(): void {
+    this.requireOrchestrator().resume()
+  }
+
   /** 转人工接管 + 恢复驱动（3.4 节）：人工裁决 escalated 任务后重新驱动 DAG。 */
   humanResolveAndResume(
     taskId: string,

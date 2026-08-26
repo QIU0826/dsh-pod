@@ -803,6 +803,16 @@ export class MissionOrchestrator {
     return this.approvals.decide(approvalId, 'approved', by)
   }
 
+  /** 暂停 mission（方案书 113 行/W4：可暂停/恢复；仅 running/awaiting_approval 可暂停）。 */
+  pause(): void {
+    this.missionMachine.pause()
+  }
+
+  /** 恢复 mission（paused → running 或 awaiting_approval，取决于有无 pending 审批卡）。 */
+  resume(): void {
+    this.missionMachine.resume()
+  }
+
   /** 模式 2 派发确认门：驳回一张 dispatch 卡（depends 任务转人工，不派发）。 */
   denyDispatchGate(approvalId: string, by: string, reason: string): ApprovalRequest {
     const approval = this.store.getApproval(approvalId)

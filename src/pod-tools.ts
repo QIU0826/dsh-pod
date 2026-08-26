@@ -480,6 +480,54 @@ export function makePodTools(service: PodService): PodToolBundle {
         }
       },
     }),
+    defineTool({
+      name: 'pod_pause',
+      description: '暂停当前 mission（运行中/待审批可暂停；状态磁盘化，可恢复）。触发词：Pod 暂停。',
+      parameters: {},
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            paused: { type: 'boolean', required: true },
+            message: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value: { paused: boolean; message: string }) => text(value.message),
+      },
+      async execute() {
+        try {
+          service.pauseMission()
+          return { paused: true, message: 'mission 已暂停' }
+        } catch (error) {
+          return { paused: false, message: error instanceof Error ? error.message : String(error) }
+        }
+      },
+    }),
+    defineTool({
+      name: 'pod_resume',
+      description: '恢复已暂停的 mission（paused → 继续运行/待审批，取决于 pending 审批卡）。触发词：Pod 恢复。',
+      parameters: {},
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            resumed: { type: 'boolean', required: true },
+            message: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value: { resumed: boolean; message: string }) => text(value.message),
+      },
+      async execute() {
+        try {
+          service.resumeMission()
+          return { resumed: true, message: 'mission 已恢复' }
+        } catch (error) {
+          return { resumed: false, message: error instanceof Error ? error.message : String(error) }
+        }
+      },
+    }),
   ]
   return { tools, names: tools.map((tool) => tool.name) }
 }
