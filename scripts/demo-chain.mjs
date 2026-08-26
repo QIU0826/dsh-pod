@@ -1,9 +1,12 @@
 /**
  * DSH-Pod W2 最小可演示链（CLI 级，无 UI）：
- *   真实 claude 员工实现小任务 → 真实 codex 员工独立 review → 审批卡生成
+ *   真实 claude 员工实现小任务 → 真实独立 review → 审批卡生成
  *
- * 用法（先 build）：node scripts/demo-chain.mjs [--repo <dir>]
- * 真实成本：claude 一次实现任务 + codex 一次 review（各一次 API 调用）。
+ * 用法（先 build）：
+ *   node scripts/demo-chain.mjs [--repo <dir>] [--reviewer claude|codex]
+ * 真实成本：claude 一次实现任务 + 审查者一次 review（各一次 API 调用）。
+ * 审查者默认 codex（跨厂商异构）；本机 codex 缺 code-mode host 时可用
+ *   --reviewer claude 走同厂商异槽独立 review（DoD-5 仍满足：S-1 ≠ S-2）。
  * 合并（apply_patch）属 W5 切片，本演示止于审批卡（方案书 4.2 节 W2 产物边界）。
  */
 import { execFileSync } from 'node:child_process'
@@ -21,6 +24,15 @@ const REPO_ROOT = process.argv.includes('--repo')
   ? process.argv[process.argv.indexOf('--repo') + 1]
   : join(process.cwd(), '..', 'pod-demo-repo')
 
+// 审查者 vendor：默认 codex（跨厂商异构）；--reviewer claude 走同厂商异槽独立 review
+const reviewerArg = process.argv.includes('--reviewer')
+  ? process.argv[process.argv.indexOf('--reviewer') + 1]
+  : 'codex'
+const REVIEWER = reviewerArg === 'claude' || reviewerArg === 'codex' ? reviewerArg : 'codex'
+if (reviewerArg !== 'claude' && reviewerArg !== 'codex') {
+  console.log('[demo] 警告：--reviewer 仅支持 claude|codex，已回落为 codex')
+}
+
 // Windows 专项（CR-02-4/新实证）：宿主 PATH 可能被外部改写，先修复
 repairPath()
 
@@ -36,7 +48,7 @@ if (!existsSync(REPO_ROOT)) {
   execFileSync('git', ['commit', '-m', 'init'], { cwd: REPO_ROOT })
 }
 
-// codex 二进制候选解析（PATH 滞后专项）
+// codex 二进制候选解析（PATH 滞后专项；仅审查者为 codex 时才实际派发到该后端）
 const codexBin = codexBinaryCandidates('win32').find((c) => existsSync(c)) ?? 'codex'
 
 const dataDir = join(homedir(), '.dsh', 'pod', 'demo')
@@ -118,7 +130,7 @@ const seen = new Set(store.listEvents('M-DEMO-1').map((e) => e.id))
 
 console.log('[demo] 靶场仓库:', REPO_ROOT)
 console.log('[demo] codex 二进制:', codexBin)
-console.log('[demo] 组队：S-1 claude(deepseek-v4-pro, 实现) × S-2 codex(独立 review)')
+console.log('[demo] 组队：S-1 claude(deepseek-v4-pro, 实现) × S-2 ' + REVIEWER + '(独立 review)')
 
 orch.launch({
   name: '最小可演示链',
@@ -127,8 +139,11 @@ orch.launch({
   budgetUsd: 3,
   slots: [
     { id: 'S-1', vendor: 'claude', role: 'implementer', capabilities: ['编码'], model: 'deepseek-v4-pro', session_tier: 'transient' },
-    // ChatGPT 桌面应用内置 Codex（CR-02-1 更新）：model 留空 → 走其 config.toml 默认（gpt-5.6-sol）
-    { id: 'S-2', vendor: 'codex', role: 'reviewer', capabilities: ['审查'], model: '', session_tier: 'transient' },
+    // 默认 codex（ChatGPT 桌面内置，model 留空走其 config.toml 默认 gpt-5.6-sol，CR-02-1）；
+    // --reviewer claude 时改走 claude 后端（同厂商异槽，DoD-5 独立 review 仍成立）
+    REVIEWER === 'codex'
+      ? { id: 'S-2', vendor: 'codex', role: 'reviewer', capabilities: ['审查'], model: '', session_tier: 'transient' }
+      : { id: 'S-2', vendor: 'claude', role: 'reviewer', capabilities: ['审查'], model: 'deepseek-v4-pro', session_tier: 'transient' },
   ],
 })
 orch.createTasks([
