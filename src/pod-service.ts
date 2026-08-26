@@ -311,11 +311,11 @@ export class PodService {
     slots: AgentSlot[]
     pendingApprovals: ApprovalRequest[]
     runStatus?: string
-    /** Berd-E 灰度开关（Canvas UI 据此显隐拓扑动画/自由画布，默认关、fail-closed）。 */
-    experiments: { topology_animation: boolean }
+    /** Berd-E 灰度开关（Canvas UI 据此显隐拓扑动画/自由画布/第三栏，默认关、fail-closed）。 */
+    experiments: { topology_animation: boolean; canvas_third_column: boolean }
   } {
     const active = this.store.getActiveMission()
-    if (active === undefined) return { tasks: [], slots: [], pendingApprovals: [], experiments: { topology_animation: this.experiments.isEnabled('topology-animation') } }
+    if (active === undefined) return { tasks: [], slots: [], pendingApprovals: [], experiments: { topology_animation: this.experiments.isEnabled('topology-animation'), canvas_third_column: this.experiments.isEnabled('canvas-third-column') } }
     const orch = this.requireOrchestrator()
     const snapshot = orch.status()
     return {
@@ -324,7 +324,7 @@ export class PodService {
       slots: snapshot.slots,
       pendingApprovals: snapshot.pendingApprovals,
       runStatus: this.running !== undefined ? 'running' : 'idle',
-      experiments: { topology_animation: this.experiments.isEnabled('topology-animation') },
+      experiments: { topology_animation: this.experiments.isEnabled('topology-animation'), canvas_third_column: this.experiments.isEnabled('canvas-third-column') },
     }
   }
 

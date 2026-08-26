@@ -35,7 +35,7 @@ export interface StatusResponse {
   tasks: StatusTask[]
   slots: StatusSlot[]
   pending_approvals: Array<{ id: string; summary: string; worktree_path: string }>
-  experiments: { topology_animation: boolean }
+  experiments: { topology_animation: boolean; canvas_third_column: boolean }
   ledger: Array<{
     slot_id: string
     task_id: string | null

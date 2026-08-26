@@ -56,6 +56,16 @@ const COL_LABEL: Record<string, string> = {
   escalated: '转人工',
 }
 
+/** 员工状态灯配色（方案书 174 行：idle/working/waiting_approval/error/stopped/rate_limited）。 */
+const SLOT_COLOR: Record<string, string> = {
+  idle: '#94a3b8',
+  working: '#22c55e',
+  waiting_approval: '#f59e0b',
+  error: '#ef4444',
+  stopped: '#64748b',
+  rate_limited: '#f97316',
+}
+
 /** DoD-9 预设阵型：一键填充 slots（与手输同构，产物等价可改）。 */
 const PRESETS: Array<{ id: string; label: string; slots: string }> = [
   { id: 'pair', label: '实现+审查（默认）', slots: 'claude implementer 编码; codex reviewer 审查' },
@@ -432,6 +442,33 @@ export function PodPanel(): ReactElement {
                   : undefined,
             }),
           ),
+    // v0.2 第三栏（Berd-E 灰度 key canvas-third-column）：员工状态灯 + 上下文占用 + 账本
+    status?.experiments?.canvas_third_column === true
+      ? createElement(
+          'div',
+          { style: { flex: 1, display: 'flex', flexDirection: 'column', gap: 8, minWidth: 220, border: '1px solid var(--ds-color-border, rgba(0,0,0,.12))', borderRadius: 6, padding: 6, overflow: 'auto' } },
+          createElement('div', { style: styles.colTitle }, '员工（状态灯）'),
+          (status?.slots ?? []).map((s) =>
+            createElement(
+              'div',
+              { key: s.id, style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, marginBottom: 4 } },
+              createElement('span', { style: { width: 8, height: 8, borderRadius: '50%', background: SLOT_COLOR[s.status] ?? '#94a3b8', display: 'inline-block' } }),
+              createElement('span', { style: { fontWeight: 600 } }, s.id),
+              createElement('span', { style: { color: 'var(--ds-color-text-2, #666)' } }, `${s.role} · ${s.vendor}`),
+              createElement('span', { style: { marginLeft: 'auto', fontSize: 10, color: 'var(--ds-color-text-2, #666)' } }, s.status),
+              createElement('span', { style: { fontSize: 10, color: 'var(--ds-color-text-2, #666)' } }, `${s.ctx_usage_pct}%`),
+            ),
+          ),
+          createElement('div', { style: { ...styles.colTitle, marginTop: 8 } }, '账本（tokens 实测 + 等效美元）'),
+          (status?.ledger ?? []).map((entry, i) =>
+            createElement(
+              'div',
+              { key: `${entry.slot_id}-${entry.ts}-${i}`, style: styles.ledgerLine },
+              `${formatTime(entry.ts)} ${entry.slot_id}${entry.task_id ? ` [${entry.task_id}]` : ''} · ${entry.model} · ${entry.tokens_in}/${entry.tokens_out}t · $${entry.equiv_usd.toFixed(4)}${entry.price_known ? '' : '(无价目)'}`,
+            ),
+          ),
+        )
+      : null,
       createElement(
         'div',
         { style: styles.events },
