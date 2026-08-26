@@ -148,7 +148,10 @@ export function PodPanel(): ReactElement {
   const mission = status?.mission
 
   const handleApprove = (approvalId: string): void => {
-    void runAction(() => postApprove(approvalId))
+    // AS-3（AgentScope-C）：批准前可编辑参数（merge note 备注，留痕在审批事件）
+    const note = window.prompt('批准合并（可选合并备注，直接回车放行）：', '')
+    const edited = note !== null && note.trim().length > 0 ? { merge_note: note.trim() } : undefined
+    void runAction(() => postApprove(approvalId, edited))
   }
 
   const handleDeny = (approvalId: string): void => {

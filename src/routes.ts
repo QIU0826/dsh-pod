@@ -232,8 +232,21 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
           writeJson(res, 422, { error: 'approval_id is required' })
           return
         }
+        // AS-3（AgentScope-C）：approve 可携带人工编辑参数（编辑参数后放行）
+        const editedRaw = body?.edited
+        const edited =
+          editedRaw !== undefined &&
+          typeof editedRaw === 'object' &&
+          editedRaw !== null &&
+          !Array.isArray(editedRaw)
+            ? (Object.fromEntries(
+                Object.entries(editedRaw as Record<string, unknown>).filter(
+                  (entry): entry is [string, string] => typeof entry[1] === 'string',
+                ),
+              ) as Record<string, string>)
+            : undefined
         // apply_patch 单入口：合并成功才裁决 mission done；冲突保持 awaiting_approval（CR-05-3）
-        const result = await current.approve(approvalId, 'canvas-ui')
+        const result = await current.approve(approvalId, 'canvas-ui', edited)
         if (!result.ok) {
           writeJson(res, result.conflict ? 409 : 404, { error: result.message, conflict: result.conflict })
           return

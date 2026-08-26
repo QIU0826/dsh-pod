@@ -151,10 +151,10 @@ export class MissionMachine {
    * 仅裁决审批卡 → approved，mission 状态不变（仍 awaiting_approval）。
    * ApplyPatch.apply 校验卡已 approved 后才执行 git merge。
    */
-  approveCard(approvalId: string, by: string): void {
+  approveCard(approvalId: string, by: string, editedParams?: Record<string, string>): void {
     const mission = this.getMission()
     this.guard(mission, 'approve')
-    this.approvals.decide(approvalId, 'approved', by)
+    this.approvals.decide(approvalId, 'approved', by, undefined, editedParams)
   }
 
   /** 合并成功 → mission done（卡已 approved，不再重复裁决）。 */

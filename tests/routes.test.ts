@@ -151,6 +151,67 @@ describe('pod 数据面路由（W3/W4）', () => {
     expect(launched).toHaveLength(1)
   })
 
+  it('POST /approve 携带 edited 参数（AS-3：编辑参数后放行）', async () => {
+    const approved: Array<{ id: string; edited?: Record<string, string> }> = []
+    const service = fakeService({
+      approve: (approvalId: string, _by: string, edited?: Record<string, string>) => {
+        approved.push({ id: approvalId, edited })
+        return Promise.resolve({ ok: true, mergeCommit: 'abc12345' })
+      },
+    })
+    const routes = makePodRoutes(() => service)
+    const approveRoute = routes.find((r) => r.path === '/api/dsh-pod/approve')!
+    const { res, written } = captureResponse()
+    const req = {
+      url: '/api/dsh-pod/approve',
+      method: 'POST',
+      socket: { remoteAddress: '127.0.0.1' },
+      [Symbol.asyncIterator]() {
+        const chunks = [Buffer.from(JSON.stringify({ approval_id: 'A-1', edited: { merge_note: '评审确认' } }))]
+        let index = 0
+        return {
+          next: () =>
+            index < chunks.length
+              ? Promise.resolve({ done: false, value: chunks[index++] })
+              : Promise.resolve({ done: true, value: undefined }),
+        }
+      },
+    } as unknown as IncomingMessage
+    await approveRoute.handler(req, res)
+    expect(written[0]!.status).toBe(200)
+    expect(approved).toEqual([{ id: 'A-1', edited: { merge_note: '评审确认' } }])
+  })
+
+  it('POST /approve 编辑参数只保留字符串键值（过滤非字符串，防注入）', async () => {
+    const approved: Array<{ id: string; edited?: Record<string, string> }> = []
+    const service = fakeService({
+      approve: (approvalId: string, _by: string, edited?: Record<string, string>) => {
+        approved.push({ id: approvalId, edited })
+        return Promise.resolve({ ok: true, mergeCommit: 'abc12345' })
+      },
+    })
+    const routes = makePodRoutes(() => service)
+    const approveRoute = routes.find((r) => r.path === '/api/dsh-pod/approve')!
+    const { res } = captureResponse()
+    const req = {
+      url: '/api/dsh-pod/approve',
+      method: 'POST',
+      socket: { remoteAddress: '127.0.0.1' },
+      [Symbol.asyncIterator]() {
+        const chunks = [Buffer.from(JSON.stringify({ approval_id: 'A-2', edited: { merge_note: 'ok', evil: 123, arr: [1] } }))]
+        let index = 0
+        return {
+          next: () =>
+            index < chunks.length
+              ? Promise.resolve({ done: false, value: chunks[index++] })
+              : Promise.resolve({ done: true, value: undefined }),
+        }
+      },
+    } as unknown as IncomingMessage
+    await approveRoute.handler(req, res)
+    expect(approved).toEqual([{ id: 'A-2', edited: { merge_note: 'ok' } }])
+  })
+
   it('非 loopback → 403（launch 触发真实 LLM 成本，信任面收窄）', async () => {
     const routes = makePodRoutes(() => fakeService())
     const launchRoute = routes.find((r) => r.path === '/api/dsh-pod/launch')!

@@ -636,8 +636,8 @@ export class MissionOrchestrator {
   }
 
   /** W5：仅裁决卡 approved（合并前确认，ApplyPatch 校验依赖此状态）。 */
-  approveCard(approvalId: string, by: string): void {
-    this.missionMachine.approveCard(approvalId, by)
+  approveCard(approvalId: string, by: string, editedParams?: Record<string, string>): void {
+    this.missionMachine.approveCard(approvalId, by, editedParams)
   }
 
   /** W5：合并成功 → mission done。 */
@@ -650,8 +650,18 @@ export class MissionOrchestrator {
     this.missionMachine.rollbackApproval(approvalId)
   }
 
+  /**
+   * 驳回 → 回到 running；AS-3（AgentScope-C）：deny 原因回灌 worker——
+   * 以 steer 指令形式排队给该审批卡的 owner slot（复用 CR-01-2 排队机制），
+   * 该员工下次派单必带，worker 上下文里能看到驳回原因。
+   */
   deny(approvalId: string, by: string, reason: string): void {
     this.missionMachine.deny(approvalId, by, reason)
+    const approval = this.store.getApproval(approvalId)
+    if (approval !== undefined && approval.patch.slot_id.length > 0) {
+      const feedback = `[审批驳回反馈] 你的实现被驳回（by ${by}）原因：${reason}。请据此修正后重新提交。`
+      this.steer(approval.patch.slot_id, feedback)
+    }
   }
 
   /** 中止 mission（终态；状态机裁决合法性）。 */

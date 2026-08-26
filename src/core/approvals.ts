@@ -77,7 +77,13 @@ export class ApprovalEngine {
   }
 
   /** 裁决审批卡。重复裁决 → ApprovalConflictError（防竞态/防误双击）。 */
-  decide(id: string, decision: 'approved' | 'denied', by: string, reason?: string): ApprovalRequest {
+  decide(
+    id: string,
+    decision: 'approved' | 'denied',
+    by: string,
+    reason?: string,
+    editedParams?: Record<string, string>,
+  ): ApprovalRequest {
     const approval = this.store.getApproval(id)
     if (approval === undefined) throw new NotFoundError('approval', id)
     if (approval.status !== 'pending') {
@@ -89,6 +95,8 @@ export class ApprovalEngine {
       decided_at: this.clock(),
       decided_by: by,
       deny_reason: decision === 'denied' ? reason : undefined,
+      // AS-3（AgentScope-C）：批准时可携带人工编辑参数（如 merge_note），审计留痕
+      edited_params: decision === 'approved' && editedParams !== undefined ? { ...editedParams } : approval.edited_params,
     }
     this.store.updateApproval(id, decided)
     this.store.updateMission(approval.mission_id, { approval_stale_at: undefined })
@@ -97,7 +105,10 @@ export class ApprovalEngine {
       mission_id: approval.mission_id,
       ts: this.clock(),
       kind: decision === 'approved' ? 'approval_approved' : 'approval_denied',
-      payload: { approval_id: id, by, reason },
+      payload:
+        decision === 'approved'
+          ? { approval_id: id, by, reason, edited_params: editedParams }
+          : { approval_id: id, by, reason },
     })
     return decided
   }

@@ -349,7 +349,7 @@ export class PodService {
     this.requireOrchestrator().steer(slotId, instruction)
   }
 
-  approve(approvalId: string, by: string): Promise<ApplyResult> {
+  approve(approvalId: string, by: string, editedParams?: Record<string, string>): Promise<ApplyResult> {
     const orch = this.requireOrchestrator()
     const approval = this.store.getApproval(approvalId)
     if (approval === undefined) {
@@ -358,7 +358,8 @@ export class PodService {
     // apply_patch 单入口（3.3 节不变量 3）：合并前必须已批准。
     // 先裁决卡 approved（mission 仍 awaiting_approval），ApplyPatch 校验通过后执行 merge；
     // 合并成功才 mission done；失败回滚卡 pending（可重试或驳回）。
-    orch.approveCard(approvalId, by)
+    // AS-3（AgentScope-C）：批准可携带人工编辑参数（如 merge_note），审计留痕。
+    orch.approveCard(approvalId, by, editedParams)
     const applyPatch = new ApplyPatch({ store: this.store, git: execGitRunner() })
     return applyPatch.apply(approval.mission_id, approval).then((result) => {
       if (result.ok) {

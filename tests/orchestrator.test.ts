@@ -454,6 +454,20 @@ describe('审批闭环', () => {
     expect(fixture.store.getMission('M-1')!.status).toBe('running')
     expect(fixture.store.getApproval(approval.id)!.deny_reason).toBe('测试没过')
   })
+
+  it('deny → 原因回灌 worker（AS-3：以 steer 指令排队给 owner slot，下次派单必带）', async () => {
+    const orchestrator = makeOrchestrator(fixture, {})
+    orchestrator.launch(launchInput({ cwd: fixture.repo }))
+    orchestrator.createTasks(plan())
+    await orchestrator.run()
+    const approval = fixture.store.listApprovals('M-1')[0]!
+    const slotId = approval.patch.slot_id
+    orchestrator.deny(approval.id, 'user', '实现与规格不符，请重做')
+    // steer 反馈事件已落盘，且带 owner slot 引用
+    const feedbackEvents = fixture.store.listEvents('M-1').filter((e) => e.kind === 'steer_queued' && e.slot_id === slotId)
+    expect(feedbackEvents.length).toBeGreaterThan(0)
+    expect(feedbackEvents[0]!.payload.instruction).toContain('实现与规格不符')
+  })
 })
 
 describe('watchdog 接线（任务空闲 kill + 故障分类）', () => {

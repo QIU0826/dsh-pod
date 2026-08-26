@@ -207,6 +207,8 @@ export interface ApprovalRequest {
   decided_at?: number
   decided_by?: string
   deny_reason?: string
+  /** AgentScope-C（AS-3）：批准时携带的人工编辑参数（如 merge_note），审计留痕。 */
+  edited_params?: Record<string, string>
 }
 
 /** 审批规则（2.6 节 v2.1 / CR-08 AgentScope-B：ApprovalRule 数据模型）。 */

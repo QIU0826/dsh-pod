@@ -268,6 +268,7 @@ export function makePodTools(service: PodService): PodToolBundle {
         decision: { type: 'string', required: true, enum: ['approve', 'deny'] },
         reason: { type: 'string', description: 'deny 时的原因（必填）' },
         by: { type: 'string', description: '决定人（默认 user）' },
+        edited: { type: 'object', description: 'approve 时的人工编辑参数（如 { merge_note: "…" }，AS-3/AgentScope-C）', additionalProperties: true },
       },
       output: {
         schema: {
@@ -286,7 +287,8 @@ export function makePodTools(service: PodService): PodToolBundle {
         }
         try {
           if (args.decision === 'approve') {
-            const result = await service.approve(args.approval_id, args.by ?? 'user')
+            const edited = args.edited !== undefined ? (args.edited as Record<string, string>) : undefined
+            const result = await service.approve(args.approval_id, args.by ?? 'user', edited)
             if (!result.ok) {
               return {
                 decided: false,

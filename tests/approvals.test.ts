@@ -112,6 +112,23 @@ describe('ApprovalEngine.decide', () => {
   it('decide 不存在的审批卡 → NotFoundError', () => {
     expect(() => engine.decide('A-nope', 'approved', 'user')).toThrowError(NotFoundError)
   })
+
+  it('approve 携带 edited_params（AS-3：编辑参数后放行，审计留痕）', () => {
+    const approval = engine.request('M-1', patch)
+    const decided = engine.decide(approval.id, 'approved', 'user', undefined, { merge_note: '评审确认过，放行' })
+    expect(decided.status).toBe('approved')
+    expect(decided.edited_params).toEqual({ merge_note: '评审确认过，放行' })
+    // 审批事件 payload 含 edited_params（Canvas 可展开查看）
+    const events = store.listEvents('M-1')
+    const approvedEvent = events.find((e) => e.kind === 'approval_approved')
+    expect(approvedEvent?.payload.edited_params).toEqual({ merge_note: '评审确认过，放行' })
+  })
+
+  it('approve 不带 edited_params → 不写该字段', () => {
+    const approval = engine.request('M-1', patch)
+    const decided = engine.decide(approval.id, 'approved', 'user')
+    expect(decided.edited_params).toBeUndefined()
+  })
 })
 
 describe('ApprovalEngine 恢复与过期', () => {
