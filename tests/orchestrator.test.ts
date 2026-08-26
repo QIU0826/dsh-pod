@@ -840,3 +840,45 @@ describe('v0.2 并行执行强化（双路+，dispatchBatch 填满 maxParallel�
     expect(fixture.store.getTask('T-2')!.status).toBe('done')
   })
 })
+
+describe('v0.2 cross-review / bake-off 阵型强化（4.3：异构交叉审查抓盲点）', () => {
+  // 双实现者（都带编码+审查能力）→ 并行实现 + 交叉互审（review 不派给被审实现者）
+  const twoCross = () => [
+    { id: 'S-1', vendor: 'claude' as const, role: 'implementer', capabilities: ['编码', '审查'], model: 'm', session_tier: 'per-mission' as const },
+    { id: 'S-2', vendor: 'codex' as const, role: 'implementer', capabilities: ['编码', '审查'], model: 'm', session_tier: 'transient' as const },
+  ]
+  const doneC = (id: string) => ({
+    exit: 'done' as const,
+    report: doneReport(id),
+    usage: { tokens_in: 10, tokens_out: 5, source: 'measured' as const },
+    artifacts: [],
+  })
+
+  it('cross-review 互审阵型：双实现并行 + 交叉审查，审查者≠实现者，质量门全过后进审批', async () => {
+    const orch = makeOrchestrator(fixture, {
+      'T-1': { delayMs: 30, completion: doneC('T-1') },
+      'T-2': { delayMs: 30, completion: doneC('T-2') },
+      'T-3': { delayMs: 30, completion: doneC('T-3') },
+      'T-4': { delayMs: 30, completion: doneC('T-4') },
+    })
+    orch.launch(launchInput({ cwd: fixture.repo, parallel: 2, slots: twoCross() }))
+    orch.createTasks([
+      { id: 'T-1', title: '实现A', spec: 's', type: 'implement', skill_tags: ['编码'] },
+      { id: 'T-2', title: '实现B', spec: 's', type: 'implement', skill_tags: ['编码'] },
+      { id: 'T-3', title: '互审 T-1', spec: '审A', type: 'review', skill_tags: ['审查'], depends_on: ['T-1'] },
+      { id: 'T-4', title: '互审 T-2', spec: '审B', type: 'review', skill_tags: ['审查'], depends_on: ['T-2'] },
+    ])
+    const summary = await orch.run()
+    expect(summary.status).toBe('awaiting_approval') // 双实现 + 双审查全过 → 质量门过
+    const t1 = fixture.store.getTask('T-1')!
+    const t2 = fixture.store.getTask('T-2')!
+    const t3 = fixture.store.getTask('T-3')!
+    const t4 = fixture.store.getTask('T-4')!
+    expect([t1.owner_slot_id, t2.owner_slot_id].sort()).toEqual(['M-1-S-1', 'M-1-S-2'].sort())
+    // 交叉：T-3 审 T-1（排除 S-1 实现者）→ S-2；T-4 审 T-2（排除 S-2 实现者）→ S-1
+    expect(t3.owner_slot_id).toBe('M-1-S-2')
+    expect(t4.owner_slot_id).toBe('M-1-S-1')
+    expect(t1.owner_slot_id).not.toBe(t3.owner_slot_id)
+    expect(t2.owner_slot_id).not.toBe(t4.owner_slot_id)
+  })
+})

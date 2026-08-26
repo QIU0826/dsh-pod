@@ -59,6 +59,8 @@ const PRESETS: Array<{ id: string; label: string; slots: string }> = [
   { id: 'pair', label: '实现+审查（默认）', slots: 'claude implementer 编码; codex reviewer 审查' },
   { id: 'fullstack', label: '实现+测试+审查', slots: 'claude implementer 编码; claude tester 测试; codex reviewer 审查' },
   { id: 'research', label: '调研+实现', slots: 'claude researcher 调研; claude implementer 编码' },
+  // v0.2 cross-review 阵型强化：双实现者交叉互审（异构 + 审查者≠实现者）
+  { id: 'cross', label: '双实现互审', slots: 'claude implementer 编码 审查; codex implementer 编码 审查' },
 ]
 
 function formatTime(ts: number): string {
@@ -144,7 +146,8 @@ export function PodPanel(): ReactElement {
       .filter(Boolean)
       .map((part, i) => {
         const [vendorRaw, roleRaw, ...rest] = part.split(/\s+/)
-        const capabilities = rest.length > 0 ? [rest.join(' ').replace(/^./, (c) => c.toUpperCase())] : []
+        // v0.2 阵型强化：capabilities 按空格拆为多能力（'编码 审查' → ['编码','审查']）
+        const capabilities = rest.map((w) => w.replace(/^./, (c) => c.toUpperCase()))
         const vendor = vendorRaw === 'codex' ? 'codex' : vendorRaw === 'dsh' ? 'dsh' : 'claude'
         return {
           id: `S-${i + 1}`,
