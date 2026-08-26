@@ -15,6 +15,7 @@ import { ApprovalEngine } from './core/approvals.js'
 import { ApplyPatch, execGitRunner, type ApplyResult } from './core/apply-patch.js'
 import { BackendsLock } from './core/backends-lock.js'
 import { Experiments } from './core/experiments.js'
+import { MemoryStore, type ReflectionResult } from './core/memory.js'
 import { PodError } from './core/errors.js'
 import { Ledger } from './core/ledger.js'
 import { MissionOrchestrator, type LaunchInput, type PlanTaskInput, type RunSummary } from './core/orchestrator.js'
@@ -23,7 +24,10 @@ import type { JsonStore } from './core/store.js'
 import { ClaudeHeadlessBackend } from './workers/claude-headless.js'
 import { CodexHeadlessBackend, codexBinaryCandidates } from './workers/codex-headless.js'
 import { repairPath } from './workers/preflight.js'
-import type { ApprovalRequest, ApprovalRule, AgentSlot, Mission, Task, Vendor, WorkerBackend } from './core/types.js'
+import type { ApprovalRequest, ApprovalRule, AgentSlot, MemoryRecord, MemoryRelation, Mission, Task, Vendor, WorkerBackend } from './core/types.js'
+
+/** 记忆后台 reflection 节流间隔（2.8.1：MT 周期内不频繁跑 pass）。 */
+export const REFLECTION_INTERVAL_MS = 60_000
 
 export interface PodServiceOptions {
   store: JsonStore
@@ -43,8 +47,11 @@ export class PodService {
   private readonly dataDir: string
   private orchestrator: MissionOrchestrator | undefined
   private running: Promise<RunSummary> | undefined
+  /** 记忆 reflection 节流（2.8.1：MT 周期内不频繁跑后台 pass）。 */
+  private lastReflectionAt = 0
   private commanderLauncher: CommanderLauncher | undefined
   private readonly experiments: Experiments
+  private readonly memory: MemoryStore
 
   constructor(options: PodServiceOptions) {
     this.store = options.store
@@ -53,6 +60,9 @@ export class PodService {
     // 灰度开关（Berd-E）：~/.dsh/pod/experiments.json，默认关、fail-closed；cheap load
     this.experiments = new Experiments({ filePath: join(this.dataDir, 'experiments.json') })
     this.experiments.load()
+    // 长期记忆子系统（2.8.1）：~/.dsh/pod/memory.json，主动策展 + 图谱 + reflection
+    this.memory = new MemoryStore({ filePath: join(this.dataDir, 'memory.json'), clock: this.clock })
+    this.memory.open()
     // Windows 专项：宿主 PATH 可能被外部程序改写（CR-03-7），worker spawn 前修复
     repairPath()
     this.backends = options.backends ?? {
@@ -205,6 +215,13 @@ export class PodService {
 
   /** 宿主周期巡检：watchdog + 审批超期（CR-05-6）。 */
   maintenanceTick(): { staleApprovals: string[]; watchdogFired: number } {
+    // 记忆后台 reflection（2.8.1：任务空闲/周期时合并重复、补 supports、剪枝过时）；
+    // 节流避免每 tick 都跑（默认 60s）。任务完成/空闲时由插件在空闲时段触发。
+    const now = this.clock()
+    if (now - this.lastReflectionAt >= REFLECTION_INTERVAL_MS) {
+      this.lastReflectionAt = now
+      this.memory.runReflection()
+    }
     if (this.orchestrator === undefined) return { staleApprovals: [], watchdogFired: 0 }
     return this.orchestrator.maintenanceTick()
   }
@@ -447,6 +464,28 @@ export class PodService {
 
   deleteRule(ruleId: string): void {
     this.store.deleteRule(ruleId)
+  }
+
+  // ── 记忆子系统（2.8.1：员工主动策展的「知识层」，pod_mem_* 工具宿主）──
+
+  memoryWrite(input: { owner_slot_id: string; type?: 'lesson' | 'pattern' | 'decision' | 'fact' | 'episode'; importance?: number; tags?: string[]; content_ref?: string; live_ref?: string }): MemoryRecord {
+    return this.memory.write(input)
+  }
+
+  memoryQuery(q: Parameters<MemoryStore['query']>[0]): MemoryRecord[] {
+    return this.memory.query(q)
+  }
+
+  memoryCorrect(id: string, patch: { type?: MemoryRecord['type']; importance?: number; tags?: string[]; content_ref?: string; live_ref?: string }, by?: string): MemoryRecord {
+    return this.memory.correct(id, patch, by)
+  }
+
+  memoryAddEdge(fromRecord: string, toRecord: string, relation: MemoryRelation): { id: string } {
+    return this.memory.addEdge(fromRecord, toRecord, relation)
+  }
+
+  memoryReflection(): ReflectionResult {
+    return this.memory.runReflection()
   }
 
   abort(reason: string): void {

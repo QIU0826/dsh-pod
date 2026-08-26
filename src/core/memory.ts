@@ -1,0 +1,337 @@
+/**
+ * 长期记忆子系统 —— 方案书 2.8.1 节（v2.1，借鉴 NVIDIA NOOA 记忆设计，CR-07）。
+ *
+ * 设计原则：记忆不是自动摘要管线，而是员工通过模型可调用工具主动策展的存储——
+ * 主动写入（pod_mem_write）/ 查询（pod_mem_query）/ 纠正（pod_mem_correct）；
+ * 类型化关系（supports/contradicts/derived-from）连成知识图谱而非平铺日志；
+ * 后台 reflection 合并/关联/剪枝（输入 = 主动写入的策展记录，非原始对话转录）。
+ *
+ * MVP（v0.2）持久化 = 单个人类可读 JSON 文件（~/.dsh/pod/memory.json，原子写，可备份/审计）；
+ * 与 3.9 节 Store 一致，SQLite 迁移时实现同一 MemoryStore 接口即可（O12 决策）。
+ *
+ * 关键纪律（CR-07-4）
+ *   - 只注入与当前任务相关（importance+标签+关系匹配）的记录，不做万能全量注入；
+ *   - 每个记忆工具能力测试走 pod_* 工具面（附录 F-18 自有资产），注册进 --allowedTools；
+ *   - 不自动摘要会话日志（违背本设计）；蒸馏/剪枝输入是主动策展记录。
+ */
+
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { MemoryRecord, MemoryRelation, MemoryType } from './types.js'
+
+export interface MemoryStoreOptions {
+  filePath: string
+  clock?: () => number
+  idFn?: () => string
+}
+
+/** 纠正（correct）的变更历史（审计留痕，CR-07：可追溯）。 */
+export interface MemoryChange {
+  ts: number
+  by?: string
+  patch: Record<string, unknown>
+}
+
+/** 写入口（importance 收 number，内部 clamp 到 1-5）。 */
+export interface MemoryWriteInput {
+  owner_slot_id: string
+  type?: MemoryType
+  importance?: number
+  tags?: string[]
+  content_ref?: string
+  live_ref?: string
+  ts?: number
+}
+
+/** 纠正口（importance 收 number，内部 clamp）。 */
+export interface MemoryPatch {
+  type?: MemoryType
+  importance?: number
+  tags?: string[]
+  content_ref?: string
+  live_ref?: string
+}
+
+export interface MemoryData {
+  schemaVersion: number
+  records: Record<string, MemoryRecord>
+  edges: Array<{ id: string; from_record: string; to_record: string; relation: MemoryRelation; ts: number }>
+  history: Record<string, MemoryChange[]>
+}
+
+export interface MemoryQuery {
+  owner_slot_id?: string
+  type?: MemoryType
+  tags?: string[]
+  /** 最低 importance（含），1-5。 */
+  importance_min?: number
+  relation?: MemoryRelation
+  /** 图谱遍历起点：返回与该记录相连的邻居及其边（含 relation 过滤）。 */
+  relates_to?: string
+  limit?: number
+}
+
+export interface ReflectionResult {
+  merged: number
+  supportsLinked: number
+  pruned: number
+}
+
+
+/**
+ * 记忆存储：JSON + 原子写（tmp→bak→rename），注入式副作用、可离线单测。
+ * 「多 agent 共享存储但各自拥有」——records 按 owner_slot_id 隔离，
+ * 查询可跨 owner 读公共经验（不传 owner_slot_id 即全量）。
+ */
+export class MemoryStore {
+  private readonly filePath: string
+  private readonly clock: () => number
+  private readonly idFn: () => string
+  private data: MemoryData | undefined
+
+  constructor(options: MemoryStoreOptions) {
+    this.filePath = options.filePath
+    this.clock = options.clock ?? (() => Date.now())
+    this.idFn = options.idFn ?? (() => `MEM-${this.clock()}-${Math.floor(Math.random() * 1e6)}`)
+  }
+
+  open(): void {
+    mkdirSync(dirname(this.filePath), { recursive: true })
+    if (!existsSync(this.filePath)) {
+      this.data = { schemaVersion: 1, records: {}, edges: [], history: {} }
+      this.persist()
+      return
+    }
+    try {
+      const parsed = JSON.parse(readFileSync(this.filePath, 'utf8')) as Partial<MemoryData>
+      this.data = {
+        schemaVersion: parsed.schemaVersion ?? 1,
+        records: (parsed.records as Record<string, MemoryRecord>) ?? {},
+        edges: (parsed.edges as MemoryData['edges']) ?? [],
+        history: (parsed.history as Record<string, MemoryChange[]>) ?? {},
+      }
+    } catch {
+      // 损坏的 memory.json 视为空（fail-closed），不阻断插件启动（与 store 一致）
+      this.data = { schemaVersion: 1, records: {}, edges: [], history: {} }
+    }
+  }
+
+  private require(): MemoryData {
+    if (this.data === undefined) throw new Error('memory store not opened: call open() first')
+    return this.data
+  }
+
+  private persist(): void {
+    const data = this.require()
+    const tmp = join(dirname(this.filePath), `.memory.tmp-${process.pid}`)
+    writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8')
+    if (existsSync(this.filePath)) renameSync(this.filePath, `${this.filePath}.bak`)
+    renameSync(tmp, this.filePath)
+  }
+
+  /** pod_mem_write：主动写入策展记录（type/importance/tags/content_ref/live_ref）。 */
+  write(input: MemoryWriteInput): MemoryRecord {
+    const data = this.require()
+    const now = this.clock()
+    const type: MemoryType = input.type ?? 'fact'
+    const importance = clampImportance(input.importance ?? 3)
+    const record: MemoryRecord = {
+      id: this.idFn(),
+      owner_slot_id: input.owner_slot_id,
+      type,
+      importance,
+      tags: input.tags ?? [],
+      content_ref: input.content_ref ?? '',
+      live_ref: input.live_ref,
+      ts: input.ts ?? now,
+      updated_ts: now,
+    }
+    data.records[record.id] = record
+    this.persist()
+    return record
+  }
+
+  get(id: string): MemoryRecord | undefined {
+    return this.require().records[id]
+  }
+
+  all(): MemoryRecord[] {
+    return Object.values(this.require().records)
+  }
+
+  /** pod_mem_query：按标签/类型/关系/owner/importance 查询 + 图谱遍历。 */
+  query(q: MemoryQuery = {}): MemoryRecord[] {
+    const data = this.require()
+    const records = Object.values(data.records)
+    let result = records.filter((r) => {
+      if (q.owner_slot_id !== undefined && r.owner_slot_id !== q.owner_slot_id) return false
+      if (q.type !== undefined && r.type !== q.type) return false
+      if (q.importance_min !== undefined && r.importance < q.importance_min) return false
+      if (q.tags !== undefined && q.tags.length > 0 && !q.tags.every((t) => r.tags.includes(t))) return false
+      return true
+    })
+    // 图谱遍历：relates_to → 沿边找到邻居记录（relation 可选过滤）
+    if (q.relates_to !== undefined) {
+      const neighborIds = new Set<string>()
+      for (const edge of data.edges) {
+        if (q.relation !== undefined && edge.relation !== q.relation) continue
+        if (edge.from_record === q.relates_to) neighborIds.add(edge.to_record)
+        if (edge.to_record === q.relates_to) neighborIds.add(edge.from_record)
+      }
+      result = result.filter((r) => neighborIds.has(r.id))
+    } else if (q.relation !== undefined) {
+      // 无起点时按关系过滤：返回参与该关系的记录
+      const involved = new Set<string>()
+      for (const edge of data.edges) {
+        if (edge.relation === q.relation) {
+          involved.add(edge.from_record)
+          involved.add(edge.to_record)
+        }
+      }
+      result = result.filter((r) => involved.has(r.id))
+    }
+    if (q.limit !== undefined) result = result.slice(0, q.limit)
+    return result
+  }
+
+  /** pod_mem_correct：纠正/更新记录，保留变更历史（可审计）。 */
+  correct(id: string, patch: MemoryPatch, by?: string): MemoryRecord {
+    const data = this.require()
+    const existing = data.records[id]
+    if (existing === undefined) throw new Error(`memory record not found: ${id}`)
+    const now = this.clock()
+    const update: MemoryRecord = {
+      ...existing,
+      type: patch.type ?? existing.type,
+      importance: patch.importance !== undefined ? clampImportance(patch.importance) : existing.importance,
+      tags: patch.tags ?? existing.tags,
+      content_ref: patch.content_ref ?? existing.content_ref,
+      live_ref: patch.live_ref !== undefined ? patch.live_ref : existing.live_ref,
+      updated_ts: now,
+    }
+    data.records[id] = update
+    const hist = data.history[id] ?? (data.history[id] = [])
+    hist.push({ ts: now, by, patch: diffRecord(existing, update) })
+    this.persist()
+    return update
+  }
+
+  historyOf(id: string): MemoryChange[] {
+    return this.require().history[id] ?? []
+  }
+
+  addEdge(fromRecord: string, toRecord: string, relation: MemoryRelation): { id: string } {
+    const data = this.require()
+    if (data.records[fromRecord] === undefined || data.records[toRecord] === undefined) {
+      throw new Error('memory edge requires both endpoints to exist')
+    }
+    const edge = { id: `ME-${this.clock()}-${Math.floor(Math.random() * 1e6)}`, from_record: fromRecord, to_record: toRecord, relation, ts: this.clock() }
+    data.edges.push(edge)
+    this.persist()
+    return { id: edge.id }
+  }
+
+  removeEdge(edgeId: string): void {
+    const data = this.require()
+    const idx = data.edges.findIndex((e) => e.id === edgeId)
+    if (idx < 0) throw new Error(`memory edge not found: ${edgeId}`)
+    data.edges.splice(idx, 1)
+    this.persist()
+  }
+
+  edges(): Array<{ id: string; from_record: string; to_record: string; relation: MemoryRelation; ts: number }> {
+    return this.require().edges
+  }
+
+  /**
+   * 后台 reflection pass（复用 maintenanceTick 基础设施）：
+   *   1) 合并同 owner+type+content_ref 的重复记录（保留最新，其余并入其历史）；
+   *   2) 自动补 supports 边（同 owner 且共享 ≥2 标签的记录对）；
+   *   3) 剪枝 importance<pruneMin 且 updated 早于 cutOff 且无任何边的过时记录。
+   * 输入 = 主动写入的策展记录（非原始对话转录）；不做自动摘要（CR-07-4）。
+   */
+  runReflection(opts: { pruneMinImportance?: number; staleMaxMs?: number; autoLinkMinSharedTags?: number } = {}): ReflectionResult {
+    const data = this.require()
+    const pruneMin = opts.pruneMinImportance ?? 2
+    const staleMax = opts.staleMaxMs ?? 30 * 24 * 60 * 60 * 1000
+    const minShared = opts.autoLinkMinSharedTags ?? 2
+    const now = this.clock()
+    let merged = 0
+    let supportsLinked = 0
+    const ids = Object.keys(data.records)
+    // 1) 合并重复：同 owner+type+content_ref，保留 updated_ts 最新者
+    const keyOf = (r: MemoryRecord) => `${r.owner_slot_id}|${r.type}|${r.content_ref}`
+    const latest: Record<string, MemoryRecord> = {}
+    const order = ids.sort((a, b) => (data.records[a]!.updated_ts - data.records[b]!.updated_ts))
+    for (const id of order) {
+      const rec = data.records[id]!
+      const key = keyOf(rec)
+      const cur = latest[key]
+      if (cur === undefined) {
+        latest[key] = rec
+      } else {
+        // 并入历史后删除副本
+        const hist = data.history[rec.id] ?? (data.history[rec.id] = [])
+        hist.push({ ts: now, by: 'reflection', patch: { _merged_into: cur.id } })
+        delete data.records[rec.id]
+        data.edges = data.edges.filter((e) => e.from_record !== rec.id && e.to_record !== rec.id)
+        merged++
+      }
+    }
+    // 2) 自动补 supports 边（同 owner + 共享 ≥2 标签）
+    const recs = Object.values(data.records)
+    for (let i = 0; i < recs.length; i++) {
+      for (let j = i + 1; j < recs.length; j++) {
+        const a = recs[i]!
+        const b = recs[j]!
+        if (a.owner_slot_id !== b.owner_slot_id) continue
+        const shared = a.tags.filter((t) => b.tags.includes(t)).length
+        if (shared < minShared) continue
+        const exists = data.edges.some((e) =>
+          (e.from_record === a.id && e.to_record === b.id) || (e.from_record === b.id && e.to_record === a.id)
+        )
+        if (!exists) {
+          data.edges.push({ id: `ME-${now}-${supportsLinked}`, from_record: a.id, to_record: b.id, relation: 'supports', ts: now })
+          supportsLinked++
+        }
+      }
+    }
+    // 3) 剪枝：importance < pruneMin 且超过 staleMax 未更新且无边
+    let pruned = 0
+    for (const id of Object.keys(data.records)) {
+      const rec = data.records[id]!
+      const hasEdge = data.edges.some((e) => e.from_record === id || e.to_record === id)
+      if (rec.importance < pruneMin && now - rec.updated_ts > staleMax && !hasEdge) {
+        const hist = data.history[rec.id] ?? (data.history[rec.id] = [])
+        hist.push({ ts: now, by: 'reflection', patch: { _pruned: true } })
+        delete data.records[id]
+        pruned++
+      }
+    }
+    this.persist()
+    return { merged, supportsLinked, pruned }
+  }
+
+  flush(): void {
+    this.persist()
+  }
+
+  close(): void {
+    this.data = undefined
+  }
+}
+
+function clampImportance(v: number): 1 | 2 | 3 | 4 | 5 {
+  const n = Math.max(1, Math.min(5, Math.round(v)))
+  return n as 1 | 2 | 3 | 4 | 5
+}
+
+function diffRecord(before: MemoryRecord, after: MemoryRecord): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  if (before.type !== after.type) out.type = after.type
+  if (before.importance !== after.importance) out.importance = after.importance
+  if (before.content_ref !== after.content_ref) out.content_ref = after.content_ref
+  if (before.live_ref !== after.live_ref) out.live_ref = after.live_ref
+  if (JSON.stringify(before.tags) !== JSON.stringify(after.tags)) out.tags = after.tags
+  return out
+}

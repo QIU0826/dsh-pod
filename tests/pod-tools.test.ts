@@ -16,6 +16,9 @@ function fakeService() {
     getApproval: vi.fn(() => undefined),
     approveDispatchGate: vi.fn(),
     denyDispatchGate: vi.fn(),
+    memoryWrite: vi.fn((input) => ({ id: 'MEM-1', owner_slot_id: input.owner_slot_id, type: input.type ?? 'fact', importance: input.importance ?? 3, tags: input.tags ?? [], content_ref: input.content_ref ?? '', live_ref: input.live_ref })),
+    memoryQuery: vi.fn(() => []),
+    memoryCorrect: vi.fn((id) => ({ id })),
   } as unknown as PodService
 }
 
@@ -28,7 +31,7 @@ async function run(
 }
 
 describe('pod_* 工具注册面（3.3 节工具作用域清单，七件套）', () => {
-  it('七个工具按方案书清单注册', () => {
+  it('十个 pod_* 工具按方案书清单注册（含 v0.2 记忆三件套）', () => {
     const { tools, names } = makePodTools(fakeService())
     expect(names).toEqual([
       'pod_launch',
@@ -37,9 +40,12 @@ describe('pod_* 工具注册面（3.3 节工具作用域清单，七件套）', 
       'pod_collect',
       'pod_steer',
       'pod_approve',
+      'pod_mem_write',
+      'pod_mem_query',
+      'pod_mem_correct',
       'pod_abort',
     ])
-    expect(tools).toHaveLength(7)
+    expect(tools).toHaveLength(10)
   })
 
   it('每个工具带参数 schema 与输出渲染（契约完整）', () => {
@@ -161,10 +167,38 @@ describe('工具薄壳行为（副作用全部走 PodService）', () => {
     const dispatchResult = await run(dispatch, {})
     expect(dispatchResult.dispatched).toBe(true)
 
-    const abort = tools[6]!
+    const abort = tools[9]!
     const abortResult = await run(abort, { reason: 'stop' })
     expect(abortResult.aborted).toBe(true)
     expect(service.abort).toHaveBeenCalledWith('stop')
+  })
+
+  it('pod_mem_write 调用 service.memoryWrite 并返回记录 id（v0.2 记忆三件套）', async () => {
+    const service = fakeService()
+    const { tools } = makePodTools(service)
+    const w = tools[6]!
+    const result = await run(w, { owner_slot_id: 'S-1', tags: ['x'], content_ref: '经验', importance: 5 })
+    expect(result.id).toBe('MEM-1')
+    expect(service.memoryWrite).toHaveBeenCalledTimes(1)
+  })
+
+  it('pod_mem_query 调用 service.memoryQuery 返回记录数组', async () => {
+    const service = fakeService()
+    const { tools } = makePodTools(service)
+    const q = tools[7]!
+    const result = await run(q, { type: 'lesson', importance_min: 3 })
+    expect(Array.isArray(result.records)).toBe(true)
+    expect(service.memoryQuery).toHaveBeenCalledTimes(1)
+  })
+
+  it('pod_mem_correct 调用 service.memoryCorrect（默认 by=user，审计留痕）', async () => {
+    const service = fakeService()
+    const { tools } = makePodTools(service)
+    const c = tools[8]!
+    const result = await run(c, { id: 'MEM-1', content_ref: '新', importance: 4 })
+    expect(result.corrected).toBe(true)
+    expect(service.memoryCorrect).toHaveBeenCalledWith('MEM-1', expect.objectContaining({ content_ref: '新', importance: 4 }), 'user')
+    expect(service.memoryCorrect).toHaveBeenCalledTimes(1)
   })
 
   it('服务抛错 → 工具返回结构化失败而非抛出（错误不越界）', async () => {
@@ -173,7 +207,7 @@ describe('工具薄壳行为（副作用全部走 PodService）', () => {
       throw new Error('INVALID_TRANSITION')
     })
     const { tools } = makePodTools(service)
-    const abort = tools[6]!
+    const abort = tools[9]!
     const result = await run(abort, {})
     expect(result.aborted).toBe(false)
     expect(result.message).toContain('INVALID_TRANSITION')

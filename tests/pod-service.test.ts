@@ -95,4 +95,17 @@ describe('PodService 宿主闭环（CR-05-6）', () => {
     service.deleteRule(rule.id)
     expect(service.listRules()).toHaveLength(0)
   })
+
+  it('记忆子系统：memoryWrite→memoryQuery 往返 + correct 留痕 + maintenanceTick 触发 reflection', () => {
+    const rec = service.memoryWrite({ owner_slot_id: 'S-1', type: 'lesson', tags: ['a', 'b'], content_ref: '经验' })
+    service.memoryWrite({ owner_slot_id: 'S-1', type: 'lesson', tags: ['a', 'b'], content_ref: '经验' }) // 重复 → 待合并
+    expect(service.memoryQuery({ owner_slot_id: 'S-1' })).toHaveLength(2)
+    // maintenanceTick 触发节流 reflection → 合并重复
+    const tick = service.maintenanceTick()
+    expect(tick).toEqual({ staleApprovals: [], watchdogFired: 0 })
+    expect(service.memoryQuery({ owner_slot_id: 'S-1' })).toHaveLength(1)
+    // correct 更新并审计留痕
+    const updated = service.memoryCorrect(rec.id, { importance: 5 }, 'user')
+    expect(updated.importance).toBe(5)
+  })
 })

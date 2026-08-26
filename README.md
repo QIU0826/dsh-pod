@@ -51,6 +51,13 @@ node scripts/demo-chain.mjs --repo <dir>   # 自定义靶场仓库
 ⚠️ `--reviewer` 仅支持 `claude|codex`，传入其他值会警告并回落为 `codex`。
 真实跑通「实现 → 独立 review → 审批卡」链；合并（apply_patch）属 W5 切片，本演示止于审批卡。
 
+## v0.2 切片（灰度，经 `~/.dsh/pod/experiments.json` 开关，默认全关）
+
+| 切片 | 状态 | 说明 |
+|---|---|---|
+| 审批模式 2/3 经 experiments 灰度接入（Berd-E） | ✅ | `launch approvalMode` 校验：模式 2（交接确认，跨 agent 派活前弹卡）/ 模式 3（全自动，质量门通过即 done）需对应 `approval-mode-2`/`approval-mode-3` 开关开启；默认模式 1 行为不变；dispatch 卡经 `pod_approve` 分支裁决 |
+| 记忆子系统 2.8.1（CR-07 / NOOA 借鉴） | ✅ | `src/core/memory.ts`：MemoryStore（`~/.dsh/pod/memory.json` 原子写）+ 类型化图谱（supports/contradicts/derived-from）+ 三工具 `pod_mem_write/query/correct` + 后台 reflection（合并/补边/剪枝，接入 maintenanceTick） |
+
 ## 核心域层（src/core，全部纯逻辑 + 注入式副作用，可离线测试）
 
 | 模块 | 职责 | 方案书落点 |
@@ -65,6 +72,8 @@ node scripts/demo-chain.mjs --repo <dir>   # 自定义靶场仓库
 | `dispatcher.ts` | 能力 > 负载 > 成本 路由 | 3.3 |
 | `session-tiers.ts` | 三档会话生命周期 + 70% 重置摘要 | 3.2/CR-01-6 同源 |
 | `watchdog.ts` | commander/任务空闲/墙钟，纯 tick 驱动，审批期挂起（CR-01-4） | 3.3/3.4 |
+| `experiments.ts` | 灰度开关框架（~/.dsh/pod/experiments.json，默认关、fail-closed） | 3.4 Experiment/Berd-E |
+| `memory.ts` | 长期记忆子系统（主动策展 + 图谱 + reflection） | 2.8.1/CR-07 |
 
 `src/workers/`：preflight 环境探测（附录 D 十项，`.cmd` 包装器 shell 回退——Windows 专项）+ 进程注册表。
 `src/charters/`：内置角色章程（数据不是代码，可被用户 `~/.dsh/pod/charters/` 覆盖）。

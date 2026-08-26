@@ -28,10 +28,11 @@
 
 - `src/core/` —— 纯逻辑域层，注入式副作用，可离线单测（store / task-machine / mission /
   approvals / ledger / handoff / verifier / dispatcher / session-tiers / watchdog /
-  orchestrator / events / asset-whitelist / apply-patch / backends-lock / permission-rules / ...）
+  orchestrator / events / asset-whitelist / apply-patch / backends-lock / permission-rules /
+  experiments（灰度开关）/ memory（2.8.1 长期记忆 + 图谱 + reflection）/ ...）
 - `src/workers/` —— 真实后端（claude-headless / codex-headless）+ preflight 环境探测（Windows 专项）
 - `src/web/` —— 浏览器插件（client.ts / api.ts / event-stream.ts / PodPanel.ts）
-- `src/pod-tools.ts` —— pod_* 工具注册（薄壳调用，状态机裁决一切迁移）
+- `src/pod-tools.ts` —— pod_* 工具注册（薄壳调用，状态机裁决一切迁移；含 v0.2 记忆三件套 pod_mem_write/query/correct）
 - `src/routes.ts` —— /api/dsh-pod/* HTTP 路由（loopback-only）
 - `src/plugin.ts` —— 宿主入口（PodRuntime + 健康路由）
 - `scripts/` —— demo-chain / bakeoff-all / bakeoff-run（产物留 reports/）

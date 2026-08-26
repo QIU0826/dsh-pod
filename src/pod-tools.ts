@@ -322,6 +322,107 @@ export function makePodTools(service: PodService): PodToolBundle {
     }),
 
     defineTool({
+      name: 'pod_mem_write',
+      description: '主动写入长期记忆记录（2.8.1 知识层）：type/importance/tags/content_ref/live_ref，owner_slot_id 隔离。触发词：记经验 / 记住。',
+      parameters: {
+        owner_slot_id: { type: 'string', required: true, description: '拥有者槽位' },
+        type: { type: 'string', enum: ['lesson', 'pattern', 'decision', 'fact', 'episode'] },
+        importance: { type: 'number', description: '1-5，越高越重要' },
+        tags: { type: 'array', items: { type: 'string' } },
+        content_ref: { type: 'string', description: '内容引用（文件/路径/摘要，非原始对话转录）' },
+        live_ref: { type: 'string', description: '可选实时状态引用（live_ref：非快照）' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            id: { type: 'string', required: true },
+            message: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value: { id: string; message: string }) => text('已写入记忆 ' + value.id + '：' + value.message),
+      },
+      async execute(args, _exec) {
+        const rec = service.memoryWrite({
+          owner_slot_id: args.owner_slot_id,
+          type: args.type as 'lesson' | 'pattern' | 'decision' | 'fact' | 'episode' | undefined,
+          importance: args.importance as number | undefined,
+          tags: args.tags as string[] | undefined,
+          content_ref: args.content_ref as string | undefined,
+          live_ref: args.live_ref as string | undefined,
+        })
+        return { id: rec.id, message: rec.content_ref || rec.type }
+      },
+    }),
+
+    defineTool({
+      name: 'pod_mem_query',
+      description: '查询记忆图谱：按 owner/type/tags/importance，或沿 supports/contradicts/derived-from 遍历。仅返回结构化记录，不含原始对话。触发词：查经验 / 记忆。',
+      parameters: {
+        owner_slot_id: { type: 'string' },
+        type: { type: 'string', enum: ['lesson', 'pattern', 'decision', 'fact', 'episode'] },
+        tags: { type: 'array', items: { type: 'string' } },
+        importance_min: { type: 'number' },
+        relation: { type: 'string', enum: ['supports', 'contradicts', 'derived-from'] },
+        relates_to: { type: 'string', description: '图谱遍历起点记录 id' },
+        limit: { type: 'number' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            records: { type: 'array', required: true },
+            message: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value: { records: Array<{ id: string }>; message: string }) => text(value.message + '：' + value.records.map((r) => r.id).join(', ')),
+      },
+      async execute(args, _exec) {
+        const records = service.memoryQuery(args as never)
+        return {
+          records: records.map((r) => ({ id: r.id, owner_slot_id: r.owner_slot_id, type: r.type, importance: r.importance, tags: r.tags, content_ref: r.content_ref, live_ref: r.live_ref ?? null })),
+          message: '返回 ' + records.length + ' 条记忆',
+        }
+      },
+    }),
+
+    defineTool({
+      name: 'pod_mem_correct',
+      description: '纠正/更新记忆记录（保留变更历史，可审计）。触发词：纠正记忆 / 改记忆。',
+      parameters: {
+        id: { type: 'string', required: true },
+        type: { type: 'string', enum: ['lesson', 'pattern', 'decision', 'fact', 'episode'] },
+        importance: { type: 'number', description: '1-5' },
+        tags: { type: 'array', items: { type: 'string' } },
+        content_ref: { type: 'string' },
+        live_ref: { type: 'string' },
+        by: { type: 'string', description: '变更人（默认 user，审计留痕）' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            corrected: { type: 'boolean', required: true },
+            message: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value: { corrected: boolean; message: string }) => text(value.message),
+      },
+      async execute(args, _exec) {
+        const rec = service.memoryCorrect(args.id, {
+          type: args.type as 'lesson' | 'pattern' | 'decision' | 'fact' | 'episode' | undefined,
+          importance: args.importance as number | undefined,
+          tags: args.tags as string[] | undefined,
+          content_ref: args.content_ref as string | undefined,
+          live_ref: args.live_ref as string | undefined,
+        }, (args.by as string | undefined) ?? 'user')
+        return { corrected: true, message: '记忆 ' + rec.id + ' 已更新（变更历史已留痕）' }
+      },
+    }),
+    defineTool({
       name: 'pod_abort',
       description: '中止当前 mission（终态，不可恢复）；所有运行中的员工进程会被终止。触发词：Pod 中止 / 终止 mission。',
       parameters: {
