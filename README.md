@@ -68,6 +68,7 @@ node scripts/demo-chain.mjs --repo <dir>   # 自定义靶场仓库
 | 桌面通知（CR-01-10 Should） | ✅ | `src/core/notifier.ts`：事件流提取需人工动作信号（审批待批/转人工/预算熔断/mission 暂停）→ 宿主送达；kind+mission 去重窗口（默认 5 分钟）防轮询刷屏；pod-service maintenanceTick 增量游标扫描 + `notified` 计数 |
 | 暂停/恢复正式化（W4，方案书 113 行） | ✅ | `pod_pause`/`pod_resume` 工具：orchestrator 透传 mission 状态机（paused ↔ running/awaiting_approval，按 pending 审批卡决定恢复去向）；暂停后状态磁盘化，可恢复/复盘 |
 | 审批卡「记住规则」入口（W4，AgentScope-B 显式化） | ✅ | `approvals.decide` 增 `rememberRule`（默认 true）；`pod_approve` 增 `remember_rule` 参数 + Canvas 审批卡 confirm 勾选；false 时批准不生成同类免弹卡规则（每次仍弹卡） |
+| 工具级 middleware 审计钩子（AgentScope-E，Should） | ✅ | 每个 pod_* 工具 execute 包审计：调用后 `recordToolAudit`（`pod_tool_called` 事件，含 tool/ok/ms/error）；wrapTool 纯横切不改变返回值 |
 
 ## 核心域层（src/core，全部纯逻辑 + 注入式副作用，可离线测试）
 
