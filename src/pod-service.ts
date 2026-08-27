@@ -257,6 +257,19 @@ export class PodService {
     return { staleApprovals: result.staleApprovals, watchdogFired: result.watchdogFired, notified }
   }
 
+  /** 工具调用审计（AgentScope-E middleware 钩子）：落一条 pod_tool_called 事件（有 active mission 时）。 */
+  recordToolAudit(entry: { tool: string; ok: boolean; ms: number; error?: string }): void {
+    const missionId = this.store.getActiveMission()?.id
+    if (missionId === undefined) return
+    this.store.appendEvent(missionId, {
+      id: `ev-tool-${this.clock()}-${Math.floor(Math.random() * 1e6)}`,
+      mission_id: missionId,
+      ts: this.clock(),
+      kind: 'pod_tool_called',
+      payload: { tool: entry.tool, ok: entry.ok, ms: entry.ms, error: entry.error },
+    })
+  }
+
   /** 暂停当前 mission（W4：运行中可暂停，状态磁盘化）。 */
   pauseMission(): void {
     this.requireOrchestrator().pause()

@@ -530,7 +530,32 @@ export function makePodTools(service: PodService): PodToolBundle {
       },
     }),
   ]
-  return { tools, names: tools.map((tool) => tool.name) }
+  // AgentScope-E 工具级 middleware（Should 落地）：每个 pod_* 工具 execute 包审计钩子——
+  // 调用前记开始、调用后记耗时/成败（service.recordToolAudit → pod_tool_called 事件）。
+  // 薄壳边界保持：wrapTool 只做横切记账，不改变工具返回值。
+  const audited = tools.map((tool) => {
+    const inner = tool.execute
+    return {
+      ...tool,
+      execute: (async (args: never, exec: never) => {
+        const started = Date.now()
+        try {
+          const result = await inner(args, exec)
+          service.recordToolAudit({ tool: tool.name, ok: true, ms: Date.now() - started })
+          return result
+        } catch (error) {
+          service.recordToolAudit({
+            tool: tool.name,
+            ok: false,
+            ms: Date.now() - started,
+            error: error instanceof Error ? error.message : String(error),
+          })
+          throw error
+        }
+      }) as typeof inner,
+    }
+  })
+  return { tools: audited, names: audited.map((tool) => tool.name) }
 }
 
 export interface CommanderLaunch {

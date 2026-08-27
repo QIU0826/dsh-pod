@@ -18,6 +18,7 @@ function fakeService() {
     denyDispatchGate: vi.fn(),
     pauseMission: vi.fn(),
     resumeMission: vi.fn(),
+    recordToolAudit: vi.fn(),
     memoryWrite: vi.fn((input) => ({ id: 'MEM-1', owner_slot_id: input.owner_slot_id, type: input.type ?? 'fact', importance: input.importance ?? 3, tags: input.tags ?? [], content_ref: input.content_ref ?? '', live_ref: input.live_ref })),
     memoryQuery: vi.fn(() => []),
     memoryCorrect: vi.fn((id) => ({ id })),
@@ -253,3 +254,15 @@ describe('pod_commander_start（真实宿主的 commander 会话验证入口）'
     expect(result.message).toContain('AGENT_FACTORY_UNAVAILABLE')
   })
 })
+
+  it('AgentScope-E：每个工具调用触发 recordToolAudit（记账/审计钩子落地）', async () => {
+    const service = fakeService()
+    const { tools } = makePodTools(service)
+    await run(tools[0]!, { name: 'm', goal: 'g', cwd: 'D:/x', budget_usd: 1, slots: [{ id: 'S-1', vendor: 'claude', role: 'implementer', capabilities: ['编码'] }] })
+    expect(service.recordToolAudit).toHaveBeenCalled()
+    const call = (service.recordToolAudit as ReturnType<typeof vi.fn>).mock.calls[0]![0]
+    expect(call.tool).toBe('pod_launch')
+    expect(call.ok).toBe(true)
+    expect(typeof call.ms).toBe('number')
+  })
+
