@@ -87,6 +87,7 @@ export function PodPanel(): ReactElement {
   const [goal, setGoal] = useState('')
   const [cwd, setCwd] = useState('D:\\玩具\\pod-demo-repo')
   const [budget, setBudget] = useState('3')
+  const [budgetTokens, setBudgetTokens] = useState('')
   const [slots, setSlots] = useState('claude implementer 编码; codex reviewer 审查')
   const lastTs = useRef(0)
   const [steerSlot, setSteerSlot] = useState('')
@@ -192,6 +193,7 @@ export function PodPanel(): ReactElement {
         goal,
         cwd,
         budget_usd: Number(budget) || 3,
+        budget_tokens: budgetTokens.trim().length > 0 ? Number(budgetTokens) : undefined,
         slots: parsedSlots,
       })
       setError(null)
@@ -367,6 +369,14 @@ export function PodPanel(): ReactElement {
         placeholder: '预算 $',
         value: budget,
         onChange: (e) => setBudget(e.target.value),
+      }),
+      createElement('input', {
+        style: styles.input,
+        name: 'pod-budget-tokens',
+        'aria-label': 'token 预算上限（可选）',
+        placeholder: 'token 预算上限（可选，仅美元熔断时留空）',
+        value: budgetTokens,
+        onChange: (e) => setBudgetTokens(e.target.value),
       }),
       createElement('input', {
         style: styles.input,

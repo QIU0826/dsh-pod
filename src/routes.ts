@@ -63,9 +63,10 @@ export interface LaunchRouteBody {
   budget_usd?: unknown
   slots?: unknown
   plan?: unknown
+  budget_tokens?: unknown
 }
 
-export function validateLaunch(body: LaunchRouteBody): { ok: true; value: { name: string; goal: string; cwd: string; budgetUsd: number; slots: Array<{ id: string; vendor: Vendor; role: string; capabilities: string[]; model?: string }>; plan?: unknown } } | { ok: false; error: string } {  if (typeof body.name !== 'string' || body.name.length === 0) return { ok: false, error: 'name is required' }
+export function validateLaunch(body: LaunchRouteBody): { ok: true; value: { name: string; goal: string; cwd: string; budgetUsd: number; budgetTokens?: number; slots: Array<{ id: string; vendor: Vendor; role: string; capabilities: string[]; model?: string }>; plan?: unknown } } | { ok: false; error: string } {  if (typeof body.name !== 'string' || body.name.length === 0) return { ok: false, error: 'name is required' }
   if (typeof body.goal !== 'string' || body.goal.length === 0) return { ok: false, error: 'goal is required' }
   if (typeof body.cwd !== 'string' || body.cwd.length === 0) return { ok: false, error: 'cwd is required' }
   if (!Array.isArray(body.slots) || body.slots.length === 0) return { ok: false, error: 'slots must be a non-empty array' }
@@ -85,7 +86,8 @@ export function validateLaunch(body: LaunchRouteBody): { ok: true; value: { name
     })
   }
   const budgetUsd = typeof body.budget_usd === 'number' && body.budget_usd > 0 ? body.budget_usd : 3
-  return { ok: true, value: { name: body.name, goal: body.goal, cwd: body.cwd, budgetUsd, slots, plan: body.plan } }
+  const budgetTokens = typeof body.budget_tokens === 'number' && body.budget_tokens > 0 ? body.budget_tokens : undefined
+  return { ok: true, value: { name: body.name, goal: body.goal, cwd: body.cwd, budgetUsd, budgetTokens, slots, plan: body.plan } }
 }
 
 export function makePodRoutes(service: () => PodService | undefined): WebRoute[] {

@@ -92,6 +92,8 @@ export interface LaunchPayload {
   goal: string
   cwd: string
   budget_usd: number
+  /** token 预算上限（可选，方案书 2.3 节⑤）。 */
+  budget_tokens?: number
   slots: Array<{ id: string; vendor: string; role: string; capabilities: string[]; model?: string }>
 }
 
