@@ -131,6 +131,8 @@ export interface Task {
   /** 任务 commit 的父 commit（CR-01-3：并行任务串行合并后 diff_range 校验基准）。 */
   parent_sha?: string
   result_ref?: string
+  /** 任务 report 的 summary 摘要（DoD-19 复盘/审查最小上下文：非写码任务无 diff 时注入给审查者）。 */
+  result_summary?: string
   /** 任务级墙钟上限（CR-01-6，默认 60 分钟）。 */
   max_wall_clock_ms: number
   started_at?: number

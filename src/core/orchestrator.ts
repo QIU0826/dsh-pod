@@ -528,6 +528,11 @@ export class MissionOrchestrator {
         .map((t) => `${t.id}（${t.parent_sha ?? '?'}..${t.commit_sha ?? '?'}）`)
         .join('、')
       spec += `\n\n## 审查输入（最小上下文原则）\n审查对象：${diffRanges}\n仅审查该 diff + 规格 + 测试输出，刻意排除实现者推理叙事。\n规格：${targets.map((t) => `${t.id}: ${t.spec}`).join('；')}`
+      // DoD-19 最小上下文：非写码任务（research/doc/plan）无 diff，注入依赖任务的 report 摘要
+      const summaries = targets.map((t) => t.result_summary).filter((s): s is string => s !== undefined && s.length > 0)
+      if (summaries.length > 0) {
+        spec += `\n\n## 被审产物摘要（实现者 report.summary，宿主机注入）\n${targets.map((t) => `${t.id}: ${t.result_summary ?? ''}`).join('\n')}`
+      }
       if (this.diffProvider !== undefined) {
         const diffText = await this.diffProvider(task)
         const truncated = diffText.length > MAX_REVIEW_DIFF_CHARS

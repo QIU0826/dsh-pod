@@ -912,3 +912,35 @@ describe('W4 暂停/恢复（pod_pause / pod_resume）', () => {
   })
 })
 
+
+describe('DoD-19 result_summary（非写码任务 report 摘要落盘 + review 注入）', () => {
+  it('research 任务 done → result_summary 落盘；review 收到摘要注入', async () => {
+    const fx = await makeFixture()
+    const orch = new MissionOrchestrator('M-1', {
+      store: fx.store,
+      backends: { ark: new FakeBackend('ark', {
+        'T-1': { completion: { exit: 'done', report: doneReport('T-1', { task_type: 'research', summary: '研究报告：WAL 在单机单用户场景收益有限' }), usage: { tokens_in: 10, tokens_out: 5, source: 'measured' }, artifacts: [] } },
+        'T-2': { completion: { exit: 'done', report: doneReport('T-2', { task_type: 'review', summary: '审查通过' }), usage: { tokens_in: 10, tokens_out: 5, source: 'measured' }, artifacts: [] } },
+      }) },
+      worktree: { ensure: async () => fx.repo },
+      verify: async (task, report) => ({ ok: true, failures: [], commit_sha: report.commit_sha, parent_sha: task.id + '-p', mismatch: false }),
+      diffProvider: async () => '（无 diff）',
+    })
+    orch.launch({ name: 'r', goal: 'g', cwd: fx.repo, budgetUsd: 2, slots: [{ id: 'S-1', vendor: 'ark', role: 'researcher', capabilities: [] }, { id: 'S-2', vendor: 'ark', role: 'reviewer', capabilities: ['审查'] }] })
+    orch.createTasks([
+      { id: 'T-1', title: '研究', spec: '研究 WAL', type: 'research', skill_tags: [] },
+      { id: 'T-2', title: '审查', spec: '审查 T-1', type: 'review', skill_tags: ['审查'], depends_on: ['T-1'] },
+    ])
+    const summary = await orch.run()
+    const t1 = fx.store.getTask('T-1')!
+    expect(t1.result_summary).toContain('WAL')
+    expect(t1.result_summary).toContain('单机单用户')
+    // review 派发 spec 注入 T-1 摘要（审查者能拿到产物内容）
+    const dispatched = fx.store.listEvents('M-1').filter((e) => e.kind === 'task_dispatched' && e.task_id === 'T-2')
+    expect(dispatched.length).toBeGreaterThan(0)
+    void summary
+    fx.store.close()
+    rmSync(fx.root, { recursive: true, force: true })
+  })
+})
+

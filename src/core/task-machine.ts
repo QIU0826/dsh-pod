@@ -212,6 +212,9 @@ export class TaskMachine {
         commit_sha: verdict.commit_sha ?? report.commit_sha,
         parent_sha: verdict.parent_sha,
         result_ref: report.diff_path,
+        // DoD-19 复盘/审查最小上下文：非写码任务（research/doc/plan）report 摘要落盘，
+        // 供后续 review 注入（无 diff 时审查者仍能拿到产物内容）
+        result_summary: report.summary,
         done_at: this.clock(),
       })
       this.releaseSlot(task)
