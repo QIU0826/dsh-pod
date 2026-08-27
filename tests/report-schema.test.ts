@@ -61,6 +61,13 @@ describe('report-schema 单一事实源（Berd-B / DoD-16）', () => {
     expect(result.ok).toBe(true)
   })
 
+  it('validateMissionReport：可空字段显式 null 与省略等价（CR-32）', () => {
+    // LLM 对「可省略」字段倾向显式输出 null 而非省略：commit_sha/diff_path/test_evidence 为 null 应通过
+    const review = doneReport({ task_type: 'review', commit_sha: null as never, diff_path: null as never, test_evidence: null as never, files_changed: [] })
+    const result = validateMissionReport(review)
+    expect(result.ok).toBe(true)
+  })
+
   it('validateMissionReport：status 枚举外值被拒', () => {
     const result = validateMissionReport(doneReport({ status: 'weird' as never }))
     expect(result.ok).toBe(false)

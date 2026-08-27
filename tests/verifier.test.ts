@@ -240,6 +240,22 @@ describe.runIf(gitAvailable)('verifyTaskArtifacts × 真实 git 仓库', () => {
     expect(existsSync(join(repo, 'out', 't.log'))).toBe(true)
   })
 
+  it('review 任务 test_evidence 是说明性文本 → 不强制日志文件存在（CR-32）', async () => {
+    // 审查报告的 test_evidence 引用测试输出文本（非真实路径），不应被当作必须存在的日志文件
+    const verdict = await verifyTaskArtifacts(
+      { git: execGitClient(), repoDir: repo },
+      makeTask({ type: 'review' }),
+      doneReport({
+        task_type: 'review',
+        commit_sha: undefined,
+        files_changed: [],
+        test_evidence: 'node:test 内建运行器：# pass 2, # fail 0',
+      }),
+    )
+    expect(verdict.failures.some((f) => f.check === 'test_log_exists')).toBe(false)
+    expect(verdict.failures.some((f) => f.check === 'narrative_match')).toBe(false)
+  })
+
   it('test_evidence 含中文前缀「输出路径」→ 解析剥离前缀后通过（CR-06-12 实证）', async () => {
     mkdirSync(join(repo, 'out'))
     writeFileSync(join(repo, 'out', 'task-T-1.testlog'), '12/12 ✓')

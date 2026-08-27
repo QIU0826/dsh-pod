@@ -182,7 +182,11 @@ export async function verifyTaskArtifacts(
     }
   }
 
-  if (report.test_result !== 'not_run' && report.test_evidence) {
+  // 测试日志文件存在性校验只对产出测试的任务（implement/test）强制：
+  // review/doc/plan/research 的 test_evidence 是说明性文本（审查结论/分析），
+  // 不要求对应日志文件真实存在（CR-32 实证：review 报告引用测试输出文本被误判为路径）。
+  const producesTests = task.type === 'implement' || task.type === 'test'
+  if (producesTests && report.test_result !== 'not_run' && report.test_evidence) {
     // test_evidence 可能是「12/12 ✓（输出路径 out/x.log）」形式，取括号内路径；无括号按原值。
     // 中文输出用全角括号（）、提示词会把「输出路径」前缀带进括号 → 全角/半角都解析，
     // 并剥离前缀与首尾空白（CR-06-12 实证：bakeoff pod 条件 test_log_exists 误判）。

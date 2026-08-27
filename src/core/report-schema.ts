@@ -23,11 +23,13 @@ export const MissionReportSchema = z.object({
   status: z.enum(['done', 'blocked', 'need_clarify']),
   summary: z.string().min(1),
   files_changed: z.array(z.string()),
-  commit_sha: z.string().optional(),
-  diff_path: z.string().optional(),
-  test_command: z.string().optional(),
+  // 可空字段容错（CR-32 实证）：LLM 对「可省略」字段倾向显式输出 null 而非省略，
+  // null 与省略等价（nullable().optional()），避免 review 报告因 commit_sha:null 被 schema 误拒。
+  commit_sha: z.string().nullable().optional(),
+  diff_path: z.string().nullable().optional(),
+  test_command: z.string().nullable().optional(),
   test_result: z.enum(['pass', 'fail', 'not_run']),
-  test_evidence: z.string().optional(),
+  test_evidence: z.string().nullable().optional(),
   decisions: z.array(z.string()),
   blockers: z.array(z.string()),
   questions: z.array(z.string()),
