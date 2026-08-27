@@ -50,6 +50,14 @@ execFileSync('git', ['-C', repo, 'worktree', 'add', worktreePath, '-b', `bakeoff
 
 const startedAt = Date.now()
 const progress = []
+// DoD-15：每条 run 记录后端版本（worker_version），可复现/可追溯（CR-08 Berd-A）
+function workerVersions() {
+  const v = {}
+  try { v.claude = execFileSync('claude', ['--version'], { encoding: 'utf8' }).trim().split('\n')[0] ?? null } catch { v.claude = null }
+  const codexBin = codexBinaryCandidates('win32').find((c) => existsSync(c)) ?? 'codex'
+  try { v.codex = execFileSync(codexBin, ['--version'], { encoding: 'utf8', timeout: 10_000 }).trim().split('\n')[0] ?? null } catch { v.codex = null }
+  return v
+}
 const report = {
   run_id: runId,
   task_id: taskId,
@@ -57,6 +65,7 @@ const report = {
   repo,
   started_at: new Date(startedAt).toISOString(),
   model_implementer: 'deepseek-v4-pro',
+  worker_version: workerVersions(),
   metrics: {},
   status: 'running',
   notes: [],
