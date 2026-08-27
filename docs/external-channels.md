@@ -1,6 +1,6 @@
 # 外部协作通道（v0.3 方向性设计）—— Berd-H / AgentScope-J
 
-> 状态：**设计预留**（v0.3 排期，P2 方向性，不实现不改架构——方案书 934 行采纳原则）。
+> 状态：**通道 adapter 框架已实现（CR-31，2026-08-28）**；具体 IM vendor（Slack/飞书）adapter 与 Cron/MCP Gateway 仍后续。
 > 落点：方案书 945 行 Berd-H + 956 行 AgentScope-J（IM 通道与 Berd-H 合并实施）。
 
 ## 1. 一句话目标
@@ -37,5 +37,6 @@ Slack / 飞书等外部协作通道可向 Pod 提交指令与接收通知，但*
 
 ## 4. 边界
 
-- 本文件是**设计预留**：v0.2/v0.3 初期不实现任何外部通道（无依赖、无代码、无测试变更）。
+- **（CR-31 已落地）** `src/core/channel.ts`：`parseInstruction`（入站指令白名单解析 -> ChannelCommand）+ `handleChannelCommand`（执行，审批不绕过门，仍走 target.approve）+ `sanitizeOutboundSignal`（出站白名单字段，剥离代码/diff/凭据）。`scripts/channel-http-server.mjs`：loopback webhook 交付（POST {text} -> 净化回复；POD_CHANNEL_TOKEN 可选，绑非 loopback 且无 token 拒绝启动）。`tests/channel.test.ts` 8 条。
+- 交付通道抽象：具体 IM vendor（Slack/飞书）adapter 需各自 API/sandbox，本实现提供 adapter 框架与 webhook 例证，vendor 集成仍后续。
 - 与 docs/mcp-bidirectional.md / docs/satellite.md 共同构成 v0.3 联邦方向的设计集。

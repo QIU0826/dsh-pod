@@ -306,8 +306,8 @@ export interface PodEvent {
  * 编排层只依赖 WorkerBackend 接口，新后端 = 新增实现 + 本元数据，零编排改动。
  */
 export interface WorkerProtocol {
-  /** 协议族：headless-cli（进程式 CLI）/ acp（Agent Client Protocol，v0.3）/ native（内建）。 */
-  family: 'headless-cli' | 'acp' | 'native'
+  /** 协议族：headless-cli（进程式 CLI）/ acp（Agent Client Protocol，v0.3）/ native（内建）/ remote（多机 satellite 代理）。 */
+  family: 'headless-cli' | 'acp' | 'native' | 'remote'
   /** 会话层协议版本（如 claude -p 的 --output-format 演进版；缺省宽松）。 */
   version?: string
   /** 后端能力位：进程级 kill / 会话持久 / 结构化输出 / 审计 usage。 */

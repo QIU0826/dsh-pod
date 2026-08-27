@@ -1,6 +1,6 @@
 # MCP 双向暴露（v0.3 方向性设计）—— 方案书 594/797 行
 
-> 状态：**stdio 已实现（CR-28，2026-08-27）**；Streamable HTTP / IM 通道仍为 v0.3 后续。
+> 状态：**stdio 已实现（CR-28，2026-08-27）**；**Streamable HTTP 已实现（CR-29，2026-08-28）**；IM 通道框架已实现（CR-31，docs/external-channels.md）。
 > 实现：`src/mcp-server.ts`（makeMcpServer，pod_* 工具面映射）+ `scripts/mcp-bridge.mjs`（stdio 入口，`claude mcp add pod -- node <path>/scripts/mcp-bridge.mjs`）。
 > 技术参照：MCP（Anthropic, 2024）与 A2A（Google, 2025）协议，方案书 797 行。
 
@@ -48,7 +48,7 @@ MCP 只是传输层包装，不新增任何绕过状态机的通道（架构不�
 2. ✅ `src/mcp-server.ts`：`makeMcpServer(service)` 把 pod_* 工具面（launch/status/dispatch/steer/approve/deny/pause/resume/abort 共 9 个）映射为 MCP tools，zod inputSchema + 结构化输出。
 3. ✅ `scripts/mcp-bridge.mjs`：stdio transport 入口（Claude Code `claude mcp add pod -- node <path>/scripts/mcp-bridge.mjs`）；server 逻辑与 transport 解耦，后续可换 Streamable HTTP。
 4. ✅ 验收：stdio 真实冒烟（initialize 握手 + tools/list 返回 9 工具）；in-memory 单测 4 条（tools 注册 + 薄壳调用 + approve 唯一入口语义）。
-5. ⬜ SSE/Streamable HTTP（远程访问）：v0.3 后续；IM 通道与 Berd-H 合并另排。
+5. ✅ Streamable HTTP（远程访问）：`src/mcp-http.ts`（`createMcpHttpServer`/`listenMcpHttp`，同一 `makeMcpServer` 服务面经 `StreamableHTTPServerTransport` 暴露为单一 /mcp POST 端点）+ `scripts/mcp-http-server.mjs`（默认 127.0.0.1:3947，`POD_MCP_TOKEN` 可选 Bearer，绑非 loopback 且无 token 拒绝启动 fail-closed）。`tests/mcp-http.test.ts` 3 条端到端（真实 http server + `StreamableHTTPClientTransport` 握手/tools/callTool、token 鉴权 401、方法/JSON 守卫）。
 
 ## 6. 边界
 

@@ -1,6 +1,6 @@
 # 多机 Satellite（v0.3 方向性设计）—— 方案书 594 行
 
-> 状态：**设计预留**（v0.3 排期，P2 方向性，不实现、不改架构——方案书 934 行采纳原则）。
+> 状态：**已实现（CR-30，2026-08-28）**——`RemoteBackend implements WorkerBackend`（Berd-G `protocol.family='remote'`）+ `scripts/satellite-worker.mjs`（卫星机进程）+ `tests/remote-backend.test.ts`（8 条，含真实 loopback 链 RemoteBackend <-> HTTP <-> stub 后端）。Wire 协议见下 §3。多机真机部署仍属部署关注（worktree 在 remote 侧需共享），本实现验证线协议正确性。
 
 ## 1. 一句话目标
 
@@ -35,5 +35,6 @@
 
 ## 6. 边界
 
-- 本文件是**设计预留**：v0.2/v0.3 初期不实现多机（无依赖、无代码、无测试变更）。
+- **（CR-30 已落地）** `src/workers/remote-backend.ts`：`RemoteBackend`（HttpSatelliteTransport fetch 实现 + 可注入 transport 测试）+ `remoteBackendsFromEnv()`（POD_SATELLITE_URL/VENDOR/TOKEN）；`src/workers/satellite-server.ts`：卫星端 handler（/detect /start /events /kill /health）+ `StubBackend` 确定性桩；`scripts/satellite-worker.mjs`：卫星机入口（stub|ark 后端，POD_SATELLITE_TOKEN 双向认证）。
+- 演进方向：多机真机部署（worktree 在 remote 侧共享）、mTLS 强双向认证、卫星机跑真实写码后端。
 - 单机单用户数据量极小（方案书 485 行 SQLite 论证）是当前事实，多机是规模化方向。

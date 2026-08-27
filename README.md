@@ -77,9 +77,9 @@ node scripts/demo-chain.mjs --repo <dir>   # 自定义靶场仓库
 
 | 方向 | 状态 | 设计文档 |
 |---|---|---|
-| MCP 双向暴露（方案书 594/797 行，CR-28） | ✅ stdio 已实现 | `src/mcp-server.ts`（pod_* 工具面 9 个映射 MCP tools，审批仍走三代码入口）+ `scripts/mcp-bridge.mjs`（`claude mcp add pod -- node <path>/scripts/mcp-bridge.mjs`）；Streamable HTTP 属后续 |
-| 多机 Satellite（方案书 594 行） | 📄 设计 | [docs/satellite.md](docs/satellite.md)：RemoteBackend 实现 + 加密通道 + 信任面 |
-| 外部协作通道（Berd-H / AgentScope-J） | 📄 设计 | [docs/external-channels.md](docs/external-channels.md)：IM/MCP/Cron 统一映射 pod_* 工具面，上下文只进、回复复用审批门、凭据不出会话 |
+| MCP 双向暴露（方案书 594/797 行，CR-28 + CR-29） | ✅ stdio + Streamable HTTP | `src/mcp-server.ts`（pod_* 工具面 9 个映射 MCP tools，审批仍走三代码入口）；stdio：`scripts/mcp-bridge.mjs`（`claude mcp add pod -- node <path>/scripts/mcp-bridge.mjs`）；远程：`scripts/mcp-http-server.mjs`（默认 127.0.0.1:3947，POD_MCP_TOKEN 可选 Bearer，非 loopback 无 token 拒绝启动） |
+| 多机 Satellite（方案书 594 行，CR-30） | ✅ 已实现 | `src/workers/remote-backend.ts`（RemoteBackend，protocol.family='remote'）+ `src/workers/satellite-server.ts`（卫星端点 /detect /start /events /kill /health + StubBackend）+ `scripts/satellite-worker.mjs`；[docs/satellite.md](docs/satellite.md)（多机真机部署仍属部署关注） |
+| 外部协作通道（Berd-H / AgentScope-J，CR-31） | ✅ adapter 框架 | `src/core/channel.ts`（parseInstruction + handleChannelCommand + sanitizeOutboundSignal；审批不绕过门、凭据不出会话）+ `scripts/channel-http-server.mjs`（webhook 交付）；[docs/external-channels.md](docs/external-channels.md)（具体 IM vendor 集成仍后续） |
 
 ## 核心域层（src/core，全部纯逻辑 + 注入式副作用，可离线测试）
 
