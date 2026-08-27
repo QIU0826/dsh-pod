@@ -76,3 +76,28 @@ describe("ArkBackend（火山方舟 Agent Plan）", () => {
     expect(exit).toMatchObject({ exit: "failed", fault: "mismatch" })
   })
 })
+
+  it("complete()：裸调用返回文本（评分/问答类，不要求 MISSION_REPORT）", async () => {
+    const backend = new ArkBackend({
+      apiKey: "ark-x",
+      fetchImpl: fakeFetch(async (_url, init) => {
+        const body = JSON.parse(String(init.body))
+        expect(body.model).toBe("deepseek-v4-flash")
+        return new Response(JSON.stringify({ choices: [{ message: { content: "这是裸文本" } }] }), { status: 200 })
+      }),
+    })
+    const r = await backend.complete("hi")
+    expect(r.ok).toBe(true)
+    expect(r.text).toBe("这是裸文本")
+  })
+
+  it("complete()：HTTP 失败 → ok=false + error", async () => {
+    const backend = new ArkBackend({
+      apiKey: "ark-bad",
+      fetchImpl: fakeFetch(async () => new Response(JSON.stringify({ error: { message: "auth" } }), { status: 401 })),
+    })
+    const r = await backend.complete("hi")
+    expect(r.ok).toBe(false)
+    expect(r.error).toContain("auth")
+  })
+

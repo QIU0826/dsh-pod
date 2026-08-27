@@ -155,6 +155,27 @@ export class ArkBackend implements WorkerBackend {
     void opts.startedAt
   }
 
+  /** 裸调用：直接返回 assistant 文本（不要求 MISSION_REPORT 格式）。评分/问答类用。 */
+  async complete(prompt: string, model?: string): Promise<{ text: string; ok: boolean; error?: string }> {
+    try {
+      const res = await this.fetchImpl(this.baseUrl + '/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this.apiKey },
+        body: JSON.stringify({
+          model: model ?? this.model,
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: 2048,
+        }),
+        signal: AbortSignal.timeout(this.timeoutMs),
+      })
+      const body = (await res.json()) as { choices?: Array<{ message?: { content?: string } }>; error?: { message?: string } }
+      if (!res.ok) return { text: '', ok: false, error: body.error?.message ?? ('ark http ' + res.status) }
+      return { text: body.choices?.[0]?.message?.content ?? '', ok: true }
+    } catch (error) {
+      return { text: '', ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
   async kill(_handle: WorkerHandle): Promise<void> {
     // HTTP 同步请求无法中断（AbortSignal 已随超时）；kill 为语义占位（protocol.capabilities.kill=false 如实）
   }
