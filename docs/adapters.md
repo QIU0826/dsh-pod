@@ -30,6 +30,7 @@ export interface WorkerProtocol {
 | claude | headless-cli | kill ✓ / session_persist ✓ / structured_output ✓ / usage_audit ✓ | `claude -p --output-format json --allowedTools`；档位 B per-mission 会话持久 |
 | codex | headless-cli | kill ✓ / session_persist ✗ / structured_output ✓ / usage_audit ✗ | `codex exec --json`（sandbox-bin）；瞬时档位；usage 以 CLI 输出为准（缺 usage → ledger 标 unavailable） |
 | dsh | native | kill ✗ / session_persist ✓ / structured_output ✓ / usage_audit ✓ | DSH 内建 subagent（进程内，kill 由宿主托管） |
+| ark | native | kill ✗ / session_persist ✗ / structured_output ✓ / usage_audit ✗ | 火山方舟 Agent Plan OpenAI 兼容端点（/api/plan/v3）；同步 completion **无工具执行能力**（不能写文件/跑测试）——适合文本生成/记忆验收类任务；usage 缺省标 unavailable（D7） |
 
 ## 4. 新后端接入流程（照 Berd 生成管线）
 
