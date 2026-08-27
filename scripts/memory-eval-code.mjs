@@ -38,12 +38,12 @@ function makeTaskSpec(fn, expr1, expr2) {
   )
 }
 
-// 两对同构任务：记忆组(mod) / 基线组(pow) —— 换函数避免记忆泄露
+// 多对同构任务：记忆组(fnA) / 基线组(fnB) —— 换函数避免记忆泄露（记忆是项目风格经验，非具体实现）
 const PAIRS = [
-  {
-    memory: { fn: 'mod', expr1: 'mod(10,3)=1', expr2: 'mod(7,3)=1' },
-    baseline: { fn: 'pow', expr1: 'pow(2,3)=8', expr2: 'pow(3,2)=9' },
-  },
+  { memory: { fn: 'mod', expr1: 'mod(10,3)=1', expr2: 'mod(7,3)=1' }, baseline: { fn: 'pow', expr1: 'pow(2,3)=8', expr2: 'pow(3,2)=9' } },
+  { memory: { fn: 'min2', expr1: 'min2(3,5)=3', expr2: 'min2(9,2)=2' }, baseline: { fn: 'max2', expr1: 'max2(3,5)=5', expr2: 'max2(9,2)=9' } },
+  { memory: { fn: 'gcd', expr1: 'gcd(12,18)=6', expr2: 'gcd(7,13)=1' }, baseline: { fn: 'lcm', expr1: 'lcm(4,6)=12', expr2: 'lcm(3,5)=15' } },
+  { memory: { fn: 'absVal', expr1: 'absVal(-5)=5', expr2: 'absVal(3)=3' }, baseline: { fn: 'floorInt', expr1: 'floorInt(3.7)=3', expr2: 'floorInt(-2.1)=-3' } },
 ]
 
 const startedAt = Date.now()
@@ -94,28 +94,50 @@ async function runWrite(taskLabel, spec, injectMemory) {
 }
 
 async function main() {
+  // 分片支持（规避超时）：ME_START/ME_END 按索引跑 PAIRS 子集；缺省全跑
+  const start = Number(process.env.ME_START ?? 0)
+  const end = Number(process.env.ME_END ?? PAIRS.length)
+  const slice = PAIRS.slice(start, end)
   const results = []
-  for (const pair of PAIRS) {
+  for (const pair of slice) {
     const memSpec = makeTaskSpec(pair.memory.fn, pair.memory.expr1, pair.memory.expr2)
     const memRes = await runWrite('memory-' + pair.memory.fn, memSpec, true)
     const baseSpec = makeTaskSpec(pair.baseline.fn, pair.baseline.expr1, pair.baseline.expr2)
     const baseRes = await runWrite('baseline-' + pair.baseline.fn, baseSpec, false)
     results.push({ memory: memRes, baseline: baseRes })
     console.log('[memory-eval-code] pair done:', JSON.stringify({ memory: { done: memRes.done, wall: memRes.wall_clock_s, tokens: memRes.tokens_in + memRes.tokens_out }, baseline: { done: baseRes.done, wall: baseRes.wall_clock_s, tokens: baseRes.tokens_in + baseRes.tokens_out } }))
+    // 增量持久化：每对完成即写盘（超时/中断不丢已完成对）
+    writeFileSync(join(reportsDir, 'partial-' + start + '-' + end + '.json'), JSON.stringify({ run_at: new Date().toISOString(), completed: results.length, results }, null, 2), 'utf8')
   }
 
-  const wallDelta = results.map((r) => r.baseline.wall_clock_s - r.memory.wall_clock_s)
-  const tokenDelta = results.map((r) => (r.baseline.tokens_in + r.baseline.tokens_out) - (r.memory.tokens_in + r.memory.tokens_out))
+  // 逐对明细 + 汇总（仅统计都完成的对；正 delta = 基线组更慢 = 记忆组更优）
+  const perPair = slice.map((p, i) => ({
+    memory_fn: p.memory.fn,
+    baseline_fn: p.baseline.fn,
+    memory: { done: results[i].memory.done, wall_s: results[i].memory.wall_clock_s, tokens: results[i].memory.tokens_in + results[i].memory.tokens_out },
+    baseline: { done: results[i].baseline.done, wall_s: results[i].baseline.wall_clock_s, tokens: results[i].baseline.tokens_in + results[i].baseline.tokens_out },
+    wall_delta_s: Number((results[i].baseline.wall_clock_s - results[i].memory.wall_clock_s).toFixed(1)),
+    token_delta: (results[i].baseline.tokens_in + results[i].baseline.tokens_out) - (results[i].memory.tokens_in + results[i].memory.tokens_out),
+  }))
+  const bothDone = results.filter((r) => r.memory.done && r.baseline.done)
+  const wallDelta = bothDone.map((r) => r.baseline.wall_clock_s - r.memory.wall_clock_s)
+  const tokenDelta = bothDone.map((r) => (r.baseline.tokens_in + r.baseline.tokens_out) - (r.memory.tokens_in + r.memory.tokens_out))
+  const wallWins = perPair.filter((p) => p.wall_delta_s > 0).length
+  const tokenWins = perPair.filter((p) => p.token_delta > 0).length
   const summary = {
     run_at: new Date().toISOString(),
     model: 'deepseek-v4-pro (claude headless, DeepSeek 配置)',
     method: '记忆组(注入团队沉淀经验) vs 基线组(无记忆) 写码任务对比（同构任务，换函数防泄露）',
-    pairs: results,
+    pairs: perPair,
     metrics: {
+      pairs: perPair.length,
       memory_done: results.filter((r) => r.memory.done).length + '/' + results.length,
       baseline_done: results.filter((r) => r.baseline.done).length + '/' + results.length,
-      avg_wall_delta_s: Number((wallDelta.reduce((a, b) => a + b, 0) / wallDelta.length).toFixed(1)),
-      avg_token_delta: Math.round(tokenDelta.reduce((a, b) => a + b, 0) / tokenDelta.length),
+      both_done: bothDone.length + '/' + results.length,
+      avg_wall_delta_s: bothDone.length > 0 ? Number((wallDelta.reduce((a, b) => a + b, 0) / wallDelta.length).toFixed(1)) : null,
+      avg_token_delta: bothDone.length > 0 ? Math.round(tokenDelta.reduce((a, b) => a + b, 0) / tokenDelta.length) : null,
+      wall_memory_wins: wallWins,
+      token_memory_wins: tokenWins,
     },
     notes: [
       '写码型记忆收益验收（补齐 258 行「工具型任务待 claude 后端另验」）；claude 后端真实写码（DeepSeek 配置）',

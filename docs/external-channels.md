@@ -1,6 +1,6 @@
 # 外部协作通道（v0.3 方向性设计）—— Berd-H / AgentScope-J
 
-> 状态：**通道 adapter 框架已实现（CR-31，2026-08-28）**；具体 IM vendor（Slack/飞书）adapter 与 Cron/MCP Gateway 仍后续。
+> 状态：**通道 adapter 框架已实现（CR-31，2026-08-28）**；**Cron 定时触发已实现（CR-34，2026-08-28）**；具体 IM vendor（Slack/飞书）adapter 与 MCP Gateway 仍后续。
 > 落点：方案书 945 行 Berd-H + 956 行 AgentScope-J（IM 通道与 Berd-H 合并实施）。
 
 ## 1. 一句话目标
@@ -21,7 +21,8 @@ Slack / 飞书等外部协作通道可向 Pod 提交指令与接收通知，但*
 
 ### 2.2 Cron / 定时（AgentScope-J）
 
-- 定时触发 mission（如每日 bake-off / 巡检）；复用 pod_launch 工具面。
+- **（CR-34 已落地）** `src/core/cron.ts`：`CronScheduler`（tick 驱动，与 watchdog 同风格）+ `CronJob`（intervalMs / command=ChannelCommand / enabled 默认关）+ 节流防抖（interval 内不重复触发）+ gate 守卫 + 触发历史审计。命令复用 `handleChannelCommand`（同一 pod_* 工具面，审批门不绕过）。
+- `tests/cron.test.ts` 6 条：到期触发、节流不重复、默认关闭（Berd-H 显式启用）、gate 拦截、审批门复用、unregister。
 - 与 Watchdog/maintenanceTick 共用节流纪律，避免重复触发。
 
 ### 2.3 MCP Gateway
