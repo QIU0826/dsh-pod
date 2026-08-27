@@ -43,6 +43,7 @@ interface PodEvent {
 | `approval_requested` | 审批卡 | `mode`, `patch_files_count` |
 | `merge_completed` / `merge_conflict` | 合并 | `files`, `conflict` |
 | `handoff_created` | 交接协议 | `target_role` |
+| `pod_tool_called` | 工具调用审计（AgentScope-E） | `tool`, `ok`, `ms`（不含工具入参/返回值） |
 
 ### 2.2 worker 进度事件（可采集，**有界预览**）
 
