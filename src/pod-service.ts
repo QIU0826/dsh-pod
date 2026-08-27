@@ -24,8 +24,31 @@ import { execGitClient, verifyTaskArtifacts } from './core/verifier.js'
 import type { PodStore } from './core/store.js'
 import { ClaudeHeadlessBackend } from './workers/claude-headless.js'
 import { CodexHeadlessBackend, codexBinaryCandidates } from './workers/codex-headless.js'
+import { ArkBackend } from './workers/ark-headless.js'
 import { repairPath } from './workers/preflight.js'
 import type { ApprovalRequest, ApprovalRule, AgentSlot, Handoff, MemoryRecord, MemoryRelation, Mission, Task, Vendor, WorkerBackend } from './core/types.js'
+
+/**
+ * 火山方舟后端装配（Berd-G 新 adapter）：从环境 ARK_API_KEY 或 ~/.claude/settings.json 的
+ * ANTHROPIC_AUTH_TOKEN 读取 agent plan key；无 key 时不注册（返回空对象）。
+ */
+function arkBackendFromSettings(): Partial<Record<Vendor, WorkerBackend>> {
+  const key = process.env.ARK_API_KEY ?? readArkKeyFromClaudeSettings()
+  if (key === undefined || key.length === 0) return {}
+  return { ark: new ArkBackend({ apiKey: key }) }
+}
+
+/** 读 settings.json 的 ARK_API_KEY 字段（不读 ANTHROPIC_AUTH_TOKEN，那是 DeepSeek claude 的 key）。 */
+function readArkKeyFromClaudeSettings(): string | undefined {
+  try {
+    const settingsPath = join(homedir(), '.claude', 'settings.json')
+    if (!existsSync(settingsPath)) return undefined
+    const raw = execFileSync(process.execPath, ['-e', `const s=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));process.stdout.write(String(s.ARK_API_KEY||''))`, settingsPath], { encoding: 'utf8' })
+    return raw.length > 0 ? raw : undefined
+  } catch {
+    return undefined
+  }
+}
 
 /** 记忆后台 reflection 节流间隔（2.8.1：MT 周期内不频繁跑 pass）。 */
 export const REFLECTION_INTERVAL_MS = 60_000
@@ -92,6 +115,7 @@ export class PodService {
       codex: new CodexHeadlessBackend({
         binary: codexBinaryCandidates('win32').find((c) => existsSync(c)) ?? 'codex',
       }),
+      ...arkBackendFromSettings(),
     }
   }
 

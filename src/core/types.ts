@@ -3,7 +3,7 @@
  * 全部为纯类型与常量，禁止任何运行时副作用。
  */
 
-export type Vendor = 'dsh' | 'claude' | 'codex'
+export type Vendor = 'dsh' | 'claude' | 'codex' | 'ark'
 
 /** 会话生命周期三档（方案书 3.2 节 / D2）。 */
 export type SessionTier = 'transient' | 'per-mission' | 'auto-reset'
@@ -389,6 +389,7 @@ export const DEFAULT_SESSION_TIERS: Record<Vendor, SessionTier> = {
   claude: 'per-mission',
   codex: 'transient',
   dsh: 'transient',
+  ark: 'transient',
 }
 
 /** 档位 C 自动重置阈值：上下文占用 70%（3.2 节）。 */

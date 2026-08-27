@@ -22,6 +22,8 @@ export function tierDefaults(vendor: Vendor): SessionTier {
       return 'transient'
     case 'dsh':
       return 'transient'
+    case 'ark':
+      return 'transient'
   }
 }
 
