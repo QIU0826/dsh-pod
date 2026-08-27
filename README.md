@@ -57,6 +57,7 @@ node scripts/demo-chain.mjs --repo <dir>   # 自定义靶场仓库
 |---|---|---|
 | 审批模式 2/3 经 experiments 灰度接入（Berd-E） | ✅ | `launch approvalMode` 校验：模式 2（交接确认，跨 agent 派活前弹卡）/ 模式 3（全自动，质量门通过即 done）需对应 `approval-mode-2`/`approval-mode-3` 开关开启；默认模式 1 行为不变；dispatch 卡经 `pod_approve` 分支裁决 |
 | 记忆子系统 2.8.1（CR-07 / NOOA 借鉴） | ✅ | `src/core/memory.ts`：MemoryStore（`~/.dsh/pod/memory.json` 原子写）+ 类型化图谱（supports/contradicts/derived-from）+ 三工具 `pod_mem_write/query/correct` + 后台 reflection（合并/补边/剪枝，接入 maintenanceTick） |
+| 记忆收益验收（方案书 258 行） | ✅ | `scripts/memory-eval.mjs`：同一任务集（项目特定经验）记忆组 vs 基线组 + LLM 自评三维。真实 Ark 运行：三维均值记忆 4.667 vs 基线 4.000（**+0.667**，准确性 +1.00）；负向记录：知识型问题平局（记忆价值在经验复用非百科）。Debrief 见 reports/memory-eval/ |
 | Ledger→路由权重（历史成功率，2.7 节） | ✅ | `dispatcher.routeTask` 增 `slotSuccess` 因子：能力 > 负载 > 单任务成本 > 历史成功率（降序），无数据视为中性 0.5 不劣化；orchestrator 按槽位统计 done/(done+blocked+escalated) 注入 |
 | 并行执行强化（双路+，4.3） | ✅ | `LaunchInput.parallel`（默认 2，clamp 1-8，pod_launch 可传）+ `run()` 用 `dispatchBatch` 每轮填满 maxParallel 而非单路派 1 即等；依赖链仍串行不破坏拓扑；FakeBackend 增 delayMs/并发峰值验证 peakActive |
 | 任务中途换人正式化（4.3） | ✅ | `reassignTask`（kill 旧进程 + 交接四件套落盘 + 事件 task_reassigned 审计 + owner 转移 + 置 ready 由 dispatchBatch 重派）；`pod_reassign` 工具；done 终态/目标槽位不可用拒绝 |
@@ -71,7 +72,6 @@ node scripts/demo-chain.mjs --repo <dir>   # 自定义靶场仓库
 | 协议适配器层前置（Berd-G，v0.3 排期） | ✅ | `WorkerBackend.protocol` 元数据（family/version/capabilities 四能力位）；claude/codex/dsh 三后端声明（codex usage_audit=false 诚实化）；[docs/adapters.md](docs/adapters.md) 新后端接入流程 + ACP 预留 |
 | 工具级 middleware 审计钩子（AgentScope-E，Should） | ✅ | 每个 pod_* 工具 execute 包审计：调用后 `recordToolAudit`（`pod_tool_called` 事件，含 tool/ok/ms/error）；wrapTool 纯横切不改变返回值 |
 | token 预算上限入口（2.3 节⑤） | ✅ | `budget_tokens` 全链路打通：pod_launch / routes / postLaunch / PodPanel 表单（留空=仅美元熔断）；orchestrator 双熔断（美元 + token）已有测试覆盖 |
-| 协议适配器层前置（Berd-G，v0.3 排期） | ✅ | `WorkerBackend.protocol` 元数据（family/version/capabilities 四能力位）；claude/codex/dsh 三后端声明（codex usage_audit=false 诚实化）；[docs/adapters.md](docs/adapters.md) 新后端接入流程 + ACP 预留 |
 
 ## v0.3 设计预留（P2 方向性，不实现不改架构——方案书 934 行采纳原则）
 
