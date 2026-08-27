@@ -79,6 +79,7 @@ node scripts/demo-chain.mjs --repo <dir>   # 自定义靶场仓库
 |---|---|---|
 | MCP 双向暴露（方案书 594/797 行） | 📄 设计 | [docs/mcp-bidirectional.md](docs/mcp-bidirectional.md)：外部 agent 反向驱动 Pod（pod_* 工具面复用，审批仍走三代码入口） |
 | 多机 Satellite（方案书 594 行） | 📄 设计 | [docs/satellite.md](docs/satellite.md)：RemoteBackend 实现 + 加密通道 + 信任面 |
+| 外部协作通道（Berd-H / AgentScope-J） | 📄 设计 | [docs/external-channels.md](docs/external-channels.md)：IM/MCP/Cron 统一映射 pod_* 工具面，上下文只进、回复复用审批门、凭据不出会话 |
 
 ## 核心域层（src/core，全部纯逻辑 + 注入式副作用，可离线测试）
 
