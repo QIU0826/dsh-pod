@@ -71,6 +71,14 @@ node scripts/demo-chain.mjs --repo <dir>   # 自定义靶场仓库
 | 协议适配器层前置（Berd-G，v0.3 排期） | ✅ | `WorkerBackend.protocol` 元数据（family/version/capabilities 四能力位）；claude/codex/dsh 三后端声明（codex usage_audit=false 诚实化）；[docs/adapters.md](docs/adapters.md) 新后端接入流程 + ACP 预留 |
 | 工具级 middleware 审计钩子（AgentScope-E，Should） | ✅ | 每个 pod_* 工具 execute 包审计：调用后 `recordToolAudit`（`pod_tool_called` 事件，含 tool/ok/ms/error）；wrapTool 纯横切不改变返回值 |
 | token 预算上限入口（2.3 节⑤） | ✅ | `budget_tokens` 全链路打通：pod_launch / routes / postLaunch / PodPanel 表单（留空=仅美元熔断）；orchestrator 双熔断（美元 + token）已有测试覆盖 |
+| 协议适配器层前置（Berd-G，v0.3 排期） | ✅ | `WorkerBackend.protocol` 元数据（family/version/capabilities 四能力位）；claude/codex/dsh 三后端声明（codex usage_audit=false 诚实化）；[docs/adapters.md](docs/adapters.md) 新后端接入流程 + ACP 预留 |
+
+## v0.3 设计预留（P2 方向性，不实现不改架构——方案书 934 行采纳原则）
+
+| 方向 | 状态 | 设计文档 |
+|---|---|---|
+| MCP 双向暴露（方案书 594/797 行） | 📄 设计 | [docs/mcp-bidirectional.md](docs/mcp-bidirectional.md)：外部 agent 反向驱动 Pod（pod_* 工具面复用，审批仍走三代码入口） |
+| 多机 Satellite（方案书 594 行） | 📄 设计 | [docs/satellite.md](docs/satellite.md)：RemoteBackend 实现 + 加密通道 + 信任面 |
 
 ## 核心域层（src/core，全部纯逻辑 + 注入式副作用，可离线测试）
 
