@@ -126,6 +126,11 @@ export function buildCodexArgs(mode: CodexLaunchMode, worktree: string, model?: 
 
 export class CodexHeadlessBackend implements WorkerBackend {
   readonly vendor = 'codex' as const
+  readonly protocol = {
+    family: 'headless-cli' as const,
+    version: 'codex exec (sandbox-bin, --json)',
+    capabilities: { kill: true, session_persist: false, structured_output: true, usage_audit: false },
+  }
   private readonly spawner?: CodexBackendOptions['spawner']
   private readonly detectRunner: NonNullable<CodexBackendOptions['detectRunner']>
   private readonly binary: string

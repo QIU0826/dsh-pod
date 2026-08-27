@@ -286,6 +286,11 @@ export function buildClaudeArgs(options: ClaudeStartOptions): string[] {
 
 export class ClaudeHeadlessBackend implements WorkerBackend {
   readonly vendor = 'claude' as const
+  readonly protocol = {
+    family: 'headless-cli' as const,
+    version: 'claude -p (--output-format json + --allowedTools)',
+    capabilities: { kill: true, session_persist: true, structured_output: true, usage_audit: true },
+  }
   private readonly spawner: ClaudeBackendOptions['spawner']
   private readonly detectRunner: NonNullable<ClaudeBackendOptions['detectRunner']>
   private readonly clock: () => number

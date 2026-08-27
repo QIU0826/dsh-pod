@@ -36,6 +36,11 @@ export interface DshSubagentOptions {
 
 export class DshSubagentBackend implements WorkerBackend {
   readonly vendor = 'dsh' as const
+  readonly protocol = {
+    family: 'native' as const,
+    version: 'DSH subagent (in-process)',
+    capabilities: { kill: false, session_persist: true, structured_output: true, usage_audit: true },
+  }
   private readonly agentFactory: DshAgentFactory | undefined
   private readonly clock: () => number
 

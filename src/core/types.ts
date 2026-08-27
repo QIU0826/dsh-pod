@@ -298,6 +298,25 @@ export interface PodEvent {
   payload: Record<string, unknown>
 }
 
+/**
+ * 后端接入协议元数据（Berd-G / 方案书 4.3 v0.3 适配器层）。
+ * protocol = 会话协议族；`capabilities` 声明后端支持的能力位（审计/工具/会话持久…）。
+ * 编排层只依赖 WorkerBackend 接口，新后端 = 新增实现 + 本元数据，零编排改动。
+ */
+export interface WorkerProtocol {
+  /** 协议族：headless-cli（进程式 CLI）/ acp（Agent Client Protocol，v0.3）/ native（内建）。 */
+  family: 'headless-cli' | 'acp' | 'native'
+  /** 会话层协议版本（如 claude -p 的 --output-format 演进版；缺省宽松）。 */
+  version?: string
+  /** 后端能力位：进程级 kill / 会话持久 / 结构化输出 / 审计 usage。 */
+  capabilities: {
+    kill: boolean
+    session_persist: boolean
+    structured_output: boolean
+    usage_audit: boolean
+  }
+}
+
 /** 统一后端接口（3.2 节）。 */
 export interface WorkerProgressEvent {
   slot_id: string
@@ -331,6 +350,11 @@ export interface WorkerCompletion {
 
 export interface WorkerBackend {
   readonly vendor: Vendor
+  /**
+   * 协议元数据（Berd-G / v0.3 适配器层）：声明该后端经由何种协议接入。
+   * ACP 等新后端接入时照 Berd 生成管线新增 adapter，无需改编排层。
+   */
+  readonly protocol: WorkerProtocol
   detect(): Promise<{
     installed: boolean
     authed: boolean

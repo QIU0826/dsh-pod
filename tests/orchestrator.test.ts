@@ -29,6 +29,10 @@ import { APPROVAL_STALE_MS } from '../src/core/types.js'
  */
 class FakeBackend implements WorkerBackend {
   readonly vendor: Vendor
+  readonly protocol = {
+    family: 'headless-cli' as const,
+    capabilities: { kill: true, session_persist: false, structured_output: true, usage_audit: false },
+  }
   readonly started: Array<{ slot: AgentSlot; task: Task; worktree: string }> = []
   readonly kills: string[] = []
   /** v0.2 并行强化：并发峰值（同一时刻 active 任务数）——验证双路+ 派发进同轮。 */
