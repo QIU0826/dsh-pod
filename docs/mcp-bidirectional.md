@@ -1,6 +1,7 @@
 # MCP 双向暴露（v0.3 方向性设计）—— 方案书 594/797 行
 
-> 状态：**设计预留**（v0.3 排期，P2 方向性，本文件只作设计，不实现、不改架构——方案书 934 行采纳原则）。
+> 状态：**stdio 已实现（CR-28，2026-08-27）**；Streamable HTTP / IM 通道仍为 v0.3 后续。
+> 实现：`src/mcp-server.ts`（makeMcpServer，pod_* 工具面映射）+ `scripts/mcp-bridge.mjs`（stdio 入口，`claude mcp add pod -- node <path>/scripts/mcp-bridge.mjs`）。
 > 技术参照：MCP（Anthropic, 2024）与 A2A（Google, 2025）协议，方案书 797 行。
 
 ## 1. 一句话目标
@@ -41,12 +42,13 @@ MCP 只是传输层包装，不新增任何绕过状态机的通道（架构不�
 - MCP server 连接需凭据（本机 token / 显式启用的 API key），杜绝局域网任意进程编排。
 - 与遥测立场一致（telemetry.md）：MCP 不采集代码/diff/凭据，只暴露白名单字段。
 
-## 5. 实施建议（v0.3 启动时的第一刀）
+## 5. 实施现状（CR-28 已落地）
 
-1. 依赖：`@modelcontextprotocol/sdk`（MCP 官方 TS SDK），新增为运行时依赖。
-2. 新文件 `src/mcp-server.ts`：把 `makePodTools(service)` 的工具面映射到 MCP tool 注册。
-3. 传输：先 stdin（Claude Code `claude mcp add` 最易验证），再 SSE（网络访问）。
-4. 验收（参考 AgentScope-J）：外部 `claude -p "用 pod_launch 起一个 mission"` 能驱动 Pod 走完整链到审批卡。
+1. ✅ 依赖：`@modelcontextprotocol/sdk@^1.30.0`（运行时依赖）。
+2. ✅ `src/mcp-server.ts`：`makeMcpServer(service)` 把 pod_* 工具面（launch/status/dispatch/steer/approve/deny/pause/resume/abort 共 9 个）映射为 MCP tools，zod inputSchema + 结构化输出。
+3. ✅ `scripts/mcp-bridge.mjs`：stdio transport 入口（Claude Code `claude mcp add pod -- node <path>/scripts/mcp-bridge.mjs`）；server 逻辑与 transport 解耦，后续可换 Streamable HTTP。
+4. ✅ 验收：stdio 真实冒烟（initialize 握手 + tools/list 返回 9 工具）；in-memory 单测 4 条（tools 注册 + 薄壳调用 + approve 唯一入口语义）。
+5. ⬜ SSE/Streamable HTTP（远程访问）：v0.3 后续；IM 通道与 Berd-H 合并另排。
 
 ## 6. 边界
 
