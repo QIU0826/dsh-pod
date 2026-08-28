@@ -24,6 +24,8 @@ export function tierDefaults(vendor: Vendor): SessionTier {
       return 'transient'
     case 'ark':
       return 'transient'
+    case 'opencode':
+      return 'transient'
   }
 }
 

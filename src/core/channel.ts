@@ -16,7 +16,7 @@ import type { Mission } from './types.js'
 /** 一条入站指令解析结果（白名单动作，其余 -> unknown）。 */
 export type ChannelCommand =
   | { kind: 'status' }
-  | { kind: 'launch'; name: string; goal: string; cwd: string; budgetUsd?: number; slots?: { id: string; vendor: 'claude' | 'codex' | 'dsh' | 'ark'; role: string; capabilities: string[] }[] }
+  | { kind: 'launch'; name: string; goal: string; cwd: string; budgetUsd?: number; slots?: { id: string; vendor: 'claude' | 'codex' | 'dsh' | 'ark' | 'opencode'; role: string; capabilities: string[] }[] }
   | { kind: 'approve'; approval_id: string; note?: string }
   | { kind: 'deny'; approval_id: string; reason: string }
   | { kind: 'steer'; slot_id: string; instruction: string }
@@ -30,7 +30,7 @@ export interface ChannelTarget {
   status(): { mission: Mission | null; pendingApprovalIds: string[] }
   launch(input: {
     name: string; goal: string; cwd: string; budgetUsd?: number
-    slots?: { id: string; vendor: 'claude' | 'codex' | 'dsh' | 'ark'; role: string; capabilities: string[] }[]
+    slots?: { id: string; vendor: 'claude' | 'codex' | 'dsh' | 'ark' | 'opencode'; role: string; capabilities: string[] }[]
   }): Promise<{ mission_id: string; status: string }> | { mission_id: string; status: string }
   approve(approval_id: string, note?: string): Promise<{ ok: boolean; message?: string }> | { ok: boolean; message?: string }
   deny(approval_id: string, reason: string): Promise<unknown> | unknown

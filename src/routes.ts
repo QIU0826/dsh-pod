@@ -76,7 +76,7 @@ export function validateLaunch(body: LaunchRouteBody): { ok: true; value: { name
     if (typeof slot.id !== 'string' || typeof slot.vendor !== 'string' || typeof slot.role !== 'string') {
       return { ok: false, error: 'each slot needs id/vendor/role' }
     }
-    if (!['claude', 'codex', 'dsh'].includes(slot.vendor)) return { ok: false, error: `unknown vendor: ${slot.vendor}` }
+    if (!['claude', 'codex', 'dsh', 'ark', 'opencode'].includes(slot.vendor)) return { ok: false, error: `unknown vendor: ${slot.vendor}` }
     slots.push({
       id: slot.id,
       vendor: slot.vendor as Vendor,

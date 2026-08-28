@@ -36,7 +36,7 @@ export function makeMcpServer(service: PodService): McpServer {
         budget_usd: z.number().optional().describe('美元预算上限（默认 3）'),
         approval_mode: z.number().optional().describe('审批模式 1（默认）/2/3（后两者需 experiments 灰度开启）'),
         slots: z.array(z.object({
-          id: z.string(), vendor: z.enum(['claude', 'codex', 'dsh', 'ark']), role: z.string(),
+          id: z.string(), vendor: z.enum(['claude', 'codex', 'dsh', 'ark', 'opencode']), role: z.string(),
           capabilities: z.array(z.string()), model: z.string().optional(),
         })).describe('员工名册'),
         plan: z.array(z.object({

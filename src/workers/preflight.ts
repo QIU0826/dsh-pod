@@ -291,6 +291,14 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
     )
   }
 
+  // [4.5] opencode CLI（v0.3 Berd-G：未安装如实报告，roster 灰掉）
+  const opencodeVersion = await runner.run('opencode', ['--version'])
+  if (opencodeVersion.code !== 0) {
+    add('opencode', 'opencode CLI 已安装', 'fail', 'opencode not installed (roster greyed)')
+  } else {
+    add('opencode', 'opencode CLI 已安装', 'ok', opencodeVersion.stdout.trim())
+  }
+
   // [5] DSH subagent（宿主原生）
   add('dsh-subagent', 'DSH subagent 能力可用（原生）', 'ok', 'plugin runtime native')
 

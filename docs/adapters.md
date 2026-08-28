@@ -32,6 +32,7 @@ export interface WorkerProtocol {
 | dsh | native | kill ✗ / session_persist ✓ / structured_output ✓ / usage_audit ✓ | DSH 内建 subagent（进程内，kill 由宿主托管） |
 | ark | native | kill ✗ / session_persist ✗ / structured_output ✓ / usage_audit ✗ | 火山方舟 Agent Plan OpenAI 兼容端点（/api/plan/v3）；同步 completion **无工具执行能力**（不能写文件/跑测试）——适合文本生成/记忆验收类任务；usage 缺省标 unavailable（D7） |
 | remote（satellite） | remote | kill ✓ / session_persist ✗ / structured_output ✓ / usage_audit ✓ | 多机 satellite（CR-30）：`RemoteBackend` 代理到卫星 HTTP 端点（src/workers/remote-backend.ts）；vendor=被代理底层的 vendor；能力位继承自卫星实现，usage 来自卫星回传（诚实化 D7） |
+| opencode | headless-cli | kill ✓ / session_persist ✗ / structured_output ✗ / usage_audit ✗ | `opencode run`（sst/opencode，stdin 注入 prompt 规避 Windows 引号破坏 CR-02）；纯文本 stdout → extractReport 平衡扫描；usage 无结构化上报 → unavailable（D7）；**本机未装，契约按公开文档 + fake 测试锁定，真机首验清单见 adapter 头注释** |
 
 ## 4. 新后端接入流程（照 Berd 生成管线）
 

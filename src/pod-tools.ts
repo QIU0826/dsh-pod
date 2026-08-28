@@ -81,7 +81,7 @@ export function makePodTools(service: PodService): PodToolBundle {
             additionalProperties: false,
             properties: {
               id: { type: 'string', required: true },
-              vendor: { type: 'string', required: true, enum: ['claude', 'codex', 'dsh'] satisfies Vendor[] },
+              vendor: { type: 'string', required: true, enum: ['claude', 'codex', 'dsh', 'ark', 'opencode'] satisfies Vendor[] },
               role: { type: 'string', required: true, description: 'planner / implementer / reviewer / tester / ...' },
               capabilities: { type: 'array', items: { type: 'string' }, required: true },
               model: { type: 'string', description: '模型名；codex（ChatGPT 内置）留空走其默认' },

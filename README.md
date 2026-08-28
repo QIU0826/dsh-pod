@@ -1,5 +1,10 @@
 # dsh-pod（Pod 鲸群）
 
+[![CI](https://github.com/QIU0826/dsh-pod/actions/workflows/ci.yml/badge.svg)](https://github.com/QIU0826/dsh-pod/actions/workflows/ci.yml)
+![tests](https://img.shields.io/badge/tests-470%20passed-brightgreen)
+![version](https://img.shields.io/badge/version-v0.3.0--alpha.1-blue)
+![node](https://img.shields.io/badge/node-22%2B-green)
+
 > **在 DSH Web UI 里一键组队、看得见、管得住的多智能体驾驶舱。**
 > 把本机已登录的 DSH / Claude Code / Codex 组成一个团队，各干各擅长的活、互相交接任务，
 > 全程可视化，关键动作由人把关。驾驶舱是产品本体；多 agent 是按需启用的引擎。
@@ -12,6 +17,7 @@
 |---|---|---|
 | W0 仓库骨架 + 插件注册 + Store 决策（JSON 原子写回退） | ✅ | 本仓库；`/api/dsh-pod/ping` 健康路由 |
 | W1 WorkerBackend 抽象 + codex 验证 + claude 打通 | ✅ 全链路 | `src/workers/claude-headless.ts` / `codex-headless.ts`；双后端跨进程会话连续性实证；claude stream-json/报告/故障分类；CR-02 见方案书 |
+| opencode adapter（v0.3 Berd-G） | ✅ 代码+fake 测试 | `src/workers/opencode-headless.ts`：`opencode run` stdin 注入 + `--session` 续会话 + 纯文本 extractReport；vendor 枚举全链登记；**本机未装 opencode，真机首验清单见 adapter 头注释** |
 | W2 交接协议 + 状态机 + Verifier + **Commander 编排器 + 最小可演示链** | ✅ | `src/core/orchestrator.ts`；`scripts/demo-chain.mjs` 真实跑通「claude 实现 → codex 独立 review → 审批卡」（CR-03-6） |
 | W3 Team Builder / W4 Canvas 两栏 / W5 审批+worktree+账本 / W6 Bake-off+DoD | ✅ | Team Builder 预设阵型（DoD-9）+ Mission Canvas 两栏（看板/事件流/steer/审批/手动模式）+ apply_patch 串行合并 + 账本双列 + **DoD 1–19 全部达成**（见 docs/DoD-1-14-核对表.md + 差距审计-vs-方案书.md） |
 | Bake-off（DoD-10） | ✅ 已发布 | 10/10 运行留档；[汇总报告](reports/bakeoff/SUMMARY.md)（9 done + 1 负向样本，含负向结果公开） |

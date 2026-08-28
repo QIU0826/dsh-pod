@@ -8,7 +8,7 @@
 import { DEFAULT_PRICE_TABLE } from './ledger.js'
 
 export interface ModelCard {
-  vendor: 'claude' | 'codex' | 'dsh'
+  vendor: 'claude' | 'codex' | 'dsh' | 'ark' | 'opencode'
   model: string
   context_window: number
   capabilities: string[]
