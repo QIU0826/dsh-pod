@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: typecheck + coverage + build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22.x, 24.x]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # 发布候选门：typecheck -> coverage(阈值) -> build 一条龙
+      # coverage 阈值：lines/functions/statements >= 80%，branches >= 75%（vitest.config.ts）
+      - name: Run verify (typecheck + coverage + build)
+        run: npm run verify
+
+      # 单测不依赖真实 CLI/网络（fake 后端脚本化回放），CI 无需真实 agent
+      - name: Upload coverage report (artifacts on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.node-version }}
+          path: coverage/
+          retention-days: 7

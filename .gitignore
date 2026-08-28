@@ -6,3 +6,6 @@ coverage/
 .DS_Store
 reports/
 .pod-worktrees/
+.env
+.env.*
+!.env.example
