@@ -101,7 +101,13 @@ async function main() {
     }
     const text = typeof body.text === 'string' ? body.text : ''
     const cmd = parseInstruction(text)
-    const reply = await handleChannelCommand(target, cmd)
+    let reply
+    try {
+      reply = await handleChannelCommand(target, cmd)
+    } catch (error) {
+      // 指令执行失败（无 active mission、审批卡不存在等 PodError）→ 如实回执，不击穿 HTTP 服务
+      reply = { ok: false, text: error instanceof Error ? error.message : String(error) }
+    }
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ ...reply, outbound: sanitizeOutboundSignal({ kind: 'channel_reply' }) }))
   })
