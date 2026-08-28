@@ -471,12 +471,12 @@ export function PodPanel(): ReactElement {
               createElement('span', { style: { fontSize: 10, color: 'var(--ds-color-text-2, #666)' } }, `${s.ctx_usage_pct}%`),
             ),
           ),
-          createElement('div', { style: { ...styles.colTitle, marginTop: 8 } }, '账本（tokens 实测 + 等效美元）'),
-          (status?.ledger ?? []).map((entry, i) =>
+          createElement('div', { style: { ...styles.colTitle, marginTop: 8 } }, `账本（tokens 实测 ${status?.ledger?.total_tokens ?? 0} · 等效 $${(status?.ledger?.total_equiv_usd ?? 0).toFixed(4)}）`),
+          (status?.ledger?.entries ?? []).map((entry, i) =>
             createElement(
               'div',
-              { key: `${entry.slot_id}-${entry.ts}-${i}`, style: styles.ledgerLine },
-              `${formatTime(entry.ts)} ${entry.slot_id}${entry.task_id ? ` [${entry.task_id}]` : ''} · ${entry.model} · ${entry.tokens_in}/${entry.tokens_out}t · $${entry.equiv_usd.toFixed(4)}${entry.price_known ? '' : '(无价目)'}`,
+              { key: `${entry.model}-${i}`, style: styles.ledgerLine },
+              `${entry.model} · ${entry.tokens_in}/${entry.tokens_out}t · $${entry.equiv_usd.toFixed(4)}${entry.price_known ? '' : '(无价目)'}`,
             ),
           ),
         )

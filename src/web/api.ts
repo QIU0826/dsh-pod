@@ -36,18 +36,19 @@ export interface StatusResponse {
   slots: StatusSlot[]
   pending_approvals: Array<{ id: string; summary: string; worktree_path: string }>
   experiments: { topology_animation: boolean; canvas_third_column: boolean }
-  ledger: Array<{
-    slot_id: string
-    task_id: string | null
-    model: string
-    ts: number
-    tokens_in: number
-    tokens_out: number
-    equiv_usd: number
-    price_known: boolean
-    price_table_version: string
-    usage_source: string
-  }>
+  /** 账本双列汇总（W5）：tokens 实测 + equiv_usd 标注，entries 为逐条记录。 */
+  ledger: {
+    total_tokens: number
+    total_equiv_usd: number
+    entries: Array<{
+      model: string
+      tokens_in: number
+      tokens_out: number
+      equiv_usd: number
+      price_known: boolean
+      usage_source: string
+    }>
+  }
   message: string
 }
 
