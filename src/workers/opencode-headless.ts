@@ -1,19 +1,20 @@
 /**
- * opencode-headless 后端 —— 方案书 3.2 节后端对照表 v0.3 扩展（Berd-G 管线：新 vendor = 新 adapter，零编排改动）。
+ * opencode-headless 后端 —— 方案书 3.2 节后端对照表 v0.3（Berd-G 管线：新 vendor = 新 adapter，零编排改动）。
  *
- * CLI 契约（sst/opencode `run` 子命令，本机未装——以下为公开文档契约 + fake 测试锁定）：
- *   - 非交互：opencode run [message..]（prompt 末位位置参数；亦支持 stdin 管道注入——P0 待真机实证，
- *     Windows 专项 CR-02：cmd /c 引号拼接对长中文 prompt 有破坏风险，故优先 stdin）
- *   - 模型：--model <provider/model>（slot.model 原样透传；留空走 opencode 默认）
- *   - 会话：--session <id> 续会话（session_ref）；transient 档每次新会话
- *   - 进度/完成：stdout 最终文本（无 JSONL 结构化事件流）；退出码非 0 = failed
- *   - usage：文本模式无结构化 token 上报 → usage_audit: false（tokens 0/unmeasured，CR-01-5 如实标注）
- *   - 真机首验清单：stdin 注入、--session 回传 id 的提取点、auth list 输出格式
+ * 真机实证（opencode-ai 1.18.24，2026-08-28，Windows / GLM-5.3-Flash 经 OpenAI 兼容端点）：
+ *   - 非交互：`opencode run` + prompt 走 stdin（实测支持；位置参数亦可，stdin 与 claude/codex 同纪律规避 CR-02 argv 风险）
+ *   - `--dir <worktree>` 必须显式：cwd 会被 opencode 项目根探测忽略（实证：任务落到宿主仓库根）
+ *   - `--format json`：JSONL 事件流（step_start/text/step_finish），sessionID 在每个事件顶层，
+ *     usage 在 step_finish.part.tokens（input/output 实测）→ usage_audit: true
+ *   - 会话：`-s/--session <id>` 续会话；transient 档每次新会话
+ *   - auth：`opencode auth list` 0 credentials → authed=false（指引 auth login / 配置文件 provider）
+ *   - Windows 安装布局：npm 全局包自带 bin/opencode.exe（postinstall 下载平台子包），
+ *     PATH shim 可能缺失 → 二进制候选含 node_modules 实路径
  */
 
 import { execFile, spawn } from 'node:child_process'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { extractReport, buildTaskPrompt } from './claude-headless.js'
 import { execCommandRunner } from './preflight.js'
 import type {
@@ -36,16 +37,21 @@ export function resolveOpenCodeMode(slot: Pick<AgentSlot, 'session_tier' | 'sess
   return { kind: 'new-run' }
 }
 
-/** 二进制候选（Windows：宿主 PATH 滞后 → 家目录 .opencode 兜底，同 codex 模式）。 */
+/** 二进制候选（Windows：PATH shim 可能缺失 → npm 全局包内 exe 兜底，实证 1.18.24 布局）。 */
 export function opencodeBinaryCandidates(platform: NodeJS.Platform = process.platform): string[] {
   if (platform === 'win32') {
-    return ['opencode', join(homedir(), '.opencode', 'bin', 'opencode.exe')]
+    return [
+      'opencode',
+      join(homedir(), '.opencode', 'bin', 'opencode.exe'),
+      join(dirname(process.execPath), 'node_modules', 'opencode-ai', 'bin', 'opencode.exe'),
+    ]
   }
   return ['opencode']
 }
 
 export interface SpawnedOpenCode {
   pid?: number
+  onLine(line: string): void
   writeStdin(text: string): void
   exited: Promise<{ code: number | null; signal: string | null; timedOut: boolean }>
   kill(): void
@@ -58,20 +64,53 @@ export interface OpenCodeBackendOptions {
   clock?: () => number
 }
 
-/** 组装 opencode run 参数（prompt 走 stdin；--session 置于位置参数前）。 */
+/**
+ * 组装 opencode run 参数（真机实证 1.18.24）。
+ * prompt 走 stdin（短固定 argv）；--dir 显式指定 worktree（cwd 探测不可靠，实证）。
+ */
 export function buildOpenCodeArgs(mode: OpenCodeLaunchMode, worktree: string, model?: string): string[] {
-  const args = ['run', '-C', worktree]
+  const args = ['run', '--dir', worktree, '--format', 'json']
   if (model !== undefined && model.length > 0) args.push('--model', model)
   if (mode.kind === 'resume') args.push('--session', mode.sessionId)
   return args
+}
+
+/** JSONL 行容错解析（日志/告警行混入 stdout 时跳过）。 */
+export function parseOpenCodeJsonlLine(line: string): Record<string, unknown> | undefined {
+  const trimmed = line.replace(/^\uFEFF/, '').trim()
+  if (!trimmed.startsWith('{')) return undefined
+  try {
+    return JSON.parse(trimmed) as Record<string, unknown>
+  } catch {
+    return undefined
+  }
+}
+
+/** sessionID：opencode 每个事件顶层都带（--session 续会话的钥匙）。 */
+export function extractOpenCodeSessionId(event: Record<string, unknown>): string | undefined {
+  return typeof event.sessionID === 'string' ? event.sessionID : undefined
+}
+
+/** step_finish.part.tokens → usage 实测（CR-01-5 同款纪律）。 */
+export function extractOpenCodeUsage(event: Record<string, unknown>): { tokens_in: number; tokens_out: number; source: UsageSource } | undefined {
+  if (event.type !== 'step_finish') return undefined
+  const part = event.part as { tokens?: { input?: number; output?: number } } | undefined
+  const tokens = part?.tokens
+  if (tokens === undefined) return undefined
+  return { tokens_in: tokens.input ?? 0, tokens_out: tokens.output ?? 0, source: 'measured' }
+}
+
+/** step_finish 是 opencode 的回合终结事件（exit 判定的结构化佐证）。 */
+export function isOpenCodeStepFinish(event: Record<string, unknown>): boolean {
+  return event.type === 'step_finish'
 }
 
 export class OpenCodeHeadlessBackend implements WorkerBackend {
   readonly vendor = 'opencode' as const
   readonly protocol = {
     family: 'headless-cli' as const,
-    version: 'opencode run (stdin prompt, plain-text stdout)',
-    capabilities: { kill: true, session_persist: false, structured_output: false, usage_audit: false },
+    version: 'opencode run --format json (1.18.24 实证)',
+    capabilities: { kill: true, session_persist: false, structured_output: true, usage_audit: true },
   }
   private readonly spawner?: OpenCodeBackendOptions['spawner']
   private readonly detectRunner: NonNullable<OpenCodeBackendOptions['detectRunner']>
@@ -88,19 +127,28 @@ export class OpenCodeHeadlessBackend implements WorkerBackend {
   async detect(): Promise<Awaited<ReturnType<WorkerBackend['detect']>>> {
     const version = await this.detectRunner.run(this.binary, ['--version'])
     if (version.code !== 0) {
+      // 逐候选兜底（npm 全局包内 exe）
+      for (const candidate of opencodeBinaryCandidates().slice(1)) {
+        const retry = await this.detectRunner.run(candidate, ['--version'])
+        if (retry.code === 0) {
+          return this.detectAuth(candidate, retry.stdout.trim())
+        }
+      }
       return { installed: false, authed: false, models: [], session_tiers: ['transient'], error: 'opencode not installed' }
     }
-    // auth 探测：opencode auth list 列出已配置 provider（无 credentials 时输出空/报错）
-    const auth = await this.detectRunner.run(this.binary, ['auth', 'list'])
-    const authed = version.code === 0 && auth.code === 0
+    return this.detectAuth(this.binary, version.stdout.trim())
+  }
+
+  private async detectAuth(binary: string, version: string): Promise<Awaited<ReturnType<WorkerBackend['detect']>>> {
+    const auth = await this.detectRunner.run(binary, ['auth', 'list'])
+    const hasCredentials = /\d+\s+credentials|provider/i.test(auth.stdout) && !/0 credentials/.test(auth.stdout)
     return {
       installed: true,
-      authed,
+      authed: hasCredentials,
       models: [],
-      version: version.stdout.trim(),
+      version,
       session_tiers: ['transient'],
-      error: authed ? undefined : 'opencode auth list empty (run `opencode auth login`)'
-        + (auth.code !== 0 ? `: ${auth.stderr.slice(0, 120)}` : ''),
+      error: hasCredentials ? undefined : 'opencode auth list 0 credentials（opencode auth login 或配置 provider）',
     }
   }
 
@@ -114,7 +162,6 @@ export class OpenCodeHeadlessBackend implements WorkerBackend {
     } = {},
   ): Promise<WorkerHandle> {
     const mode = resolveOpenCodeMode(slot)
-    // 复用统一任务简报（MISSION_REPORT schema 与 claude/codex 同契约）
     const prompt = buildTaskPrompt({ task, worktreePath: worktree })
     const args = buildOpenCodeArgs(mode, worktree, slot.model !== '' ? slot.model : undefined)
     const spawned = this.spawnOpenCode(args, worktree)
@@ -128,10 +175,12 @@ export class OpenCodeHeadlessBackend implements WorkerBackend {
     return handle
   }
 
-  private spawnOpenCode(args: string[], cwd: string): SpawnedOpenCode {
+  private spawnOpenCode(args: string[], cwd: string): SpawnedOpenCode & { onLine(line: string): void } {
     if (this.spawner !== undefined) return this.spawner(this.binary, args, { cwd })
-    const child = spawn(this.binary, args, { cwd, shell: process.platform === 'win32', windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
-    let output = ''
+    // 真 .exe → shell:false（无 cmd 引号破坏面）；PATH shim 缺失时由 detect 候选解析出全路径传入
+    const child = spawn(this.binary, args, { cwd, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+    let buffer = ''
+    let lineHandler: (line: string) => void = () => {}
     const spawned = {
       pid: child.pid,
       writeStdin(text: string) {
@@ -139,7 +188,15 @@ export class OpenCodeHeadlessBackend implements WorkerBackend {
         child.stdin?.end()
       },
       exited: new Promise<{ code: number | null; signal: string | null; timedOut: boolean }>((resolve) => {
-        const consume = (chunk: Buffer): void => { output += chunk.toString('utf8') }
+        const consume = (chunk: Buffer): void => {
+          buffer += chunk.toString('utf8')
+          let index: number
+          while ((index = buffer.indexOf('\n')) >= 0) {
+            const line = buffer.slice(0, index)
+            buffer = buffer.slice(index + 1)
+            lineHandler(line)
+          }
+        }
         child.stdout?.on('data', consume)
         child.stderr?.on('data', consume)
         let timedOut = false
@@ -156,9 +213,15 @@ export class OpenCodeHeadlessBackend implements WorkerBackend {
         child.kill()
       },
     }
-    // stdout 全量累计（纯文本流，无结构化事件）；collect 时整体提取 MISSION_REPORT。
-    ;(spawned as SpawnedOpenCode & { __output(): string }).__output = () => output
-    return spawned as SpawnedOpenCode
+    Object.defineProperty(spawned, 'onLine', {
+      set(fn: (line: string) => void) {
+        lineHandler = fn
+      },
+      get() {
+        return lineHandler
+      },
+    })
+    return spawned as SpawnedOpenCode & { onLine(line: string): void }
   }
 
   private async collect(
@@ -167,19 +230,31 @@ export class OpenCodeHeadlessBackend implements WorkerBackend {
     spawned: SpawnedOpenCode,
     callbacks: { onProgress?(event: WorkerProgressEvent): void },
   ): Promise<{ sessionId?: string; completion: WorkerCompletion }> {
-    const exit = await spawned.exited
-    const output = (spawned as SpawnedOpenCode & { __output(): string }).__output()
-    // 进度：无事件流 → 起止两个事件（started / finished 文本截断）
-    callbacks.onProgress?.({ slot_id: slot.id, task_id: task.id, ts: this.clock(), kind: 'system', text: `opencode run started (${task.id})` })
-    const fault =
-      exit.timedOut ? null : exit.code !== null && exit.code !== 0 ? 'crash' : null
-    const report = extractReport(output)
-    if (report !== undefined) {
-      callbacks.onProgress?.({ slot_id: slot.id, task_id: task.id, ts: this.clock(), kind: 'text', text: output.slice(-2000) })
+    let sessionId: string | undefined
+    let usage: { tokens_in: number; tokens_out: number; source: UsageSource } = { tokens_in: 0, tokens_out: 0, source: 'unavailable' }
+    let lastText = ''
+    spawned.onLine = (line) => {
+      const event = parseOpenCodeJsonlLine(line)
+      if (event === undefined) return
+      const sid = extractOpenCodeSessionId(event)
+      if (sid !== undefined) sessionId = sid
+      const extracted = extractOpenCodeUsage(event)
+      if (extracted !== undefined) {
+        usage = extracted
+      }
+      if (event.type === 'text') {
+        const part = event.part as { text?: string } | undefined
+        if (typeof part?.text === 'string' && part.text.length > 0) {
+          lastText = part.text
+          callbacks.onProgress?.({ slot_id: slot.id, task_id: task.id, ts: this.clock(), kind: 'text', text: part.text.slice(0, 2000) })
+        }
+      }
     }
-    const usage: { tokens_in: number; tokens_out: number; source: UsageSource } = { tokens_in: 0, tokens_out: 0, source: 'unavailable' }
+    const exit = await spawned.exited
+    const fault = exit.timedOut ? null : exit.code !== null && exit.code !== 0 ? 'crash' : null
+    const report = extractReport(lastText)
     return {
-      sessionId: undefined,
+      sessionId,
       completion: {
         exit: exit.timedOut ? 'timeout' : fault === 'crash' ? 'failed' : 'done',
         fault: fault ?? undefined,

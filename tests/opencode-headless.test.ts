@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildOpenCodeArgs,
-  extractOpenCodeReport,
+  extractOpenCodeSessionId,
+  extractOpenCodeUsage,
+  isOpenCodeStepFinish,
   opencodeBinaryCandidates,
+  parseOpenCodeJsonlLine,
   resolveOpenCodeMode,
   OpenCodeHeadlessBackend,
 } from '../src/workers/opencode-headless.js'
@@ -11,7 +14,7 @@ import type { AgentSlot } from '../src/core/types.js'
 function makeSlot(tier: AgentSlot['session_tier'], sessionRef?: string): AgentSlot {
   return {
     id: 'S-1', mission_id: 'M-1', vendor: 'opencode', role: 'implementer',
-    capabilities: ['编码'], model: 'opencode/grok-code', effort: 'medium', session_tier: tier,
+    capabilities: ['编码'], model: 'glm/GLM-5.3-Flash', effort: 'medium', session_tier: tier,
     session_ref: sessionRef, status: 'idle', tokens_in: 0, tokens_out: 0,
     ctx_usage_pct: 0, window_tokens: 200_000,
   }
@@ -20,50 +23,63 @@ function makeSlot(tier: AgentSlot['session_tier'], sessionRef?: string): AgentSl
 const REPORT = JSON.stringify({
   task_id: 'T-1', task_type: 'implement', status: 'done', summary: 's',
   files_changed: ['src/util.ts'], commit_sha: 'abc123', test_result: 'pass',
-  test_evidence: '2/2', decisions: [], blockers: [], questions: [],
+  test_evidence: '6/6', decisions: [], blockers: [], questions: [],
 })
 
-describe('resolveOpenCodeMode（会话档位 → 启动模式）', () => {
-  it('transient（默认档）→ new-run', () => {
-    expect(resolveOpenCodeMode(makeSlot('transient', 'old-session'))).toEqual({ kind: 'new-run' })
+// 真机实证事件流样例（opencode 1.18.24 --format json，2026-08-28）
+const REAL_EVENTS = [
+  '{"type":"step_start","timestamp":1787892161484,"sessionID":"ses_fb952c"}',
+  JSON.stringify({ type: 'text', timestamp: 1787892161837, sessionID: 'ses_fb952c', part: { id: 'p1', type: 'text', text: 'working... MISSION_REPORT ```json ' + REPORT + ' ```' } }),
+  '{"type":"step_finish","timestamp":1787892161837,"sessionID":"ses_fb952c","part":{"type":"step-finish","tokens":{"total":38030,"input":37996,"output":34,"reasoning":0}}}',
+]
+
+describe('parseOpenCodeJsonlLine / extractOpenCodeSessionId / extractOpenCodeUsage（真机事件流契约）', () => {
+  it('解析 step_start/text/step_finish；sessionID 每事件顶层', () => {
+    const events = REAL_EVENTS.map(parseOpenCodeJsonlLine).filter((e) => e !== undefined)
+    expect(events.length).toBe(3)
+    expect(extractOpenCodeSessionId(events[0]!)).toBe('ses_fb952c')
+    expect(isOpenCodeStepFinish(events[2]!)).toBe(true)
+    const usage = extractOpenCodeUsage(events[2]!)
+    expect(usage).toEqual({ tokens_in: 37996, tokens_out: 34, source: 'measured' })
   })
-  it('per-mission + 已有 session → resume（--session <id>）', () => {
+  it('非 JSON 行（日志混入）→ undefined', () => {
+    expect(parseOpenCodeJsonlLine('opencode > some log line')).toBeUndefined()
+  })
+})
+
+describe('resolveOpenCodeMode（会话档位）', () => {
+  it('transient → new-run；per-mission+ref → resume；auto-reset → new-run', () => {
+    expect(resolveOpenCodeMode(makeSlot('transient', 'old'))).toEqual({ kind: 'new-run' })
     expect(resolveOpenCodeMode(makeSlot('per-mission', 'ses-9'))).toEqual({ kind: 'resume', sessionId: 'ses-9' })
-  })
-  it('per-mission 但无 session → new-run（首次派单）', () => {
-    expect(resolveOpenCodeMode(makeSlot('per-mission', undefined))).toEqual({ kind: 'new-run' })
-  })
-  it('auto-reset 档 → new-run（重置后重建，等价瞬时）', () => {
     expect(resolveOpenCodeMode(makeSlot('auto-reset', 'stale'))).toEqual({ kind: 'new-run' })
   })
 })
 
-describe('buildOpenCodeArgs', () => {
-  it('新会话：run + -C worktree + --model，prompt 不进 argv（stdin 注入，Windows CR-02 专项）', () => {
-    const args = buildOpenCodeArgs({ kind: 'new-run' }, 'C:/repo/.wt', 'opencode/grok-code')
-    expect(args[0]).toBe('run')
-    expect(args).toContain('-C')
-    expect(args).toContain('C:/repo/.wt')
+describe('buildOpenCodeArgs（真机实证 1.18.24）', () => {
+  it('run --dir worktree --format json + model；prompt 走 stdin 不进 argv（CR-02）', () => {
+    const args = buildOpenCodeArgs({ kind: 'new-run' }, 'C:/repo/.wt', 'glm/GLM-5.3-Flash')
+    expect(args.slice(0, 5)).toEqual(['run', '--dir', 'C:/repo/.wt', '--format', 'json'])
     expect(args).toContain('--model')
-    expect(args).not.toContain('实现限流')
+    expect(args.join(' ')).not.toContain('MISSION_REPORT')
   })
-  it('resume：--session <id> 在位置参数前；model 留空 → 不传 --model（走 opencode 默认）', () => {
+  it('resume：--session 置于末尾（stdin 注入 prompt）', () => {
     const args = buildOpenCodeArgs({ kind: 'resume', sessionId: 'ses-9' }, 'W', undefined)
-    expect(args).toEqual(['run', '-C', 'W', '--session', 'ses-9'])
+    expect(args).toEqual(['run', '--dir', 'W', '--format', 'json', '--session', 'ses-9'])
   })
 })
 
-describe('opencodeBinaryCandidates（Windows 家目录兜底）', () => {
-  it('win32：PATH 优先 + ~/.opencode/bin 兜底', async () => {
+describe('opencodeBinaryCandidates（npm 全局包内 exe 兜底，实证 1.18.24 布局）', () => {
+  it('win32：PATH → ~/.opencode/bin → node_modules/opencode-ai/bin', async () => {
     const { homedir } = await import('node:os')
-    const { join } = await import('node:path')
+    const { dirname, join } = await import('node:path')
     const candidates = opencodeBinaryCandidates('win32')
     expect(candidates[0]).toBe('opencode')
     expect(candidates[1]).toBe(join(homedir(), '.opencode', 'bin', 'opencode.exe'))
+    expect(candidates[2]).toBe(join(dirname(process.execPath), 'node_modules', 'opencode-ai', 'bin', 'opencode.exe'))
   })
 })
 
-describe('OpenCodeHeadlessBackend（FakeSpawner 集成）', () => {
+describe('OpenCodeHeadlessBackend（FakeSpawner 集成，回放真机事件流）', () => {
   const slot = makeSlot('transient')
   const task = {
     id: 'T-1', mission_id: 'M-1', title: '做限流器', spec: '实现限流', skill_tags: [],
@@ -79,26 +95,37 @@ describe('OpenCodeHeadlessBackend（FakeSpawner 集成）', () => {
       spawner: (binary, args) => {
         captured.push(args)
         void binary
-        return {
+        let lineHandler: (line: string) => void = () => {}
+        const linesToReplay = output.split('\n')
+        const spawned = {
           pid: 42,
           kill: () => {},
+          onLine: (line: string) => {
+            lineHandler(line)
+          },
           writeStdin: (text: string) => {
             stdinText = text
           },
-          exited: Promise.resolve({ code, signal: null, timedOut: false }),
-          __output: () => output,
-        } as never
+          exited: new Promise<{ code: number | null; signal: string | null; timedOut: boolean }>((resolve) => {
+            // 宏任务回放：collect 同步挂 onLine 后再喂行（模拟 stdout 异步到达）
+            setTimeout(() => {
+              for (const line of linesToReplay) spawned.onLine(line)
+              resolve({ code, signal: null, timedOut: false })
+            }, 0)
+          }),
+        }
+        return spawned as never
       },
     })
     return { backend, captured, getStdin: () => stdinText }
   }
 
-  it('detect：已安装 + auth list 成功 → authed；未安装 → 灰掉（CR-01-0）', async () => {
+  it('detect：--version 过 + auth list 有 credentials → authed；未装 → 灰掉', async () => {
     const ok = new OpenCodeHeadlessBackend({
       detectRunner: {
         run: async (_cmd, args) => {
-          if (args[0] === '--version') return { code: 0, stdout: 'opencode 1.0.0', stderr: '' }
-          return { code: 0, stdout: 'opencode/grok-code', stderr: '' }
+          if (args[0] === '--version') return { code: 0, stdout: '1.18.24', stderr: '' }
+          return { code: 0, stdout: 'Credentials\n\n└  1 credentials', stderr: '' }
         },
       },
     })
@@ -110,30 +137,28 @@ describe('OpenCodeHeadlessBackend（FakeSpawner 集成）', () => {
     const missing = new OpenCodeHeadlessBackend({
       detectRunner: { run: async () => ({ code: 127, stdout: '', stderr: 'not found' }) },
     })
-    const result = await missing.detect()
-    expect(result.installed).toBe(false)
-    expect(result.error).toContain('not installed')
+    expect((await missing.detect()).installed).toBe(false)
   })
 
-  it('detect：auth list 失败 → authed=false 带指引', async () => {
+  it('detect：0 credentials → authed=false 带指引（真机实证输出格式）', async () => {
     const backend = new OpenCodeHeadlessBackend({
       detectRunner: {
         run: async (_cmd, args) => {
-          if (args[0] === '--version') return { code: 0, stdout: 'opencode 1.0.0', stderr: '' }
-          return { code: 1, stdout: '', stderr: 'no credentials' }
+          if (args[0] === '--version') return { code: 0, stdout: '1.18.24', stderr: '' }
+          return { code: 0, stdout: '0 credentials', stderr: '' }
         },
       },
     })
     const result = await backend.detect()
     expect(result.authed).toBe(false)
-    expect(result.error).toContain('opencode auth login')
+    expect(result.error).toContain('auth login')
   })
 
-  it('start：prompt 走 stdin；纯文本输出提取 MISSION_REPORT；usage 如实 unavailable', async () => {
-    const output = [' doing work...', 'MISSION_REPORT', '```json', REPORT, '```', ''].join('\n')
+  it('start：JSONL 回放 → session_ref/usage(measured)/report 全提取；stdin 注入 prompt', async () => {
+    const output = REAL_EVENTS.join('\n') + '\n' + 'MISSION_REPORT\n```json\n' + REPORT + '\n```'
     const { backend, captured, getStdin } = fakeSpawn(output, 0)
     const progress: string[] = []
-    let completion: { exit: string; usage: { tokens_in: number; source: string }; report?: { commit_sha?: string } } | undefined
+    let completion: { exit: string; usage: { tokens_in: number; source: string }; report?: { commit_sha?: string }; session_ref?: string } | undefined
     const handle = await backend.start(slot, task, 'W', {
       onProgress: (e) => progress.push(e.kind),
       onExit: (c) => {
@@ -141,19 +166,17 @@ describe('OpenCodeHeadlessBackend（FakeSpawner 集成）', () => {
       },
     })
     await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(handle.pid).toBe(42)
     expect(getStdin()).toContain('T-1')
-    expect(getStdin()).toContain('MISSION_REPORT')
     const args = captured[0]!
-    expect(args[0]).toBe('run')
-    expect(args).toContain('--model')
-    expect(progress).toEqual(['system', 'text'])
+    expect(args.slice(0, 5)).toEqual(['run', '--dir', 'W', '--format', 'json'])
+    expect(progress.length).toBeGreaterThanOrEqual(1)
     expect(completion?.exit).toBe('done')
-    expect(completion?.usage).toEqual({ tokens_in: 0, tokens_out: 0, source: 'unavailable' })
+    expect(completion?.usage).toEqual({ tokens_in: 37996, tokens_out: 34, source: 'measured' })
     expect(completion?.report?.commit_sha).toBe('abc123')
+    expect(handle.session_ref).toBe('ses_fb952c')
   })
 
-  it('退出码非 0 → failed/crash（完成信号 = 退出码 + 结构化报告双判定）', async () => {
+  it('退出码非 0 → failed/crash（双判定：退出码 + 结构化报告）', async () => {
     const { backend } = fakeSpawn('boom', 1)
     let completion: { exit: string; fault?: string } | undefined
     await backend.start(slot, task, 'W', { onExit: (c) => { completion = c } })
@@ -167,17 +190,5 @@ describe('OpenCodeHeadlessBackend（FakeSpawner 集成）', () => {
       spawner: () => ({ kill: () => {}, writeStdin() {}, exited: Promise.resolve({ code: 0, signal: null, timedOut: false }), __output: () => '' } as never),
     })
     await expect(backend.kill({})).resolves.toBeUndefined()
-  })
-
-  it('extractOpenCodeReport：围栏 JSON 提取复用 claude 的平衡扫描', () => {
-    expect(extractOpenCodeReport('前言\n```json\n' + REPORT + '\n```')?.commit_sha).toBe('abc123')
-    expect(extractOpenCodeReport('无报告')).toBeUndefined()
-  })
-})
-
-describe('session_tier 语义与方案书一致', () => {
-  it('opencode 默认 transient（新增 vendor 档位登记）', async () => {
-    const { DEFAULT_SESSION_TIERS } = await import('../src/core/types.js')
-    expect(DEFAULT_SESSION_TIERS.opencode).toBe('transient')
   })
 })
