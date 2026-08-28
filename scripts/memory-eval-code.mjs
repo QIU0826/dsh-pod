@@ -44,6 +44,13 @@ const PAIRS = [
   { memory: { fn: 'min2', expr1: 'min2(3,5)=3', expr2: 'min2(9,2)=2' }, baseline: { fn: 'max2', expr1: 'max2(3,5)=5', expr2: 'max2(9,2)=9' } },
   { memory: { fn: 'gcd', expr1: 'gcd(12,18)=6', expr2: 'gcd(7,13)=1' }, baseline: { fn: 'lcm', expr1: 'lcm(4,6)=12', expr2: 'lcm(3,5)=15' } },
   { memory: { fn: 'absVal', expr1: 'absVal(-5)=5', expr2: 'absVal(3)=3' }, baseline: { fn: 'floorInt', expr1: 'floorInt(3.7)=3', expr2: 'floorInt(-2.1)=-3' } },
+  // 扩样本至 10 对（统计显著性；同构两参数 number 纯函数，换函数防泄露）
+  { memory: { fn: 'roundTo', expr1: 'roundTo(3.14159,2)=3.14', expr2: 'roundTo(1.23456,3)=1.235' }, baseline: { fn: 'divInt', expr1: 'divInt(17,5)=3', expr2: 'divInt(-7,2)=-3' } },
+  { memory: { fn: 'avg2', expr1: 'avg2(3,7)=5', expr2: 'avg2(2,3)=2.5' }, baseline: { fn: 'mul2', expr1: 'mul2(6,7)=42', expr2: 'mul2(9,9)=81' } },
+  { memory: { fn: 'dist2', expr1: 'dist2(3,9)=6', expr2: 'dist2(-2,5)=7' }, baseline: { fn: 'maxAbs', expr1: 'maxAbs(-5,3)=-5', expr2: 'maxAbs(2,-9)=-9' } },
+  { memory: { fn: 'hypotInt', expr1: 'hypotInt(3,4)=5', expr2: 'hypotInt(6,8)=10' }, baseline: { fn: 'sqrtDiff', expr1: 'sqrtDiff(25,0)=5', expr2: 'sqrtDiff(2,11)=3' } },
+  { memory: { fn: 'xor2', expr1: 'xor2(12,10)=6', expr2: 'xor2(5,3)=6' }, baseline: { fn: 'or2', expr1: 'or2(12,10)=14', expr2: 'or2(5,2)=7' } },
+  { memory: { fn: 'wrap', expr1: 'wrap(-1,5)=4', expr2: 'wrap(7,5)=2' }, baseline: { fn: 'shl', expr1: 'shl(3,2)=12', expr2: 'shl(5,1)=10' } },
 ]
 
 const startedAt = Date.now()
@@ -55,13 +62,24 @@ async function runWrite(taskLabel, spec, injectMemory) {
   const worktreePath = join(REPO, '.pod-worktrees', 'memeval-' + runId)
   execFileSync('git', ['-C', REPO, 'worktree', 'add', worktreePath, '-b', 'memeval-' + runId], { stdio: 'pipe' })
 
+  // 端点注入（可选）：ME_ANTHROPIC_BASE_URL/ME_ANTHROPIC_AUTH_TOKEN/ME_ANTHROPIC_MODEL。
+  // 用途：ccswitch 本地代理对 claude CLI 2.1.129 的 skills system-reminder 报 400 时，
+  // 直连 provider 端点跑评测（进程级 env，不动用户全局配置）。
+  const envOverride = process.env.ME_ANTHROPIC_BASE_URL !== undefined
+    ? {
+        ANTHROPIC_BASE_URL: process.env.ME_ANTHROPIC_BASE_URL,
+        ANTHROPIC_AUTH_TOKEN: process.env.ME_ANTHROPIC_AUTH_TOKEN,
+        ANTHROPIC_MODEL: process.env.ME_ANTHROPIC_MODEL,
+      }
+    : undefined
   const backend = new ClaudeHeadlessBackend({
     allowedTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep'],
     taskTimeoutMs: 20 * 60_000,
+    envForSlot: envOverride === undefined ? undefined : () => envOverride,
   })
   const slot = {
     id: 'S-1', mission_id: 'M-MEM', vendor: 'claude', role: 'implementer',
-    capabilities: ['编码', '测试'], model: 'deepseek-v4-pro', effort: 'medium',
+    capabilities: ['编码', '测试'], model: process.env.ME_MODEL ?? 'deepseek-v4-pro', effort: 'medium',
     session_tier: 'transient', status: 'idle', tokens_in: 0, tokens_out: 0,
     ctx_usage_pct: 0, window_tokens: 200_000,
   }
@@ -81,6 +99,7 @@ async function runWrite(taskLabel, spec, injectMemory) {
       .start(slot, { ...taskDef, spec: effectiveSpec }, worktreePath, { onExit: resolve })
       .catch((error) => resolve({ exit: 'failed', fault: 'crash', usage: { tokens_in: 0, tokens_out: 0, source: 'measured' }, artifacts: [], error: String(error) }))
   })
+  if (completion.exit !== 'done') console.log('[eval-debug]', JSON.stringify({ fault: completion.fault, error: completion.error, report_status: completion.report?.status, test_result: completion.report?.test_result }))
   const wall = Number(((Date.now() - t0) / 1000).toFixed(1))
   return {
     exit: completion.exit,
@@ -106,6 +125,7 @@ async function main() {
     const baseRes = await runWrite('baseline-' + pair.baseline.fn, baseSpec, false)
     results.push({ memory: memRes, baseline: baseRes })
     console.log('[memory-eval-code] pair done:', JSON.stringify({ memory: { done: memRes.done, wall: memRes.wall_clock_s, tokens: memRes.tokens_in + memRes.tokens_out }, baseline: { done: baseRes.done, wall: baseRes.wall_clock_s, tokens: baseRes.tokens_in + baseRes.tokens_out } }))
+  if (!memRes.done || !baseRes.done) console.log('[memory-eval-code][debug] mem:', JSON.stringify(memRaw).slice(0, 600), '\n[debug] base:', JSON.stringify(baseRaw).slice(0, 600))
     // 增量持久化：每对完成即写盘（超时/中断不丢已完成对）
     writeFileSync(join(reportsDir, 'partial-' + start + '-' + end + '.json'), JSON.stringify({ run_at: new Date().toISOString(), completed: results.length, results }, null, 2), 'utf8')
   }
@@ -126,7 +146,7 @@ async function main() {
   const tokenWins = perPair.filter((p) => p.token_delta > 0).length
   const summary = {
     run_at: new Date().toISOString(),
-    model: 'deepseek-v4-pro (claude headless, DeepSeek 配置)',
+    model: (process.env.ME_MODEL ?? 'deepseek-v4-pro') + ' (claude headless)' + (process.env.ME_ANTHROPIC_BASE_URL !== undefined ? ' env=' + process.env.ME_ANTHROPIC_BASE_URL : ' 默认环境'),
     method: '记忆组(注入团队沉淀经验) vs 基线组(无记忆) 写码任务对比（同构任务，换函数防泄露）',
     pairs: perPair,
     metrics: {
