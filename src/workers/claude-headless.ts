@@ -270,7 +270,15 @@ export interface ClaudeBackendOptions {
  * 经 cmd /c 引号拼接会被破坏，且 argv 有 8191 字符上限——CR-02 新实证）。
  */
 export function buildClaudeArgs(options: ClaudeStartOptions): string[] {
-  const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']
+  const args = [
+    '-p',
+    '--output-format', 'stream-json',
+    '--verbose', '--include-partial-messages',
+    // CR-29 补充实证：headless worker 不需要 skills/斜杠命令；全局安装 293 个 skills 时
+    // 其 system-reminder 注入会让部分 anthropic 兼容上游（GLM 中转）报 400（input 应为 string）。
+    '--disable-slash-commands',
+    '--bare',
+  ]
   if (options.model !== undefined) args.push('--model', options.model)
   if (options.sessionTier !== 'transient') {
     if (options.sessionRef !== undefined) args.push('--resume', options.sessionRef)
