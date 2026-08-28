@@ -165,7 +165,7 @@ describe('OpenCodeHeadlessBackend（FakeSpawner 集成，回放真机事件流�
         completion = c
       },
     })
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 50))
     expect(getStdin()).toContain('T-1')
     const args = captured[0]!
     expect(args.slice(0, 5)).toEqual(['run', '--dir', 'W', '--format', 'json'])

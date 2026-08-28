@@ -11,19 +11,13 @@
  * （stop/update 时全部拆除），沿 dsh-ssh 实证模式，不碰任何私有 API（R6）。
  */
 
-import { homedir } from 'node:os'
-import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
-import { ApprovalEngine } from './core/approvals.js'
 import { PodError } from './core/errors.js'
-import { Ledger } from './core/ledger.js'
-import { openPodData, type StoreEngine } from './core/store-open.js'
-import type { PodStore } from './core/store.js'
-import type { MemoryStore } from './core/memory.js'
+import { createPodRuntime, type PodRuntime } from './core/pod-runtime.js'
 import { makePodTools, makeCommanderStartTool } from './pod-tools.js'
 import { PodService } from './pod-service.js'
 import { createCommanderSession } from './commander.js'
@@ -56,38 +50,9 @@ export interface PodConfig {
   /** Runtime data root; empty defaults to ~/.dsh/pod. */
   dataDir?: string
 }
+/** 独立模式（standalone server）与 DSH 插件形态共用（CR-38 P0）。 */
+export { createPodRuntime, type PodRuntime } from './core/pod-runtime.js'
 
-export interface PodRuntime {
-  store: PodStore
-  memory: MemoryStore
-  approvals: ApprovalEngine
-  ledger: Ledger
-  dataDir: string
-  engine: StoreEngine
-  /** 释放磁盘句柄（SQLite 连接/JSON 引用）。插件卸载与测试清理必须调用。 */
-  close(): void
-}
-
-/**
- * 构造运行时（磁盘唯一事实源）。SQLite 默认（pod.db），better-sqlite3 不可用回退 JSON；
- * store 损坏时显式抛出，调用方降级并留证。
- */
-export function createPodRuntime(dataDir?: string, engine?: StoreEngine): PodRuntime {
-  const root = dataDir && dataDir.length > 0 ? dataDir : join(homedir(), '.dsh', 'pod')
-  const opened = openPodData({ rootDir: root, engine })
-  return {
-    store: opened.store,
-    memory: opened.memory,
-    approvals: new ApprovalEngine(opened.store),
-    ledger: new Ledger(opened.store),
-    dataDir: root,
-    engine: opened.engine,
-    close: () => {
-      opened.memory.close()
-      opened.store.close()
-    },
-  }
-}
 
 function pingRoute(runtime: PodRuntime | undefined, runtimeError: string | undefined): WebRoute {
   return {

@@ -1,7 +1,7 @@
 # dsh-pod（Pod 鲸群）
 
 [![CI](https://github.com/QIU0826/dsh-pod/actions/workflows/ci.yml/badge.svg)](https://github.com/QIU0826/dsh-pod/actions/workflows/ci.yml)
-![tests](https://img.shields.io/badge/tests-470%20passed-brightgreen)
+![tests](https://img.shields.io/badge/tests-480%20passed-brightgreen)
 ![version](https://img.shields.io/badge/version-v0.3.0--alpha.1-blue)
 ![node](https://img.shields.io/badge/node-22%2B-green)
 
@@ -33,6 +33,21 @@ npm install && npm run verify
 # 挂载到你的 profile（link 或 npm 包均可）
 dsh plugin --profile web add link:<本仓库路径>
 ```
+
+## 独立运行（standalone 控制台，CR-38）
+
+不装 DSH 宿主也能用：本地起一个 Web 服务，浏览器打开即管理全部 harness（对标 block/berd 形态）。
+
+```bash
+npm run build
+node dist/standalone-server.js                      # 默认 http://127.0.0.1:3930（数据根 ~/.dsh/pod，与插件形态共用磁盘事实源）
+node dist/standalone-server.js --port 0 --data-dir <dir>   # 随机端口 / 指定数据根
+node dist/standalone-server.js --host 0.0.0.0 --token <t>  # 非 loopback 监听必须配 Bearer token（CR-29 纪律）
+npm run serve                                       # = build + 起服务
+```
+
+- 复用 `/api/dsh-pod/*` 全部 12 条路由（loopback-only 默认）；Commander 自动编排需 DSH 宿主，独立模式走 HTTP API 手动派发/审批（P2 决策见 docs/STANDALONE-PLAN.md）
+- `dist/standalone.js` 为 UI bundle（react 全量内联），由 server 静态托管；壳页内嵌于 `src/web/standalone-shell.ts`
 
 ## 开发
 

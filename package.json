@@ -41,7 +41,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "verify": "npm run typecheck && npm run test:coverage && npm run build"
+    "verify": "npm run typecheck && npm run test:coverage && npm run build",
+    "serve": "npm run build && node dist/standalone-server.js"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh": ">=0.1.0-rc.7",
@@ -91,5 +92,8 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "better-sqlite3": "^13.0.3"
+  },
+  "bin": {
+    "dsh-pod": "./dist/standalone-server.js"
   }
 }

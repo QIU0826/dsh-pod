@@ -3,16 +3,20 @@ import { defineConfig } from 'tsdown'
 const id = 'dsh-pod'
 
 /**
- * 客户端半（browser half）打包：闭包工厂产物 —— bundle 调用
- * `window.__ModuleLoader__.load({ id, factory })` 自注册，externals 走注入的
- * require（loader 模块表，无 globals、无 import map）。由 DSH 以
- * /plugins/<id>/client.js 提供（dsh-ssh 同款路径）。
- * 宿主半（dist/plugin.js 及 core 依赖树）由 tsc 构建，不经过 tsdown。
+ * 三个打包入口（CR-38）：
+ * 1. client —— DSH 宿主半：ModuleLoader 闭包工厂自注册（dist/client.js，由宿主以
+ *    /plugins/<id>/client.js 提供）。banner/footer/intro 是加载器协议，不可动。
+ * 2. standalone —— 独立控制台 UI 半：浏览器 ESM 全量打包（react/react-dom/scheduler
+ *    内联，浏览器解析不了 bare import），产物 dist/standalone.js。
+ * 3. standalone-server —— 独立服务端 bin：node ESM，dependencies 外置
+ *    （better-sqlite3 原生模块不可打包），产物 dist/standalone-server.js（shebang 取自 cli.ts 首行）。
  *
- * 注意：client bundle 必须自注册，纯 `export { apply, inject }` 的 ESM 会被
- * 加载器判为「loaded without registering」而整机失败。
+ * 注：react/react-dom/scheduler 是 devDependencies，默认即内联进 UI bundle（浏览器解析不了 bare import）；
+ * 生产 dependencies（better-sqlite3 等）默认外置给服务端 bundle。
+ *
+ * 宿主半（dist/plugin.js 及 core 依赖树）由 tsc 构建，不经过 tsdown。
  */
-export default defineConfig({
+const client = defineConfig({
   entry: { client: 'src/web/client.ts' },
   format: 'cjs',
   platform: 'browser',
@@ -27,3 +31,29 @@ export default defineConfig({
     intro: 'var module = { exports: {} }; var exports = module.exports;',
   },
 })
+
+const standaloneUi = defineConfig({
+  entry: { standalone: 'src/web/standalone.ts' },
+  deps: { alwaysBundle: [/^react/, /^scheduler/] },
+  format: 'esm',
+  platform: 'browser',
+  outDir: 'dist',
+  clean: false,
+  dts: false,
+  sourcemap: true,
+  outputOptions: { entryFileNames: 'standalone.js' },
+})
+
+// shebang 由 cli.ts 源文件首行携带，tsdown 自动保留（勿再加 banner，会 DUPLICATE_SHEBANG）
+const standaloneServer = defineConfig({
+  entry: { 'standalone-server': 'src/standalone/cli.ts' },
+  format: 'esm',
+  platform: 'node',
+  outDir: 'dist',
+  clean: false,
+  dts: false,
+  sourcemap: true,
+  outputOptions: { entryFileNames: 'standalone-server.js' },
+})
+
+export default [client, standaloneUi, standaloneServer]
