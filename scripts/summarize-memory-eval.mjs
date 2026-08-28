@@ -27,6 +27,14 @@ const files = readdirSync(dir)
   .sort((a, b) => a.mtime - b.mtime)
 
 const byPair = new Map()
+// 对 0（mod/pow）只在旧 summary-4pairs.json（DeepSeek 批）有明细——预置为底，最新 partial 覆盖
+const legacy4 = JSON.parse(readFileSync(join(dir, 'summary-4pairs.json'), 'utf8'))
+for (const p of legacy4.pairs) {
+  byPair.set(p.pair ?? PAIRS.findIndex((x) => x[0] === p.memory_fn), {
+    data: { memory: { done: p.memory.done, wall_clock_s: p.memory.wall_s, tokens_in: p.memory.tokens, tokens_out: 0 }, baseline: { done: p.baseline.done, wall_clock_s: p.baseline.wall_s, tokens_in: p.baseline.tokens, tokens_out: 0 } },
+    source: 'summary-4pairs.json',
+  })
+}
 for (const { f } of files) {
   const m = f.match(/^partial-(\d+)-(\d+)\.json$/)
   if (m === null) continue
