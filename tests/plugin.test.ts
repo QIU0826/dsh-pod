@@ -74,6 +74,7 @@ describe('plugin 宿主契约', () => {
       'pod_abort',
       'pod_pause',
       'pod_resume',
+      'pod_cron_list',
       'pod_commander_start',
     ])
     expect(mocks.sectionDisposers.length).toBeGreaterThan(0)
@@ -109,7 +110,7 @@ describe('plugin 宿主契约', () => {
     // ping + status/events/launch/steer/approve/deny/dispatch/resolve/rules/abort 十一条宿主路由
     // AS-4/EV-2：+ /assets 与 /events/stream 两条只读流路由 → 13 条
     expect(mocks.register).toHaveBeenCalledTimes(13)
-    expect(mocks.toolNames).toHaveLength(14) // 7 原 pod_* + 3 mem + reassign + pause/resume + commander_start
+    expect(mocks.toolNames).toHaveLength(15) // 7 原 pod_* + 3 mem + reassign + pause/resume + cron_list + commander_start
     ctx.registry.delete(plugin)
     // 等 effect disposer 异步执行（SQLite WAL 句柄释放）再清理目录
     await new Promise((resolve) => setTimeout(resolve, 10))

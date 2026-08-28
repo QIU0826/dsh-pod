@@ -51,6 +51,70 @@ node scripts/demo-chain.mjs --repo <dir>   # 自定义靶场仓库
 ⚠️ `--reviewer` 仅支持 `claude|codex`，传入其他值会警告并回落为 `codex`。
 真实跑通「实现 → 独立 review → 审批卡」链；合并（apply_patch）属 W5 切片，本演示止于审批卡。
 
+### 写码型 bake-off（真实 LLM）
+
+```bash
+node scripts/bakeoff-claude.mjs                 # claude 实现+测试+commit → claude 独立 review → 审批卡
+ARK_API_KEY=<key> node scripts/bakeoff-cross-vendor.mjs   # claude 实现 + ark 跨 vendor 审查
+```
+
+产物留档 `reports/`（不入库）；审批卡裁决后合并回主树：
+
+```bash
+node scripts/approve-merge-verify.mjs <storeDir> <approvalId> <missionId> [note]
+```
+
+## v0.3 联邦入口（MCP 双向 / 多机 satellite / 外部通道）
+
+### MCP stdio（Claude Code / Codex 反向驱动 Pod）
+
+```bash
+claude mcp add pod -- node <本仓库路径>/scripts/mcp-bridge.mjs
+# 之后在 Claude Code 里即可调用 pod_launch / pod_status / pod_approve 等 9 个工具
+```
+
+### MCP Streamable HTTP（远程访问，CR-29）
+
+```bash
+# 本机（loopback，无 token 也可）
+node scripts/mcp-http-server.mjs                    # 127.0.0.1:3947/mcp
+# 远程（必须带 token，否则拒绝启动 fail-closed）
+POD_MCP_HOST=0.0.0.0 POD_MCP_TOKEN=<token> node scripts/mcp-http-server.mjs
+# 客户端接入（Claude Code）：
+claude mcp add --transport http pod http://<host>:3947/mcp --header "Authorization: Bearer <token>"
+```
+
+GET `/mcp` 返回健康检查；POST 走 MCP 协议（tools/list、tools/call）。
+
+### 多机 satellite（CR-30）
+
+```bash
+# 卫星机（跑真实后端的机器）：
+POD_SATELLITE_PORT=3950 POD_SATELLITE_TOKEN=<共享密钥> node scripts/satellite-worker.mjs
+POD_SATELLITE_BACKEND=ark ARK_API_KEY=<key> node scripts/satellite-worker.mjs   # 换 ark 后端
+
+# 本机（Pod 侧）：环境变量指向卫星，launch 的 slot vendor 即走远程
+POD_SATELLITE_URL=http://<卫星机>:3950 POD_SATELLITE_VENDOR=claude POD_SATELLITE_TOKEN=<共享密钥>
+```
+
+线协议：`/detect` `/start` `/events` `/kill` `/health`；本机仍是状态机唯一裁决者（satellite 只执行任务）。
+多机真机部署需 worktree 共享（见 [docs/satellite.md](docs/satellite.md) 边界）。
+
+### 外部协作通道 webhook（Berd-H，CR-31）
+
+```bash
+node scripts/channel-http-server.mjs               # 默认 127.0.0.1:3960
+# 入站指令 -> 映射 pod_* 工具面；出站仅白名单信号（代码/diff/凭据不出会话）
+curl -X POST -H "content-type: application/json" -d '{"text":"看板状态"}' http://127.0.0.1:3960/inbound
+curl -X POST -H "content-type: application/json" -d '{"text":"批准 A-1 合并"}' http://127.0.0.1:3960/inbound
+```
+
+支持指令：状态/暂停/恢复/中止/批准 A-n/驳回 A-n/给 S-n 指令：…；审批动作仍走 `pod_approve` 门（不绕过状态机）。
+
+### Cron 定时触发（AgentScope-J，CR-34）
+
+`src/core/cron.ts` 的 `CronScheduler`：tick 驱动（与 watchdog 同风格）、节流防抖、默认关闭（Berd-H 显式启用）、gate 守卫、触发历史审计；命令复用同一 pod_* 工具面。宿主接线（maintenanceTick 同源驱动）进行中。
+
 ## v0.2 切片（灰度项经 `~/.dsh/pod/experiments.json` 开关，默认全关；非灰度项默认生效）
 
 | 切片 | 状态 | 说明 |

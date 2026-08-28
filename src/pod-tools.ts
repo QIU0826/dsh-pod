@@ -533,6 +533,42 @@ export function makePodTools(service: PodService): PodToolBundle {
         }
       },
     }),
+    defineTool({
+      name: 'pod_cron_list',
+      description: '查看定时任务（Cron，AgentScope-J）：cron.json 里的 jobs 与最近触发历史。触发词：Pod 定时 / cron。编辑 <dataDir>/cron.json 后调用本工具即热加载。',
+      parameters: {},
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            jobs: { type: 'array' },
+            recent: { type: 'array' },
+            message: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value) => text(value.message),
+      },
+      async execute() {
+        const cron = service.cronList()
+        const jobs = cron.jobs.map((j) => ({
+          id: j.id,
+          label: j.label ?? null,
+          interval_ms: j.intervalMs,
+          enabled: j.enabled,
+          command_kind: j.command.kind,
+          last_fired_at: j.lastFiredAt ?? null,
+        }))
+        return {
+          jobs,
+          recent: cron.recent.map((h) => ({ job_id: h.job_id, fired: h.fired, reason: h.reason, reply: h.reply_text ?? null, ts: h.ts })),
+          message:
+            jobs.length === 0
+              ? '无定时任务。配置 <dataDir>/cron.json（{"jobs":[{id,intervalMs,command,enabled}]}，enabled 默认 false 须显式 true），保存后调 pod_cron_list 热加载。'
+              : jobs.length + ' 个定时任务（enabled ' + jobs.filter((j) => j.enabled).length + '），随宿主 maintenanceTick 节拍触发；最近 ' + cron.recent.length + ' 条触发历史见 recent。',
+        }
+      },
+    }),
   ]
   // AgentScope-E 工具级 middleware（Should 落地）：每个 pod_* 工具 execute 包审计钩子——
   // 调用前记开始、调用后记耗时/成败（service.recordToolAudit → pod_tool_called 事件）。

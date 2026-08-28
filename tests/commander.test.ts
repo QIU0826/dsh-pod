@@ -68,6 +68,7 @@ describe('createCommanderSession（官方 API 使用面契约）', () => {
       'pod_abort',
       'pod_pause',
       'pod_resume',
+      'pod_cron_list',
     ])
   })
 

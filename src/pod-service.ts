@@ -10,7 +10,7 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { ApprovalEngine } from './core/approvals.js'
 import { ApplyPatch, execGitRunner, type ApplyResult } from './core/apply-patch.js'
 import { BackendsLock } from './core/backends-lock.js'
@@ -26,6 +26,8 @@ import { ClaudeHeadlessBackend } from './workers/claude-headless.js'
 import { CodexHeadlessBackend, codexBinaryCandidates } from './workers/codex-headless.js'
 import { ArkBackend } from './workers/ark-headless.js'
 import { repairPath } from './workers/preflight.js'
+import { CronScheduler, type CronJob } from './core/cron.js'
+import type { ChannelTarget } from './core/channel.js'
 import type { ApprovalRequest, ApprovalRule, AgentSlot, Handoff, MemoryRecord, MemoryRelation, Mission, Task, Vendor, WorkerBackend } from './core/types.js'
 
 /**
@@ -83,6 +85,10 @@ export class PodService {
   private commanderLauncher: CommanderLauncher | undefined
   private readonly experiments: Experiments
   private readonly memory: MemoryStore
+  /** CR-34：Cron 定时触发（AgentScope-J）——命令复用 pod_* 工具面（审批门不绕过）。 */
+  private cron: CronScheduler
+  private readonly cronJobsFile: string
+  private cronMtimeMs = -1
 
   constructor(options: PodServiceOptions) {
     this.store = options.store
@@ -117,7 +123,80 @@ export class PodService {
       }),
       ...arkBackendFromSettings(),
     }
+    // CR-34：Cron 定时触发（AgentScope-J）——target 适配自身 pod_* 工具面（同一套，审批门不绕过）；
+    // jobs 从 <dataDir>/cron.json 加载，缺省无 job = 默认关（Berd-H 显式启用纪律）。
+    this.cron = new CronScheduler({ clock: this.clock })
+    this.cron.setTarget(this.asChannelTarget())
+    this.cronJobsFile = join(this.dataDir, 'cron.json')
+    this.reloadCronJobs()
   }
+
+  /** ChannelTarget 适配：Cron/外部通道与 pod_* 工具面共用同一套动作（审批走同一 approve 门）。 */
+  private asChannelTarget(): ChannelTarget {
+    return {
+      status: () => {
+        const s = this.status()
+        return { mission: s.mission ?? null, pendingApprovalIds: s.pendingApprovals.map((a) => a.id) }
+      },
+      launch: (input) => {
+        const m = this.launch({
+          name: input.name,
+          goal: input.goal,
+          cwd: input.cwd,
+          budgetUsd: input.budgetUsd ?? 3,
+          slots: input.slots ?? [],
+        })
+        return { mission_id: m.id, status: m.status }
+      },
+      approve: async (id, note) => {
+        const r = await this.approve(id, 'cron', note === undefined ? undefined : { merge_note: note })
+        return r.ok ? { ok: true } : { ok: false, message: r.message }
+      },
+      deny: (id, reason) => this.deny(id, 'cron', reason),
+      steer: (slotId, instruction) => this.steer(slotId, instruction),
+      pause: () => this.pauseMission(),
+      resume: () => this.resumeMission(),
+      abort: (reason) => this.abort(reason),
+    }
+  }
+
+  /** cron.json 热加载：mtime 变化才重读（外部编辑文件即生效，无需重启；文件缺失 = 无 job）。 */
+  private reloadCronJobs(): void {
+    let mtime = 0
+    try {
+      mtime = existsSync(this.cronJobsFile) ? statSync(this.cronJobsFile).mtimeMs : 0
+    } catch {
+      mtime = 0
+    }
+    if (mtime === this.cronMtimeMs) return
+    let jobs: CronJob[] = []
+    if (existsSync(this.cronJobsFile)) {
+      try {
+        const parsed = JSON.parse(readFileSync(this.cronJobsFile, 'utf8')) as { jobs?: CronJob[] }
+        for (const job of parsed.jobs ?? []) {
+          if (typeof job?.id === 'string' && typeof job?.intervalMs === 'number' && job.intervalMs > 0 && job.command !== undefined) {
+            jobs.push({ id: job.id, intervalMs: job.intervalMs, command: job.command, enabled: job.enabled ?? false, label: job.label })
+          }
+        }
+      } catch (error) {
+        // cron.json 损坏/非法：保持上一份 jobs（旧实例不重建），记日志；mtime 已更新不重试刷屏
+        console.error('[dsh-pod] cron.json parse failed (keeping previous jobs):', error instanceof Error ? error.message : error)
+        this.cronMtimeMs = mtime
+        return
+      }
+    }
+    this.cronMtimeMs = mtime
+    this.cron = new CronScheduler({ clock: this.clock })
+    this.cron.setTarget(this.asChannelTarget())
+    for (const job of jobs) this.cron.register(job)
+  }
+
+  /** pod_cron_list 工具面（只读）：当前 jobs + 最近触发历史；顺带热加载 cron.json。 */
+  cronList(): { jobs: CronJob[]; recent: ReturnType<CronScheduler['historyTail']> } {
+    this.reloadCronJobs()
+    return { jobs: this.cron.list(), recent: this.cron.historyTail(10) }
+  }
+
 
   /** 插件层注入 commander 会话启动器（pod_launch 后自动创建 mission 编排会话，3.3 节）。 */
   setCommanderLauncher(launcher: CommanderLauncher | undefined): void {
@@ -265,6 +344,17 @@ export class PodService {
     if (now - this.lastReflectionAt >= REFLECTION_INTERVAL_MS) {
       this.lastReflectionAt = now
       this.memory.runReflection()
+    }
+    // CR-34：Cron 定时触发（与 watchdog 同一节拍，宿主 setInterval 30s 驱动）。
+    // 放在 early return 之前：无 orchestrator 时 cron 的 launch 也能创建 mission。
+    // fire-and-forget（tick 内 launch 可能耗时），错误进 cron 历史不炸宿主。
+    try {
+      this.reloadCronJobs()
+      void this.cron.tick(now).catch((error) => {
+        console.error('[dsh-pod] cron tick failed:', error)
+      })
+    } catch (error) {
+      console.error('[dsh-pod] cron tick failed:', error)
     }
     if (this.orchestrator === undefined) return { staleApprovals: [], watchdogFired: 0 }
     const result = this.orchestrator.maintenanceTick()
