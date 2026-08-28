@@ -1,6 +1,6 @@
 {
   "name": "dsh-pod",
-  "version": "0.1.0",
+  "version": "0.3.0-alpha.1",
   "description": "Pod (鲸群): 在 DSH Web UI 里一键组队、看得见、管得住的多智能体驾驶舱",
   "type": "module",
   "main": "dist/plugin.js",
