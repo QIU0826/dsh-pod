@@ -252,6 +252,16 @@ export function postAbort(reason: string): Promise<{ ok: boolean }> {
   return postJson('/api/dsh-pod/abort', { reason })
 }
 
+/** 暂停当前 mission（paused 落盘，可恢复；非法状态由后端回 409）。 */
+export function postPause(): Promise<{ ok: boolean; paused: boolean }> {
+  return postJson('/api/dsh-pod/pause', {})
+}
+
+/** 恢复已暂停的 mission（去向由 pending 审批卡决定：running 或 awaiting_approval）。 */
+export function postResume(): Promise<{ ok: boolean; resumed: boolean }> {
+  return postJson('/api/dsh-pod/resume', {})
+}
+
 /** 人工裁决转人工任务（对话式问题卡的「继续」路径）：blocked = 带答案重派。 */
 export function postResolve(taskId: string, outcome: 'done' | 'blocked', note?: string): Promise<{ ok: boolean; message?: string }> {
   return postJson('/api/dsh-pod/resolve', { task_id: taskId, outcome, note })

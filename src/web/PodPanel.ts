@@ -16,7 +16,9 @@ import {
   postDeny,
   postDispatch,
   postLaunch,
+  postPause,
   postResolve,
+  postResume,
   postSteer,
   type MissionArchive,
   type MissionSummary,
@@ -319,6 +321,11 @@ export function PodPanel(): ReactElement {
                 onApprove: handleApprove,
                 onViewApproval: (id) => { setApprovalId(id); setView('approval') },
                 onDispatch: () => void runAction(() => postDispatch()),
+                // 暂停/恢复只对活跃会话有意义（历史回放时编排器已释放）
+                canPause: isLive && mission !== null && mission.status !== 'done' && mission.status !== 'aborted',
+                isPaused: mission?.status === 'paused',
+                onPause: () => void runAction(() => postPause()),
+                onResume: () => void runAction(() => postResume()),
                 onAbort: () => { if (window.confirm('中止当前会话？（终态，不可恢复）')) void runAction(() => postAbort('aborted via console')) },
                 onNewSession: handleNewSession,
               })

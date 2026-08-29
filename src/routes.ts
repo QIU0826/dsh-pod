@@ -719,6 +719,61 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
       },
     },
     {
+      // 暂停/恢复此前只在 pod_pause / pod_resume 工具面可达，HTTP 与 UI 都没有入口
+      // （README 宣传了「暂停/恢复正式化」，但独立控制台上点不到）。
+      kind: 'exact',
+      path: '/api/dsh-pod/pause',
+      handler: async (req, res) => {
+        if (!isLoopback(req)) {
+          writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        const current = service()
+        if (current === undefined) {
+          writeJson(res, 503, { error: 'pod runtime not initialized' })
+          return
+        }
+        if (req.method !== 'POST') {
+          writeJson(res, 405, { error: 'method not allowed' })
+          return
+        }
+        try {
+          current.pauseMission()
+          writeJson(res, 200, { ok: true, paused: true })
+        } catch (error) {
+          // 非法状态迁移（INVALID_TRANSITION）如实回 409，不静默成功
+          console.error('[dsh-pod] route handler failed:', error)
+          writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/api/dsh-pod/resume',
+      handler: async (req, res) => {
+        if (!isLoopback(req)) {
+          writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        const current = service()
+        if (current === undefined) {
+          writeJson(res, 503, { error: 'pod runtime not initialized' })
+          return
+        }
+        if (req.method !== 'POST') {
+          writeJson(res, 405, { error: 'method not allowed' })
+          return
+        }
+        try {
+          current.resumeMission()
+          writeJson(res, 200, { ok: true, resumed: true })
+        } catch (error) {
+          console.error('[dsh-pod] route handler failed:', error)
+          writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
       kind: 'exact',
       path: '/api/dsh-pod/abort',
       handler: async (req, res) => {

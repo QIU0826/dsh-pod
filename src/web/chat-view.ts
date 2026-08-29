@@ -156,6 +156,13 @@ export interface ChatViewProps {
   onViewApproval: (id: string) => void
   onDispatch: () => void
   onAbort: () => void
+  /** 暂停 / 恢复：此前只在 pod_pause / pod_resume 工具面可达，HTTP 与 UI 都没有入口。 */
+  onPause: () => void
+  onResume: () => void
+  /** 是否存在可暂停的活跃会话（无 mission 或已终态 → 按钮禁用）。 */
+  canPause: boolean
+  /** 当前是否已暂停（决定按钮显示「恢复」还是「暂停」）。 */
+  isPaused: boolean
   onNewSession: () => void
 }
 
@@ -163,7 +170,7 @@ const SIDE_MIN = 232
 const SIDE_MAX = 480
 
 export function ChatView(props: ChatViewProps): ReactElement {
-  const { live, mission, tasks, slots, events, ledger, pendingApprovals, userMessages, answered, settings, selectedSlot, onSelectSlot, onSend, onAnswer, onApprove, onViewApproval, onDispatch, onAbort, onNewSession } = props
+  const { live, mission, tasks, slots, events, ledger, pendingApprovals, userMessages, answered, settings, selectedSlot, onSelectSlot, onSend, onAnswer, onApprove, onViewApproval, onDispatch, onAbort, onPause, onResume, canPause, isPaused, onNewSession } = props
   const [draft, setDraft] = useState('')
   const [dismissed, setDismissed] = useState<Set<string>>(new Set())
   const [modalChoice, setModalChoice] = useState<'continue' | 'clarify' | 'escalate'>('continue')
@@ -415,6 +422,12 @@ export function ChatView(props: ChatViewProps): ReactElement {
               Icon('navigation', 14), '引导方向'),
             createElement('button', { className: 'dsh-quickaction', type: 'button', onClick: onDispatch },
               Icon('play', 14), '派发任务'),
+            createElement('button', {
+              className: 'dsh-quickaction', type: 'button',
+              onClick: isPaused ? onResume : onPause,
+              disabled: !canPause && !isPaused,
+              title: isPaused ? '恢复会话' : '暂停会话（状态落盘，可恢复）',
+            }, Icon(isPaused ? 'play' : 'pause', 14), isPaused ? '恢复任务' : '暂停任务'),
             createElement('button', { className: 'dsh-quickaction danger', type: 'button', onClick: onAbort },
               Icon('square', 14), '中止任务')))
       : null)

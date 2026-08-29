@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { makePodRoutes, validateLaunch, formatSseFrame } from '../src/routes.js'
 import type { PodService } from '../src/pod-service.js'
@@ -33,6 +33,8 @@ function fakeService(over: Partial<PodService> = {}) {
     status: () => ({ mission: null, tasks: [], slots: [], pendingApprovals: [] }),
     eventsTail: () => ({ events: [], cursor: '', has_more: false }),
     ledgerTail: () => ({ total_tokens: 0, total_equiv_usd: 0, entries: [] }),
+    pauseMission: () => undefined,
+    resumeMission: () => undefined,
     launch: (input: unknown) => ({
       id: 'M-1',
       status: 'planning' as const,
@@ -440,5 +442,61 @@ describe('/api/dsh-pod/rules（审批规则：列 / 记 / 撤）', () => {
     await route.handler({ url: '/api/dsh-pod/rules?id=R-1', method: 'DELETE', socket: { remoteAddress: '10.0.0.5' } } as unknown as IncomingMessage, res)
     expect(written[0]!.status).toBe(403)
     expect(rules.size).toBe(2)
+  })
+})
+
+describe('POST /api/dsh-pod/pause 与 /resume（暂停/恢复接线到 UI）', () => {
+  const routeOf = (path: string) =>
+    makePodRoutes(() => fakeService()).find((r) => r.path === path)!
+
+  function request(path: string, method = 'POST', remoteAddress = '127.0.0.1'): IncomingMessage {
+    return { url: path, method, socket: { remoteAddress } } as unknown as IncomingMessage
+  }
+
+  it('pause → 200 且调用 service.pauseMission', async () => {
+    const paused = vi.fn()
+    const routes = makePodRoutes(() => fakeService({ pauseMission: paused }))
+    const route = routes.find((r) => r.path === '/api/dsh-pod/pause')!
+    const { res, written } = captureResponse()
+    await route.handler(request('/api/dsh-pod/pause'), res)
+    expect(written[0]!.status).toBe(200)
+    expect(paused).toHaveBeenCalledTimes(1)
+  })
+
+  it('resume → 200 且调用 service.resumeMission', async () => {
+    const resumed = vi.fn()
+    const routes = makePodRoutes(() => fakeService({ resumeMission: resumed }))
+    const route = routes.find((r) => r.path === '/api/dsh-pod/resume')!
+    const { res, written } = captureResponse()
+    await route.handler(request('/api/dsh-pod/resume'), res)
+    expect(written[0]!.status).toBe(200)
+    expect(resumed).toHaveBeenCalledTimes(1)
+  })
+
+  it('非 POST → 405', async () => {
+    for (const path of ['/api/dsh-pod/pause', '/api/dsh-pod/resume']) {
+      const { res, written } = captureResponse()
+      await routeOf(path).handler(request(path, 'GET'), res)
+      expect(written[0]!.status).toBe(405)
+    }
+  })
+
+  it('非 loopback → 403（与其余数据面同源）', async () => {
+    for (const path of ['/api/dsh-pod/pause', '/api/dsh-pod/resume']) {
+      const { res, written } = captureResponse()
+      await routeOf(path).handler(request(path, 'POST', '10.0.0.5'), res)
+      expect(written[0]!.status).toBe(403)
+    }
+  })
+
+  it('非法状态迁移 → 409（不静默成功）', async () => {
+    const routes = makePodRoutes(() => fakeService({
+      pauseMission: () => { throw new Error('INVALID_TRANSITION: paused -> paused') },
+    }))
+    const route = routes.find((r) => r.path === '/api/dsh-pod/pause')!
+    const { res, written } = captureResponse()
+    await route.handler(request('/api/dsh-pod/pause'), res)
+    expect(written[0]!.status).toBe(409)
+    expect(String((written[0]!.body as { error: string }).error)).toContain('INVALID_TRANSITION')
   })
 })
