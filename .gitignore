@@ -10,3 +10,4 @@ reports/
 .env.*
 !.env.example
 demo-data/
+.workbuddy/

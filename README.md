@@ -164,7 +164,8 @@ curl -X POST -H "content-type: application/json" -d '{"text":"批准 A-1 合并"
 |---|---|---|
 | MCP 双向暴露（方案书 594/797 行，CR-28 + CR-29） | ✅ stdio + Streamable HTTP | `src/mcp-server.ts`（pod_* 工具面 9 个映射 MCP tools，审批仍走三代码入口）；stdio：`scripts/mcp-bridge.mjs`（`claude mcp add pod -- node <path>/scripts/mcp-bridge.mjs`）；远程：`scripts/mcp-http-server.mjs`（默认 127.0.0.1:3947，POD_MCP_TOKEN 可选 Bearer，非 loopback 无 token 拒绝启动） |
 | 多机 Satellite（方案书 594 行，CR-30） | ✅ 已实现 | `src/workers/remote-backend.ts`（RemoteBackend，protocol.family='remote'）+ `src/workers/satellite-server.ts`（卫星端点 /detect /start /events /kill /health + StubBackend）+ `scripts/satellite-worker.mjs`；[docs/satellite.md](docs/satellite.md)（多机真机部署仍属部署关注） |
-| 外部协作通道（Berd-H / AgentScope-J，CR-31） | ✅ adapter 框架 | `src/core/channel.ts`（parseInstruction + handleChannelCommand + sanitizeOutboundSignal；审批不绕过门、凭据不出会话）+ `scripts/channel-http-server.mjs`（webhook 交付）；[docs/external-channels.md](docs/external-channels.md)（具体 IM vendor 集成仍后续） |
+| 外部协作通道（Berd-H / AgentScope-J，CR-31） | ✅ 框架 + IM vendor adapter | `src/core/channel.ts`（parseInstruction + handleChannelCommand + sanitizeOutboundSignal；审批不绕过门、凭据不出会话）+ `src/core/channel-im.ts`（Slack / 飞书 vendor adapter：HMAC 验签 + 时间窗防重放 + 挑战握手 + 出站净化，13 例单测）+ `scripts/channel-http-server.mjs`（webhook 交付）；[docs/external-channels.md](docs/external-channels.md) |
+| MCP Gateway（AgentScope-J） | ✅ 已实现 | `src/core/mcp-gateway.ts`——Pod 作为 MCP **客户端**聚合多个下游 server（与「Pod 暴露为 server」互补）：工具名 `serverId__toolName` 命名空间隔离、写类工具过审批门（未获批不执行）、输出截断防灌爆上下文、调用审计；11 例单测。声明了 server 却无连接 → 构造即失败（fail-closed） |
 
 ## 核心域层（src/core，全部纯逻辑 + 注入式副作用，可离线测试）
 
