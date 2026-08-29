@@ -148,23 +148,57 @@ export class Ledger {
     return estimate
   }
 
-  /** Debrief 数据源：按员工/模型拆解。 */
+  /**
+   * Debrief 数据源：按员工 / 模型 / **阶段**拆解。
+   *
+   * byStage 的动机（2026-08-29 调研）：多 agent 写码场景里成本高度集中——
+   * ChatDev 实测「迭代式代码 review」单项就吃掉 59.4% 的 token，而 agentic coding
+   * 的总体消耗可达单轮推理的 1000 倍且**输入主导（>150:1）**。
+   * 也就是说：只统计总数和按员工/模型拆分，看不出钱烧在哪个**阶段**。
+   * 按任务类型（plan/implement/review/test/doc/research）归因后，
+   * 「独立 review 质量门到底多贵」才有数据支撑，而不是靠感觉。
+   */
   summary(missionId: string): {
     total_tokens: number
     total_equiv_usd: number
     entries: LedgerEntry[]
     bySlot: Record<string, { tokens: number; equiv_usd: number; entries: number }>
     byModel: Record<string, { tokens: number; equiv_usd: number; entries: number }>
+    /** 按任务类型（= 执行阶段）拆解；查不到任务归入 `unknown`，不静默丢账。 */
+    byStage: Record<string, { tokens: number; equiv_usd: number; entries: number }>
   } {
     const entries = this.store.listLedger(missionId)
     const bySlot: Record<string, { tokens: number; equiv_usd: number; entries: number }> = {}
     const byModel: Record<string, { tokens: number; equiv_usd: number; entries: number }> = {}
+    const byStage: Record<string, { tokens: number; equiv_usd: number; entries: number }> = {}
+    // 同一任务会被多次采样（流式/重试），缓存避免重复查 store
+    const stageOf = new Map<string, string>()
     let totalTokens = 0
     let totalUsd = 0
     for (const entry of entries) {
       const tokens = entry.tokens_in + entry.tokens_out
       totalTokens += tokens
       totalUsd += entry.equiv_usd
+
+      let stage = 'unknown'
+      const taskId = entry.task_id
+      if (taskId !== null && taskId !== undefined && taskId.length > 0) {
+        const cached = stageOf.get(taskId)
+        if (cached !== undefined) {
+          stage = cached
+        } else {
+          const task = this.store.getTask(missionId, taskId)
+          stage = task?.type ?? 'unknown'
+          stageOf.set(taskId, stage)
+        }
+      }
+      const stageBucket = byStage[stage] ?? { tokens: 0, equiv_usd: 0, entries: 0 }
+      byStage[stage] = {
+        tokens: stageBucket.tokens + tokens,
+        equiv_usd: stageBucket.equiv_usd + entry.equiv_usd,
+        entries: stageBucket.entries + 1,
+      }
+
       for (const [key, bucket] of [[entry.slot_id, bySlot], [entry.model, byModel]] as const) {
         const current = bucket[key] ?? { tokens: 0, equiv_usd: 0, entries: 0 }
         bucket[key] = {
@@ -174,6 +208,6 @@ export class Ledger {
         }
       }
     }
-    return { total_tokens: totalTokens, total_equiv_usd: totalUsd, entries, bySlot, byModel }
+    return { total_tokens: totalTokens, total_equiv_usd: totalUsd, entries, bySlot, byModel, byStage }
   }
 }
