@@ -180,7 +180,9 @@ export function ChatView(props: ChatViewProps): ReactElement {
   const openQuestion = items.find((it) => it.k === 'question' && !answered.has(it.key) && !dismissed.has(it.key))
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ block: 'end' })
+    // scrollIntoView 非标准宿主/测试环境可能缺失（实测 jsdom 下整页崩）：
+    // 可选调用降级为「不滚动」，不能因为一个视觉效果让会话视图整体挂掉。
+    bottomRef.current?.scrollIntoView?.({ block: 'end' })
   }, [visible.length])
 
   // 侧面板拖拽调宽（window 级 pointermove）
@@ -214,7 +216,8 @@ export function ChatView(props: ChatViewProps): ReactElement {
   const taskOpen = (id: string): boolean => tasks.some((t) => t.id === id && t.status !== 'done' && t.status !== 'escalated')
 
   const welcome = visible.length === 0 && live && mission === null
-    ? createElement('div', { style: { padding: '70px 8px 30px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 } },
+    // key 必填：welcome 是 threadChildren 数组的成员，缺省会触发 React 重复/缺失 key 警告
+    ? createElement('div', { key: 'welcome', style: { padding: '70px 8px 30px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 } },
         createElement('div', { style: { fontSize: 19, fontWeight: 600 } }, '开始一段新会话'),
         createElement('div', { className: 'dsh-hint', style: { maxWidth: 430 } },
           '一句话描述可验收的目标。发送后按设置里的默认名册组队：planner 分解任务，agent 并行执行、交叉审查，关键合并等你批准。'),

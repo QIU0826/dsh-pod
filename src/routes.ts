@@ -16,6 +16,7 @@ import { join } from 'node:path'
 import type { PodService } from './pod-service.js'
 import { resolveAsset, contentTypeFor } from './core/asset-whitelist.js'
 import { allowsJsonBody } from './core/http-guard.js'
+import { NotFoundError } from './core/errors.js'
 import { browseDirectories } from './core/fs-browse.js'
 import type { PlanTaskInput } from './core/orchestrator.js'
 import { AGENT_AVATARS, UNLIMITED_BUDGET_USD } from './core/types.js'
@@ -175,8 +176,10 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
         }
         const url = new URL(req.url ?? '/', 'http://localhost')
         const after = Number(url.searchParams.get('after') ?? '0')
-        const events = current.eventsTail(after)
-        writeJson(res, 200, { events })
+        // after_id 为精确游标（同毫秒事件不会被跳过）；缺省回退 ts 游标，旧客户端不受影响
+        const afterId = (url.searchParams.get('after_id') ?? '').trim()
+        const tail = current.eventsTail(after, afterId.length > 0 ? afterId : undefined)
+        writeJson(res, 200, { events: tail.events, cursor: tail.cursor, has_more: tail.has_more })
       },
     },
     {
@@ -668,6 +671,29 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
         }
         if (req.method === 'GET') {
           writeJson(res, 200, { rules: current.listRules() })
+          return
+        }
+        // DELETE：撤销已记住的规则（此前只有 GET/POST 两个分支，规则只增不减——
+        // 「记住规则」或手工 addRule 生成的规则无法移除，只能直接改磁盘文件）
+        if (req.method === 'DELETE') {
+          const target = new URL(req.url ?? '/', 'http://localhost')
+          const ruleId = (target.searchParams.get('id') ?? '').trim()
+          if (ruleId.length === 0) {
+            writeJson(res, 422, { error: 'id is required' })
+            return
+          }
+          try {
+            current.deleteRule(ruleId)
+            writeJson(res, 200, { ok: true })
+          } catch (error) {
+            // store.deleteRule 对不存在的 id 抛 NotFoundError（幂等破坏要显式暴露）
+            if (error instanceof NotFoundError) {
+              writeJson(res, 404, { error: error.message })
+              return
+            }
+            console.error('[dsh-pod] route handler failed:', error)
+            writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
+          }
           return
         }
         // POST：记住此规则（AgentScope-B：suggested-rules 落 Store）

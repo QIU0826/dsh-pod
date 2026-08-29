@@ -97,10 +97,24 @@ export async function fetchStatus(): Promise<StatusResponse> {
   return readJson<StatusResponse>(await fetch('/api/dsh-pod/status', { cache: 'no-store' }))
 }
 
-export async function fetchEvents(afterTs: number): Promise<PodEvent[]> {
-  const response = await fetch(`/api/dsh-pod/events?after=${afterTs}`, { cache: 'no-store' })
-  const body = await readJson<{ events: PodEvent[] }>(response)
-  return body.events
+/** 事件分页（服务端按最早一批返回；has_more 表示还有下一批，按 cursor 续读）。 */
+export interface EventsPage {
+  events: PodEvent[]
+  /** 下一批的精确游标（最后一条事件的 id）；本批为空时回显上传入的游标。 */
+  cursor: string
+  has_more: boolean
+}
+
+/**
+ * 事件尾部。afterId 为精确游标（同毫秒事件不会被跳过）；
+ * 首次调用传空串，回退到 ts 语义取全量。
+ */
+export async function fetchEvents(afterId: string, afterTs = 0): Promise<EventsPage> {
+  const params = new URLSearchParams()
+  if (afterId.length > 0) params.set('after_id', afterId)
+  else params.set('after', String(afterTs))
+  const response = await fetch(`/api/dsh-pod/events?${params.toString()}`, { cache: 'no-store' })
+  return readJson<EventsPage>(response)
 }
 
 /** 目录点选器数据（设置页选仓库路径）：服务端只列目录名。 */

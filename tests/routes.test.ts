@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { makePodRoutes, validateLaunch, formatSseFrame } from '../src/routes.js'
 import type { PodService } from '../src/pod-service.js'
+import type { ApprovalRule } from '../src/core/types.js'
+import { NotFoundError } from '../src/core/errors.js'
 
 /** 手工构造响应捕获对象。 */
 function captureResponse() {
@@ -29,7 +31,7 @@ function loopbackRequest(url = '/'): IncomingMessage {
 function fakeService(over: Partial<PodService> = {}) {
   const service = {
     status: () => ({ mission: null, tasks: [], slots: [], pendingApprovals: [] }),
-    eventsTail: () => [],
+    eventsTail: () => ({ events: [], cursor: '', has_more: false }),
     ledgerTail: () => ({ total_tokens: 0, total_equiv_usd: 0, entries: [] }),
     launch: (input: unknown) => ({
       id: 'M-1',
@@ -112,7 +114,9 @@ describe('pod 数据面路由（W3/W4）', () => {
       { id: 'e1', ts: 100, kind: 'task_done', payload: {} },
       { id: 'e2', ts: 200, kind: 'approval_requested', payload: {} },
     ]
-    const routes = makePodRoutes(() => fakeService({ eventsTail: (after: number) => events.filter((e) => e.ts > after) }))
+    const routes = makePodRoutes(() => fakeService({
+      eventsTail: (after: number) => ({ events: events.filter((e) => e.ts > after), cursor: '', has_more: false }),
+    }))
     const eventsRoute = routes.find((r) => r.path === '/api/dsh-pod/events')!
     const { res, written } = captureResponse()
     await eventsRoute.handler(loopbackRequest('/api/dsh-pod/events?after=100'), res)
@@ -377,5 +381,64 @@ describe('GET /api/dsh-pod/fs/browse（设置页目录点选器）', () => {
     const remoteRes = captureResponse()
     await route.handler({ url: '/', socket: { remoteAddress: '10.0.0.5' } } as unknown as IncomingMessage, remoteRes.res)
     expect(remoteRes.written[0]!.status).toBe(403)
+  })
+})
+
+describe('/api/dsh-pod/rules（审批规则：列 / 记 / 撤）', () => {
+  /** 内存规则表；deleteRule 对缺失 id 抛 NotFoundError（与 JsonStore/SqliteStore 行为一致）。 */
+  function harness() {
+    const rules = new Map<string, ApprovalRule>([
+      ['R-1', { id: 'R-1', tool: 'Bash', decision: 'allow', scope: 'global', ts: 1 }],
+      ['R-2', { id: 'R-2', tool: 'Write', decision: 'ask', scope: 'mission', ts: 2 }],
+    ])
+    const service = fakeService({
+      listRules: () => [...rules.values()],
+      deleteRule: (id: string) => {
+        if (!rules.has(id)) throw new NotFoundError('rule', id)
+        rules.delete(id)
+      },
+    })
+    const route = makePodRoutes(() => service).find((r) => r.path === '/api/dsh-pod/rules')!
+    return { rules, route }
+  }
+
+  it('GET → 返回规则列表', async () => {
+    const { route } = harness()
+    const { res, written } = captureResponse()
+    await route.handler(loopbackRequest('/api/dsh-pod/rules'), res)
+    expect(written[0]!.status).toBe(200)
+    expect((written[0]!.body as { rules: Array<{ id: string }> }).rules.map((r) => r.id)).toEqual(['R-1', 'R-2'])
+  })
+
+  it('DELETE 存在的规则 → 200 且规则确实被移除（此前只有 GET/POST，规则只增不减）', async () => {
+    const { rules, route } = harness()
+    const { res, written } = captureResponse()
+    await route.handler({ url: '/api/dsh-pod/rules?id=R-1', method: 'DELETE', socket: { remoteAddress: '127.0.0.1' } } as unknown as IncomingMessage, res)
+    expect(written[0]!.status).toBe(200)
+    expect([...rules.keys()]).toEqual(['R-2'])
+  })
+
+  it('DELETE 不存在的 id → 404（幂等破坏显式暴露，不静默成功）', async () => {
+    const { rules, route } = harness()
+    const { res, written } = captureResponse()
+    await route.handler({ url: '/api/dsh-pod/rules?id=nope', method: 'DELETE', socket: { remoteAddress: '127.0.0.1' } } as unknown as IncomingMessage, res)
+    expect(written[0]!.status).toBe(404)
+    expect(rules.size).toBe(2)
+  })
+
+  it('DELETE 缺 id → 422 校验失败', async () => {
+    const { rules, route } = harness()
+    const { res, written } = captureResponse()
+    await route.handler({ url: '/api/dsh-pod/rules', method: 'DELETE', socket: { remoteAddress: '127.0.0.1' } } as unknown as IncomingMessage, res)
+    expect(written[0]!.status).toBe(422)
+    expect(rules.size).toBe(2)
+  })
+
+  it('DELETE 非 loopback → 403（信任面与 GET/POST 同源）', async () => {
+    const { rules, route } = harness()
+    const { res, written } = captureResponse()
+    await route.handler({ url: '/api/dsh-pod/rules?id=R-1', method: 'DELETE', socket: { remoteAddress: '10.0.0.5' } } as unknown as IncomingMessage, res)
+    expect(written[0]!.status).toBe(403)
+    expect(rules.size).toBe(2)
   })
 })

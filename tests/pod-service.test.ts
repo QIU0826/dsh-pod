@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { JsonStore } from '../src/core/store.js'
-import { PodService, defaultPlan } from '../src/pod-service.js'
+import { PodService, defaultPlan, EVENT_TAIL_LIMIT } from '../src/pod-service.js'
 
 /**
  * PodService 宿主侧闭环测试：commander 自动创建接线 + maintenanceTick 透传 + 默认任务链。
@@ -107,5 +107,81 @@ describe('PodService 宿主闭环（CR-05-6）', () => {
     // correct 更新并审计留痕
     const updated = service.memoryCorrect(rec.id, { importance: 5 }, 'user')
     expect(updated.importance).toBe(5)
+  })
+})
+
+describe('eventsTail 分页游标（HTTP 轮询路径：超限不丢、同毫秒不跳）', () => {
+  let root: string
+  let store: JsonStore
+  let service: PodService
+  let clockNow: number
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'pod-events-tail-'))
+    clockNow = 1_700_000_000_000
+    store = new JsonStore({ rootDir: root, clock: () => clockNow })
+    store.open()
+    service = new PodService({ store, backends: {}, clock: () => clockNow, dataDir: root })
+    service.launch({ name: 'm', goal: 'g', cwd: 'C:\\repo', budgetUsd: 2, slots: [] })
+  })
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  // launch 自身会落事件（ts = clockNow）；种子事件用更大的基准 ts 与之隔离，
+  // 查询统一从 CLOCK_TS 起步，断言里就只有种子事件。
+  const CLOCK_TS = 1_700_000_000_000
+  const SEED_TS = 2_000_000_000_000
+
+  function seed(count: number, tsOf: (i: number) => number): void {
+    const id = store.listMissions()[0]!.id
+    for (let i = 0; i < count; i += 1) {
+      store.appendEvent(id, {
+        id: `e${i}`,
+        mission_id: id,
+        ts: tsOf(i),
+        kind: 'worker_progress',
+        payload: { seq: i },
+      })
+    }
+  }
+
+  it('增量不足一批 → 全量返回，has_more=false', () => {
+    seed(3, (i) => SEED_TS + i)
+    const page = service.eventsTail(CLOCK_TS)
+    expect(page.events.map((e) => e.id)).toEqual(['e0', 'e1', 'e2'])
+    expect(page.has_more).toBe(false)
+    expect(page.cursor).toBe('e2')
+  })
+
+  it('增量超过 EVENT_TAIL_LIMIT → 返回最早一批 + has_more，按 cursor 续读可拿全（此前取最后一批会永久丢事件）', () => {
+    const total = EVENT_TAIL_LIMIT + 10
+    seed(total, (i) => SEED_TS + i)
+    const first = service.eventsTail(CLOCK_TS)
+    expect(first.events).toHaveLength(EVENT_TAIL_LIMIT)
+    expect(first.has_more).toBe(true)
+    expect(first.events[0]!.id).toBe('e0')
+
+    const last = first.events[first.events.length - 1]!
+    const second = service.eventsTail(last.ts, first.cursor)
+    const ids = [...first.events, ...second.events].map((e) => e.id)
+    expect(ids).toHaveLength(total)
+    expect(new Set(ids).size).toBe(total)
+    expect(second.has_more).toBe(false)
+  })
+
+  it('同毫秒事件：id 游标能续读，ts 游标会整批跳过（旧实现丢事件的根因）', () => {
+    seed(5, () => SEED_TS)
+    expect(service.eventsTail(CLOCK_TS).events.map((e) => e.id)).toEqual(['e0', 'e1', 'e2', 'e3', 'e4'])
+    // 只消费到 e1 时用 id 游标续读 → 拿到剩下全部
+    expect(service.eventsTail(SEED_TS, 'e1').events.map((e) => e.id)).toEqual(['e2', 'e3', 'e4'])
+    // 同样的位置用纯 ts 语义：ts > SEED_TS 一律不成立 → 一条都拿不到（丢事件）
+    expect(service.eventsTail(SEED_TS).events).toHaveLength(0)
+  })
+
+  it('afterId 失效（事件已不在窗口）→ 回退 ts 语义，不静默返回空', () => {
+    seed(4, (i) => SEED_TS + i)
+    expect(service.eventsTail(SEED_TS + 1, 'ghost-id').events.map((e) => e.id)).toEqual(['e2', 'e3'])
   })
 })

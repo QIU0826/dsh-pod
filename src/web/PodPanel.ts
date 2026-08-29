@@ -38,6 +38,8 @@ import { MISSION_LABEL, MISSION_TONE, tokenBudgetPct, rosterToSlots } from './vi
 
 const POLL_MS = 2000
 const MISSIONS_POLL_MS = 5000
+/** 单次轮询最多续读的批数（防 has_more 异常时死循环拖垮主线程）。 */
+const MAX_EVENT_PAGES = 10
 
 type ViewKey = 'sessions' | 'chat' | 'board' | 'dag' | 'approval' | 'settings'
 
@@ -54,7 +56,7 @@ export function PodPanel(): ReactElement {
   const [answered, setAnswered] = useState<Set<string>>(new Set())
   const [selectedSlot, setSelectedSlot] = useState('')
   const [approvalId, setApprovalId] = useState('')
-  const lastTs = useRef(0)
+  const lastEventId = useRef('')
 
   const activeId = status?.mission?.id ?? ''
   const isLive = selectedSessionId === null || selectedSessionId === activeId
@@ -64,9 +66,12 @@ export function PodPanel(): ReactElement {
     saveSettings(next)
   }
 
-  const mergeEvents = (incoming: PodEvent[]): void => {
+  const mergeEvents = (incoming: PodEvent[], cursor?: string): void => {
     if (incoming.length === 0) return
-    lastTs.current = Math.max(lastTs.current, incoming[incoming.length - 1]!.ts)
+    // 游标优先取服务端批次游标（轮询）；SSE 逐帧推送没有批次游标，取该帧自身的 id。
+    // 用 id 而非 ts：同毫秒产生的多个事件不会被 `ts > after` 的严格比较整批跳过。
+    const last = incoming[incoming.length - 1]!
+    lastEventId.current = cursor !== undefined && cursor.length > 0 ? cursor : last.id
     setEvents((prev) => {
       const seen = new Set(prev.map((e) => e.id))
       return [...prev, ...incoming.filter((e) => !seen.has(e.id))].slice(-400)
@@ -87,7 +92,14 @@ export function PodPanel(): ReactElement {
   }
 
   const pollEvents = async (): Promise<void> => {
-    try { mergeEvents(await fetchEvents(lastTs.current)) } catch { /* SSE 兜底轮询失败静默 */ }
+    try {
+      // has_more：本批取完还有 → 立即续读，不等下个周期（高吞吐时避免持续落后并丢事件）
+      for (let page = 0; page < MAX_EVENT_PAGES; page += 1) {
+        const batch = await fetchEvents(lastEventId.current)
+        mergeEvents(batch.events, batch.cursor)
+        if (!batch.has_more || batch.events.length === 0) break
+      }
+    } catch { /* SSE 兜底轮询失败静默 */ }
   }
 
   useEffect(() => {

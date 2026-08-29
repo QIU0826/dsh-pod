@@ -28,7 +28,7 @@ import { ArkBackend } from './workers/ark-headless.js'
 import { repairPath } from './workers/preflight.js'
 import { CronScheduler, type CronJob } from './core/cron.js'
 import type { ChannelTarget } from './core/channel.js'
-import type { ApprovalRequest, ApprovalRule, AgentSlot, Handoff, MemoryRecord, MemoryRelation, Mission, PodEvent, Task, Vendor, WorkerBackend } from './core/types.js'
+import type { ApprovalRequest, ApprovalRule, AgentSlot, Handoff, LedgerEntry, MemoryRecord, MemoryRelation, Mission, PodEvent, Task, Vendor, WorkerBackend } from './core/types.js'
 
 /**
  * 火山方舟后端装配（Berd-G 新 adapter）：从环境 ARK_API_KEY 或 ~/.claude/settings.json 的
@@ -54,6 +54,22 @@ function readArkKeyFromClaudeSettings(): string | undefined {
 
 /** 记忆后台 reflection 节流间隔（2.8.1：MT 周期内不频繁跑 pass）。 */
 export const REFLECTION_INTERVAL_MS = 60_000
+
+/**
+ * HTTP 轮询路径单批事件上限（/api/dsh-pod/events）。
+ * 超限只表示「本批取完还有」，配合 has_more + cursor 续读，不丢事件。
+ */
+export const EVENT_TAIL_LIMIT = 200
+
+/** 事件流对客户端暴露的形状（只留客户端需要的字段，抹掉内部字段）。 */
+export interface EventTailItem {
+  id: string
+  ts: number
+  kind: string
+  task_id?: string
+  slot_id?: string
+  payload: Record<string, unknown>
+}
 
 export interface PodServiceOptions {
   store: PodStore
@@ -591,29 +607,58 @@ export class PodService {
       }))
   }
 
-  /** Canvas 事件流尾部（after=ts 游标；客户端按 id 去重）。 */
-  eventsTail(afterTs: number): Array<{ id: string; ts: number; kind: string; task_id?: string; slot_id?: string; payload: Record<string, unknown> }> {
+  /**
+   * Canvas 事件流尾部（HTTP 轮询路径；SSE 走 eventsAfter，无上限）。
+   *
+   * 游标语义：优先用 afterId（事件 id，按排序后的位置截断，精确）。
+   * 纯 ts 游标用 `ts > after` 严格比较，同一毫秒内产生的多个事件会被整批跳过——
+   * 客户端游标推进到该 ts 后，这些事件永远不会再被返回。
+   *
+   * 窗口语义：增量超过 EVENT_TAIL_LIMIT 时返回**最早**的一批并置 has_more，
+   * 客户端按 cursor 续读。此前取的是最后一批（slice(-200)），超限部分会被客户端
+   * 已推进的游标永久跳过——高吞吐流式输出时表现为对话流丢内容。
+   */
+  eventsTail(afterTs: number, afterId?: string): { events: EventTailItem[]; cursor: string; has_more: boolean } {
     const missions = this.store.listMissions().filter((m) => m.status !== 'done' && m.status !== 'aborted')
-    const events = missions.flatMap((m) => this.store.listEvents(m.id))
-    return events
-      .filter((e) => e.ts > afterTs)
-      .sort((a, b) => a.ts - b.ts)
-      .slice(-200)
-      .map((e) => ({
+    // Array.sort 自 ES2019 稳定：同 ts 事件保持落盘顺序，afterId 定位才可靠
+    const sorted = missions.flatMap((m) => this.store.listEvents(m.id)).sort((a, b) => a.ts - b.ts)
+    const firstAfterTs = (): number => {
+      const idx = sorted.findIndex((e) => e.ts > afterTs)
+      return idx === -1 ? sorted.length : idx
+    }
+    let start = firstAfterTs()
+    if (afterId !== undefined && afterId.length > 0) {
+      const idx = sorted.findIndex((e) => e.id === afterId)
+      // afterId 失效（会话结束/事件不在窗口内）时回退 ts 语义，不静默返回空
+      start = idx === -1 ? firstAfterTs() : idx + 1
+    }
+    const window = sorted.slice(start, start + EVENT_TAIL_LIMIT)
+    return {
+      events: window.map((e) => ({
         id: e.id,
         ts: e.ts,
         kind: e.kind,
         task_id: e.task_id,
         slot_id: e.slot_id,
         payload: e.payload,
-      }))
+      })),
+      cursor: window.length > 0 ? window[window.length - 1]!.id : (afterId ?? ''),
+      has_more: start + window.length < sorted.length,
+    }
   }
 
-  /** 账本双列尾部（W5：tokens 实测权威列 + equiv_usd 标注估算）。 */
+  /**
+   * 账本双列尾部（W5：tokens 实测权威列 + equiv_usd 标注估算）。
+   *
+   * entries 必须是完整 `LedgerEntry`（含 slot_id/task_id/ts/price_table_version）——
+   * 这是 `api.ts` 的 `StatusResponse.ledger.entries` 契约。此前这里多做了一次
+   * 字段瘦身，返回对象缺 4 个声明中的字段（类型声明比实现宽，前端取 slot_id 会拿到
+   * undefined）。
+   */
   ledgerTail(): {
     total_tokens: number
     total_equiv_usd: number
-    entries: Array<{ model: string; tokens_in: number; tokens_out: number; equiv_usd: number; price_known: boolean; usage_source: string }>
+    entries: LedgerEntry[]
   } {
     const active = this.store.getActiveMission()
     if (active === undefined) return { total_tokens: 0, total_equiv_usd: 0, entries: [] }
@@ -621,14 +666,7 @@ export class PodService {
     return {
       total_tokens: summary.total_tokens,
       total_equiv_usd: Number(summary.total_equiv_usd.toFixed(6)),
-      entries: summary.entries.map((e) => ({
-        model: e.model,
-        tokens_in: e.tokens_in,
-        tokens_out: e.tokens_out,
-        equiv_usd: e.equiv_usd,
-        price_known: e.price_known,
-        usage_source: e.usage_source,
-      })),
+      entries: summary.entries,
     }
   }
 
