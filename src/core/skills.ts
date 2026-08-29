@@ -52,10 +52,22 @@ export function parseSkillFrontmatter(content: string): SkillMeta | undefined {
   }
 }
 
+/** skill 名白名单（P1 路径遍历修复）：name 来自模板/frontmatter（不可信输入），拼进
+ * join(dir, name) 后 mkdir+writeFile——`../../` 或绝对路径可写到 skills 根之外的任意目录，
+ * 植入被其他 agent 框架自动加载的技能文件（提示注入持久化）。禁分隔符/空白即封死。 */
+const SAFE_SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+
+function assertSafeSkillName(name: string): void {
+  if (!SAFE_SKILL_NAME.test(name) || name.includes('..')) {
+    throw new Error(`skill name rejected (safe name required, no path separators): ${JSON.stringify(name)}`)
+  }
+}
+
 /** 安装 skill：目标已存在 → 拒绝（防覆盖不可审计）。 */
 export function installSkill(options: InstallOptions): boolean {
   const meta = parseSkillFrontmatter(options.content)
   if (meta === undefined) throw new Error(`skill install rejected: missing frontmatter (name/capabilities)`)
+  assertSafeSkillName(meta.name)
   const targetDir = join(options.dir, meta.name)
   if (existsSync(join(targetDir, 'SKILL.md'))) {
     throw new Error(`skill already installed: ${meta.name} (refusing silent overwrite)`)
@@ -87,5 +99,6 @@ export function listSkills(dir: string): string[] {
 
 /** 读取 skill 内容（SKILL.md）。 */
 export function readSkill(dir: string, name: string): string {
+  assertSafeSkillName(name)
   return readFileSync(join(dir, name, 'SKILL.md'), 'utf8')
 }

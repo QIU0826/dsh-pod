@@ -9,3 +9,4 @@ reports/
 .env
 .env.*
 !.env.example
+demo-data/

@@ -98,6 +98,8 @@ export interface AgentSlot {
   vendor: Vendor
   role: string
   capabilities: string[]
+  /** 毕加索风格动物形象 id（P2：用户点选，白名单 AGENT_AVATARS，仅 UI 展示用）。 */
+  avatar?: string
   model: string
   effort: 'low' | 'medium' | 'high'
   session_ref?: string
@@ -287,6 +289,15 @@ export interface MissionReport {
     tokens_in: number
     tokens_out: number
   }
+  /** 仅 plan 任务（P1 规划层）：任务分解 DAG 提案——LLM 提议的数据，落盘前经 planner.ts 代码裁决。 */
+  plan?: Array<{
+    id: string
+    title: string
+    spec: string
+    type: 'implement' | 'review' | 'test' | 'doc' | 'research'
+    skill_tags?: string[]
+    depends_on?: string[]
+  }>
 }
 
 /** Canvas 事件流（team 级事件，磁盘持久化，跨重启可见）。 */
@@ -400,6 +411,16 @@ export const CTX_RESET_THRESHOLD_PCT = 70
 
 /** 重试上限：attempts ≥ 3 → 转人工（3.4 节）。 */
 export const MAX_TASK_ATTEMPTS = 3
+
+/** slot/task id 白名单（P1）：id 会拼进 worktree 路径与派发 argv，禁路径分隔符与空白。
+ * 定义于 types.ts（共享常量之家）：orchestrator 与 planner 共用，planner 提案校验同源。 */
+export const SAFE_ENTITY_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+
+/** Agent 形象白名单（P2 点选词表；前端 avatars.ts 同源清单）。 */
+export const AGENT_AVATARS = ['cat', 'fox', 'owl', 'bear', 'rabbit', 'wolf', 'frog', 'deer'] as const
+
+/** 不限预算的落地值（0/缺省经 launch 归一为此值；事实无限——双闸永不触发，UI 显示「不限」）。 */
+export const UNLIMITED_BUDGET_USD = 1_000_000_000
 
 /** 任务级墙钟默认上限（CR-01-6）。 */
 export const DEFAULT_MAX_WALL_CLOCK_MS = 60 * 60 * 1000

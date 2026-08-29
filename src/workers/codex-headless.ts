@@ -12,7 +12,9 @@
  * （PATH 中 codex → ~/.codex/.sandbox-bin/codex.exe 兜底），版本 pin 进 preflight。
  */
 
-import { execFile, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
+import { killTree } from './kill-tree.js'
+import { assertSafeArgvPath, assertSafeArgvToken } from './argv-guard.js'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { extractReport, buildTaskPrompt } from './claude-headless.js'
@@ -98,7 +100,7 @@ export function codexBinaryCandidates(platform: NodeJS.Platform = process.platfo
 export interface SpawnedCodex {
   pid?: number
   onLine(line: string): void
-  exited: Promise<{ code: number | null; signal: string | null; timedOut: boolean }>
+  exited: Promise<{ code: number | null; signal: string | null; timedOut: boolean; spawnFailed?: boolean }>
   /** prompt 经 stdin 注入（短固定 argv，无引号/长度风险——Windows 专项）。 */
   writeStdin(text: string): void
   kill(): void
@@ -116,7 +118,11 @@ export interface CodexBackendOptions {
  * prompt 不进 argv：以 '-' 占位走 stdin（exec 支持 stdin 读指令）。
  */
 export function buildCodexArgs(mode: CodexLaunchMode, worktree: string, model?: string): string[] {
+  // P1 注入面收口：win32 shell:true 下 -C worktree / -m model 是客户端可控动态值
+  assertSafeArgvPath('codex worktree', worktree)
+  assertSafeArgvToken('codex model', model)
   if (mode.kind === 'resume') {
+    assertSafeArgvToken('codex threadId', mode.threadId)
     return ['exec', 'resume', '--json', mode.threadId, '-']
   }
   const args = ['exec', '-', '--json', '--color', 'never', '--skip-git-repo-check', '-s', 'read-only', '-C', worktree]
@@ -188,16 +194,27 @@ export class CodexHeadlessBackend implements WorkerBackend {
 
   private spawnCodex(args: string[], cwd: string): SpawnedCodex {
     if (this.spawner !== undefined) return this.spawner(this.binary, args, { cwd })
-    const child = spawn(this.binary, args, { cwd, shell: process.platform === 'win32', windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+    const child = spawn(this.binary, args, {
+      cwd,
+      shell: process.platform === 'win32',
+      windowsHide: true,
+      // POSIX 建独立进程组：killTree 可组杀孙进程（Windows 走 taskkill /T）
+      detached: process.platform !== 'win32',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
     // onLine 通过属性访问器路由进闭包：collect() 的赋值与 stdout/stderr 事件读同一个 handler。
     let lineHandler: (line: string) => void = () => {}
     const spawned = {
       pid: child.pid,
       writeStdin(text: string) {
-        child.stdin?.write(text, 'utf8')
-        child.stdin?.end()
+        const stdin = child.stdin
+        if (stdin === null) return
+        // 对端提前关闭时写入报 EPIPE：吞掉（exit/error 路径接管），绝不炸宿主
+        stdin.on('error', () => {})
+        stdin.write(text, 'utf8')
+        stdin.end()
       },
-      exited: new Promise<{ code: number | null; signal: string | null; timedOut: boolean }>((resolve) => {
+      exited: new Promise<{ code: number | null; signal: string | null; timedOut: boolean; spawnFailed: boolean }>((resolve) => {
         let buffer = ''
         const consume = (chunk: Buffer): void => {
           buffer += chunk.toString('utf8')
@@ -213,15 +230,22 @@ export class CodexHeadlessBackend implements WorkerBackend {
         let timedOut = false
         const timer = setTimeout(() => {
           timedOut = true
-          child.kill()
+          // 树杀：shell 包装下 child.kill() 杀不到 CLI 孙进程
+          void killTree(child.pid)
         }, 60 * 60_000)
+        // spawn 失败（ENOENT/EPERM）：无 error 监听 = uncaught exception 炸宿主；且 exit 不触发，
+        // exited 将悬挂到超时——必须在此 resolve 并标记 spawnFailed
+        child.on('error', () => {
+          clearTimeout(timer)
+          resolve({ code: null, signal: null, timedOut: false, spawnFailed: true })
+        })
         child.on('exit', (code, signal) => {
           clearTimeout(timer)
-          resolve({ code, signal, timedOut })
+          resolve({ code, signal, timedOut, spawnFailed: false })
         })
       }),
       kill() {
-        child.kill()
+        void killTree(child.pid)
       },
     }
     Object.defineProperty(spawned, 'onLine', {
@@ -258,13 +282,13 @@ export class CodexHeadlessBackend implements WorkerBackend {
       }
     }
     const exit = await spawned.exited
-    const fault =
-      exit.timedOut ? null : exit.code !== null && exit.code !== 0 ? 'crash' : null
+    // spawn 失败显式 failed(crash)：code=null 否则不落入任何故障分支，会被误判 done
+    const fault = exit.spawnFailed ? 'crash' : exit.timedOut ? null : exit.code !== null && exit.code !== 0 ? 'crash' : null
     const report = extractCodexReport(lastAgentText)
     return {
       threadId,
       completion: {
-        exit: exit.timedOut ? 'timeout' : fault === 'crash' ? 'failed' : 'done',
+        exit: exit.spawnFailed ? 'failed' : exit.timedOut ? 'timeout' : fault === 'crash' ? 'failed' : 'done',
         fault: fault ?? undefined,
         report,
         usage,
@@ -276,10 +300,8 @@ export class CodexHeadlessBackend implements WorkerBackend {
   }
 
   async kill(handle: WorkerHandle): Promise<void> {
-    if (handle.pid === undefined) return
-    await new Promise<void>((resolve) => {
-      execFile('taskkill', ['/PID', String(handle.pid), '/T', '/F'], { windowsHide: true }, () => resolve())
-    })
+    // 树杀且跨平台：taskkill 仅 Windows 存在，此前 POSIX 上 ENOENT 被吞 = kill 静默 no-op
+    await killTree(handle.pid)
   }
 }
 

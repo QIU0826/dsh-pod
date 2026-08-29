@@ -70,6 +70,7 @@ export class SqliteStore implements PodStore {
     this.db = db
     this.createTables()
     if (fresh) this.migrateFromJsonStore()
+    this.migrateTaskKeys()
     this.ensureSchemaVersion()
   }
 
@@ -115,7 +116,7 @@ export class SqliteStore implements PodStore {
       const insEvent = db.prepare('INSERT INTO events (mission_id, seq, id, data) VALUES (?, ?, ?, ?)')
       for (const m of legacy.listMissions()) {
         for (const s of legacy.listSlots(m.id)) insSlot.run(s.id, JSON.stringify(s))
-        for (const t of legacy.listTasks(m.id)) insTask.run(t.id, JSON.stringify(t))
+        for (const t of legacy.listTasks(m.id)) insTask.run(`${t.mission_id}::${t.id}`, JSON.stringify(t))
         for (const h of legacy.listHandoffs(m.id)) insHandoff.run(h.id, JSON.stringify(h))
         for (const e of legacy.listLedger(m.id)) insLedger.run(JSON.stringify(e))
         for (const a of legacy.listApprovals(m.id)) insApproval.run(a.id, JSON.stringify(a))
@@ -127,6 +128,30 @@ export class SqliteStore implements PodStore {
     // 非破坏：旧文件转 .migrated（保留用户数据，不删除）
     renameSync(srcRoot, join(this.rootDir, 'store.json.migrated'))
     legacy.close()
+  }
+
+  /** 存量迁移：tasks 表旧短键 → mission::id 复合键；幂等。 */
+  private migrateTaskKeys(): void {
+    const db = this.requireDb()
+    const rows = db.prepare('SELECT id, data FROM tasks').all() as Array<{ id: string; data: string }>
+    const renames: Array<[string, string]> = []
+    for (const row of rows) {
+      const task = JSON.parse(row.data) as { mission_id: string; id: string }
+      const full = `${task.mission_id}::${task.id}`
+      if (row.id !== full) renames.push([row.id, full])
+    }
+    if (renames.length === 0) return
+    const tx = db.transaction(() => {
+      const del = db.prepare('DELETE FROM tasks WHERE id = ?')
+      const ins = db.prepare('INSERT INTO tasks (id, data) VALUES (?, ?)')
+      for (const [oldKey, full] of renames) {
+        const data = (db.prepare('SELECT data FROM tasks WHERE id = ?').get(oldKey) as { data: string } | undefined)?.data
+        if (data === undefined) continue
+        del.run(oldKey)
+        ins.run(full, data)
+      }
+    })
+    tx()
   }
 
   getSchemaVersion(): number {
@@ -201,8 +226,9 @@ export class SqliteStore implements PodStore {
     this.upsertJson('slots', id, { ...existing, ...patch, id })
   }
 
-  getTask(id: string): Task | undefined {
-    return this.getJson<Task>('tasks', id)
+  getTask(missionIdOrId: string, maybeId?: string): Task | undefined {
+    if (maybeId !== undefined) return this.getJson<Task>('tasks', `${missionIdOrId}::${maybeId}`)
+    return this.listJson<Task>('tasks').find((t) => t.id === missionIdOrId)
   }
 
   listTasks(missionId: string): Task[] {
@@ -212,17 +238,27 @@ export class SqliteStore implements PodStore {
   createTask(task: Task): void {
     const db = this.requireDb()
     try {
-      db.prepare('INSERT INTO tasks (id, data) VALUES (?, ?)').run(task.id, JSON.stringify({ ...task }))
+      db.prepare('INSERT INTO tasks (id, data) VALUES (?, ?)').run(`${task.mission_id}::${task.id}`, JSON.stringify({ ...task }))
     } catch (err) {
       if (isUniqueViolation(err)) throw new DuplicateIdError('task', task.id)
       throw err
     }
   }
 
-  updateTask(id: string, patch: Partial<Task>): void {
-    const existing = this.getTask(id)
-    if (existing === undefined) throw new NotFoundError('task', id)
-    this.upsertJson('tasks', id, { ...existing, ...patch, id, updated_at: this.clock() })
+  updateTask(missionIdOrId: string, idOrPatch: string | Partial<Task>, maybePatch?: Partial<Task>): void {
+    const db = this.requireDb()
+    if (maybePatch !== undefined) {
+      const key = `${missionIdOrId}::${idOrPatch}`
+      const existing = this.getJson<Task>('tasks', key)
+      if (existing === undefined) throw new NotFoundError('task', String(idOrPatch))
+      this.upsertJson('tasks', key, { ...existing, ...maybePatch, id: existing.id, updated_at: maybePatch.updated_at ?? this.clock() })
+      return
+    }
+    const patch = idOrPatch as Partial<Task>
+    const row = db.prepare('SELECT id, data FROM tasks').all().find((r) => JSON.parse((r as { data: string }).data).id === missionIdOrId) as { id: string; data: string } | undefined
+    if (row === undefined) throw new NotFoundError('task', missionIdOrId)
+    const existing = JSON.parse(row.data) as Task
+    this.upsertJson('tasks', row.id, { ...existing, ...patch, id: existing.id, updated_at: this.clock() })
   }
 
   addHandoff(handoff: Handoff): void {

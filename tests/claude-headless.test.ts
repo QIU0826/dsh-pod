@@ -10,7 +10,7 @@ import {
   resultErrorInfo,
   streamJsonToProgress,
 } from '../src/workers/claude-headless.js'
-import { ClaudeHeadlessBackend } from '../src/workers/claude-headless.js'
+import { buildClaudeArgs, ClaudeHeadlessBackend } from '../src/workers/claude-headless.js'
 import { classifyFault } from '../src/core/task-machine.js'
 import type { MissionReport, Task } from '../src/core/types.js'
 
@@ -350,5 +350,43 @@ describe('ClaudeHeadlessBackend.start（FakeSpawner 集成）', () => {
     expect(completion.exit).toBe('done')
     expect(completion.usage.tokens_in).toBe(10)
     expect(completion.report?.commit_sha).toBe('abc')
+  })
+})
+
+describe('spawn 失败路径（P0：error 监听防宿主崩溃 + 不误判 done）', () => {
+  it('spawnFailed=true → completion failed + fault crash（而非 code=null 掉进 done 分支）', async () => {
+    const slot = {
+      id: 'S-1', mission_id: 'M-1', vendor: 'claude' as const, role: 'implementer',
+      capabilities: ['编码'], model: '', effort: 'medium' as const, session_tier: 'per-mission' as const,
+      status: 'idle' as const, tokens_in: 0, tokens_out: 0, ctx_usage_pct: 0, window_tokens: 200_000,
+    }
+    let captured: import('../src/core/types.js').WorkerCompletion | undefined
+    const backend = new ClaudeHeadlessBackend({
+      clock: () => 1_700_000_000_000,
+      spawner: () => ({
+        child: { pid: 999 } as never,
+        onLine() {},
+        writeStdin() {},
+        exited: Promise.resolve({ code: null, signal: null, timedOut: false, spawnFailed: true }),
+      }),
+    })
+    await backend.start(slot, makeTask(), 'W', {
+      onExit: (completion) => {
+        captured = completion
+      },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(captured).toBeDefined()
+    expect(captured!.exit).toBe('failed')
+    expect(captured!.fault).toBe('crash')
+  })
+})
+
+describe('buildClaudeArgs 注入面收口（P1：--model/--resume/--session-id 为动态值）', () => {
+  it('model/sessionRef/newSessionId 含 cmd 元字符 → 拒绝', () => {
+    expect(() => buildClaudeArgs({ prompt: 'p', cwd: 'C:\w', sessionTier: 'transient', model: 'm&calc' })).toThrow(/unsafe argv/)
+    expect(() => buildClaudeArgs({ prompt: 'p', cwd: 'C:\w', sessionTier: 'per-mission', sessionRef: 's|id' })).toThrow(/unsafe argv/)
+    expect(() => buildClaudeArgs({ prompt: 'p', cwd: 'C:\w', sessionTier: 'per-mission', newSessionId: '%PATH%' })).toThrow(/unsafe argv/)
+    expect(() => buildClaudeArgs({ prompt: 'p', cwd: 'C:\w', sessionTier: 'transient', model: 'deepseek-v4-pro' })).not.toThrow()
   })
 })

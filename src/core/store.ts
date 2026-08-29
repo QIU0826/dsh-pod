@@ -66,9 +66,15 @@ export interface PodStore {
   listSlots(missionId: string): AgentSlot[]
   createSlot(slot: AgentSlot): void
   updateSlot(id: string, patch: Partial<AgentSlot>): void
+  /** 任务主键按 mission 复合（跨会话短 id 合法；实证：连续会话 P-1 全局撞键 DUPLICATE_TASK）。 */
+  getTask(missionId: string, id: string): Task | undefined
+  /** 兼容重载：单参按短 id 全表精确匹配（旧调用/测试；多 mission 同名取先建者）。 */
+  // eslint-disable-next-line @typescript-eslint/unified-signatures
   getTask(id: string): Task | undefined
   listTasks(missionId: string): Task[]
   createTask(task: Task): void
+  updateTask(missionId: string, id: string, patch: Partial<Task>): void
+  // eslint-disable-next-line @typescript-eslint/unified-signatures
   updateTask(id: string, patch: Partial<Task>): void
   addHandoff(handoff: Handoff): void
   listHandoffs(missionId: string): Handoff[]
@@ -125,6 +131,24 @@ function isStoreData(value: unknown): value is StoreData {
 }
 
 export class JsonStore implements PodStore {
+  /** 存量迁移：旧版任务键为短 id（单 mission 时代），改复合键；幂等（懒执行一次）。 */
+  private static migrateTaskKeys(data: StoreData): void {
+    for (const [key, task] of Object.entries(data.tasks)) {
+      const full = `${task.mission_id}::${task.id}`
+      if (key !== full) {
+        delete data.tasks[key]
+        data.tasks[full] = task
+      }
+    }
+  }
+  private taskKeysMigrated = false
+  private ensureTaskKeysMigrated(): void {
+    if (this.data === undefined) return
+    if (!this.taskKeysMigrated) {
+      JsonStore.migrateTaskKeys(this.data)
+      this.taskKeysMigrated = true
+    }
+  }
   private data: StoreData | undefined
   private readonly rootDir: string
   private readonly clock: () => number
@@ -141,6 +165,14 @@ export class JsonStore implements PodStore {
   open(): void {
     mkdirSync(this.rootDir, { recursive: true })
     if (!existsSync(this.mainPath)) {
+      // 崩溃窗口恢复：persist() 在「main→bak」与「tmp→main」两次 rename 之间中断时，
+      // 磁盘上 main 缺失而 .bak 完好——先回读 .bak 再决定开空库，绝不静默清库。
+      const fromBackup = this.loadFile(this.backupPath)
+      if (fromBackup !== undefined) {
+        this.data = this.applyMigrations(fromBackup)
+        this.persist()
+        return
+      }
       this.data = emptyData()
       this.persist()
       return
@@ -278,8 +310,11 @@ export class JsonStore implements PodStore {
     this.persist()
   }
 
-  getTask(id: string): Task | undefined {
-    return this.requireData().tasks[id]
+  getTask(missionIdOrId: string, maybeId?: string): Task | undefined {
+    this.ensureTaskKeysMigrated()
+    const data = this.requireData()
+    if (maybeId !== undefined) return data.tasks[`${missionIdOrId}::${maybeId}`]
+    return Object.values(data.tasks).find((t) => t.id === missionIdOrId)
   }
 
   listTasks(missionId: string): Task[] {
@@ -288,16 +323,27 @@ export class JsonStore implements PodStore {
 
   createTask(task: Task): void {
     const data = this.requireData()
-    if (data.tasks[task.id] !== undefined) throw new DuplicateIdError('task', task.id)
-    data.tasks[task.id] = { ...task }
+    const fullKey = `${task.mission_id}::${task.id}`
+    if (data.tasks[fullKey] !== undefined) throw new DuplicateIdError('task', task.id)
+    data.tasks[fullKey] = { ...task }
     this.persist()
   }
 
-  updateTask(id: string, patch: Partial<Task>): void {
+  updateTask(missionIdOrId: string, idOrPatch: string | Partial<Task>, maybePatch?: Partial<Task>): void {
+    this.ensureTaskKeysMigrated()
     const data = this.requireData()
-    const existing = data.tasks[id]
-    if (existing === undefined) throw new NotFoundError('task', id)
-    data.tasks[id] = { ...existing, ...patch, id, updated_at: this.clock() }
+    if (maybePatch !== undefined) {
+      const key = `${missionIdOrId}::${idOrPatch}`
+      const existing = data.tasks[key]
+      if (existing === undefined) throw new NotFoundError('task', String(idOrPatch))
+      data.tasks[key] = { ...existing, ...maybePatch, id: existing.id, updated_at: maybePatch.updated_at ?? this.clock() }
+      this.persist()
+      return
+    }
+    const patch = idOrPatch as Partial<Task>
+    const entry = Object.entries(data.tasks).find(([, t]) => t.id === missionIdOrId)
+    if (entry === undefined) throw new NotFoundError('task', missionIdOrId)
+    data.tasks[entry[0]] = { ...entry[1], ...patch, id: entry[1].id, updated_at: this.clock() }
     this.persist()
   }
 

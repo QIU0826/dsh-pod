@@ -53,6 +53,8 @@ export interface TaskMachineOptions {
   clock?: () => number
   rng?: () => number
   verify?: TaskVerifyFn
+  /** 任务主键命名空间（store 复合键：mission::id；生产必传，测试单 mission 可缺省）。 */
+  missionId?: string
 }
 
 interface FaultSignals {
@@ -111,16 +113,18 @@ export class TaskMachine {
   private readonly clock: () => number
   private readonly rng: () => number
   private readonly verify: TaskVerifyFn
+  private readonly missionId: string
 
   constructor(store: PodStore, options: TaskMachineOptions = {}) {
     this.store = store
+    this.missionId = options.missionId ?? 'M-1'
     this.clock = options.clock ?? (() => Date.now())
     this.rng = options.rng ?? Math.random
     this.verify = options.verify ?? defaultVerify
   }
 
   private getTask(taskId: string): Task {
-    const task = this.store.getTask(taskId)
+    const task = this.store.getTask(this.missionId, taskId)
     if (task === undefined) throw new NotFoundError('task', taskId)
     return task
   }
@@ -148,7 +152,7 @@ export class TaskMachine {
     if (slot.mission_id !== task.mission_id) {
       throw new InvalidTransitionError(task.status, 'dispatched', 'slot belongs to another mission')
     }
-    this.store.updateTask(taskId, {
+    this.store.updateTask(this.missionId, taskId, {
       status: 'dispatched',
       owner_slot_id: slotId,
       dispatched_at: this.clock(),
@@ -157,7 +161,13 @@ export class TaskMachine {
       last_error: undefined,
     })
     this.store.updateSlot(slotId, { status: 'working' })
-    this.emit(this.getTask(taskId), 'task_dispatched', { to_slot: slotId })
+    const dispatchedTask = this.getTask(taskId)
+    this.emit(dispatchedTask, 'task_dispatched', {
+      to_slot: slotId,
+      title: dispatchedTask.title,
+      type: dispatchedTask.type,
+      spec_excerpt: dispatchedTask.spec.slice(0, 160),
+    })
   }
 
   private retryBlockReason(task: Task): string {
@@ -180,7 +190,7 @@ export class TaskMachine {
     if (task.status !== 'dispatched') {
       throw new InvalidTransitionError(task.status, 'running', 'task must be dispatched first')
     }
-    this.store.updateTask(taskId, { status: 'running', started_at: this.clock() })
+    this.store.updateTask(this.missionId, taskId, { status: 'running', started_at: this.clock() })
     this.emit(this.getTask(taskId), 'task_started', {})
   }
 
@@ -207,7 +217,7 @@ export class TaskMachine {
         this.applyFailure(task, 'silent_failure', failure.message)
         return
       }
-      this.store.updateTask(taskId, {
+      this.store.updateTask(this.missionId, taskId, {
         status: 'done',
         commit_sha: verdict.commit_sha ?? report.commit_sha,
         parent_sha: verdict.parent_sha,

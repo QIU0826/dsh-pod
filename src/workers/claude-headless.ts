@@ -13,7 +13,9 @@
  * Windows 专项：claude 以 .cmd 分发 → win32 下 spawn 必须 shell:true（本机实证 ENOENT）。
  */
 
-import { execFile, spawn, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { killTree } from './kill-tree.js'
+import { assertSafeArgvToken } from './argv-guard.js'
 import { randomUUID } from 'node:crypto'
 import type { ProcessRegistry } from './process-registry.js'
 import type {
@@ -240,8 +242,8 @@ export interface SpawnedClaude {
   child: ChildProcess
   /** 逐行产出（stream-json 事件行 + 混入的 stderr 文本行）。 */
   onLine(line: string): void
-  /** 进程退出（code/signal/timedOut）。 */
-  exited: Promise<{ code: number | null; signal: string | null; timedOut: boolean }>
+  /** 进程退出（code/signal/timedOut；spawnFailed = 二进制启动失败，如 ENOENT）。 */
+  exited: Promise<{ code: number | null; signal: string | null; timedOut: boolean; spawnFailed?: boolean }>
   /** prompt 经 stdin 注入（短固定 argv，无引号/长度风险）。 */
   writeStdin(text: string): void
 }
@@ -270,6 +272,10 @@ export interface ClaudeBackendOptions {
  * 经 cmd /c 引号拼接会被破坏，且 argv 有 8191 字符上限——CR-02 新实证）。
  */
 export function buildClaudeArgs(options: ClaudeStartOptions): string[] {
+  // P1 注入面收口：win32 shell:true 下 Node 不做逐参数引用，动态值里的 cmd 元字符即命令注入
+  assertSafeArgvToken('claude model', options.model)
+  assertSafeArgvToken('claude sessionRef', options.sessionRef)
+  assertSafeArgvToken('claude newSessionId', options.newSessionId)
   const args = [
     '-p',
     '--output-format', 'stream-json',
@@ -373,6 +379,8 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
       cwd,
       shell: process.platform === 'win32',
       windowsHide: true,
+      // POSIX 建独立进程组：killTree 才能连带终止 CLI 的孙进程（Windows 用 taskkill /T，无需建组）
+      detached: process.platform !== 'win32',
       stdio: ['pipe', 'pipe', 'pipe'],
       env: env !== undefined ? { ...process.env, ...env } : process.env,
     })
@@ -381,10 +389,14 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
     const spawned = {
       child,
       writeStdin(text: string) {
-        child.stdin?.write(text, 'utf8')
-        child.stdin?.end()
+        const stdin = child.stdin
+        if (stdin === null) return
+        // 对端提前关闭时写入报 EPIPE：吞掉（exit/error 路径接管完成信号），绝不炸宿主
+        stdin.on('error', () => {})
+        stdin.write(text, 'utf8')
+        stdin.end()
       },
-      exited: new Promise<{ code: number | null; signal: string | null; timedOut: boolean }>((resolve) => {
+      exited: new Promise<{ code: number | null; signal: string | null; timedOut: boolean; spawnFailed: boolean }>((resolve) => {
         let buffer = ''
         const consume = (chunk: Buffer): void => {
           buffer += chunk.toString('utf8')
@@ -399,12 +411,19 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
         // stderr 同流解析：钩子/提示行可容错跳过，错误行供分类（绝不静默丢弃）
         child.stderr?.on('data', consume)
         const timer = setTimeout(() => {
-          child.kill()
-          resolve({ code: null, signal: null, timedOut: true })
+          // 树杀：shell 包装下 child.kill() 只杀到 cmd.exe，CLI 孙进程会继续烧 token
+          void killTree(child.pid)
+          resolve({ code: null, signal: null, timedOut: true, spawnFailed: false })
         }, this.taskTimeoutMs)
+        // spawn 失败（ENOENT/EPERM）：无 error 监听会以 uncaught exception 炸掉宿主进程；
+        // 且 exit 不会触发——必须在这里 resolve，否则只能等超时误分类为 timeout
+        child.on('error', () => {
+          clearTimeout(timer)
+          resolve({ code: null, signal: null, timedOut: false, spawnFailed: true })
+        })
         child.on('exit', (code, signal) => {
           clearTimeout(timer)
-          resolve({ code, signal, timedOut: false })
+          resolve({ code, signal, timedOut: false, spawnFailed: false })
         })
       }),
     }
@@ -440,11 +459,12 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
     const resultEvent = lines.map(parseStreamJsonLine).reverse().find((e) => e?.type === 'result')
     const usage = resultEvent === undefined ? { tokens_in: 0, tokens_out: 0, source: 'measured' as const } : (extractUsage(resultEvent) ?? { tokens_in: 0, tokens_out: 0, source: 'measured' as const })
     const errorInfo = resultEvent === undefined ? { isError: false } : resultErrorInfo(resultEvent)
-    const fault = classifyClaudeExit(exit.code, exit.signal, exit.timedOut, resultEvent)
+    // spawn 失败显式归为 failed(crash)：不标则 code=null 走不到任何故障分支，会被误判 done
+    const fault = exit.spawnFailed ? 'crash' : classifyClaudeExit(exit.code, exit.signal, exit.timedOut, resultEvent)
     const text = resultEvent === undefined ? '' : (extractResultText(resultEvent) ?? '')
     const report = extractReport(text)
     const exitKind: WorkerCompletion['exit'] =
-      errorInfo.isError && fault === null ? 'failed' : fault === 'rate_limited' ? 'rate_limited' : exit.timedOut ? 'timeout' : fault !== null ? 'failed' : 'done'
+      exit.spawnFailed ? 'failed' : errorInfo.isError && fault === null ? 'failed' : fault === 'rate_limited' ? 'rate_limited' : exit.timedOut ? 'timeout' : fault !== null ? 'failed' : 'done'
     return {
       sessionRef: typeof resultEvent?.session_id === 'string' ? resultEvent.session_id : undefined,
       completion: {
@@ -460,9 +480,7 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
   }
 
   async kill(handle: WorkerHandle): Promise<void> {
-    if (handle.pid === undefined) return
-    await new Promise<void>((resolve) => {
-      execFile('taskkill', ['/PID', String(handle.pid), '/T', '/F'], { windowsHide: true }, () => resolve())
-    })
+    // 树杀且跨平台：taskkill 仅 Windows 存在，此前 POSIX 上 ENOENT 被吞 = kill 静默 no-op
+    await killTree(handle.pid)
   }
 }

@@ -382,7 +382,9 @@ export class MemoryStore {
     // 1) 合并重复：同 owner+type+content_ref，保留 updated_ts 最新者
     const keyOf = (r: MemoryRecord) => `${r.owner_slot_id}|${r.type}|${r.content_ref}`
     const latest: Record<string, MemoryRecord> = {}
-    const order = ids.sort((a, b) => (data.records[a]!.updated_ts - data.records[b]!.updated_ts))
+    // 降序：最新记录先占 latest[key]，其后同键的陈旧副本并入历史——若升序则首次命中的是
+    // 最旧记录，会把更新过的记录系统性淘汰（审计 H4，方向不可再反）。
+    const order = ids.sort((a, b) => (data.records[b]!.updated_ts - data.records[a]!.updated_ts))
     for (const id of order) {
       const rec = data.records[id]!
       const key = keyOf(rec)

@@ -16,6 +16,18 @@ effort: 中
 4. 你不写实现、不读实现者的工作区；规划完成后你的任务即结束。
 5. 诚实纪律：不确定的技术点写进 assumptions，不编造。
 
+## 输出契约（P1 规划层）：在 MISSION_REPORT 的 plan 字段输出结构化 DAG
+
+```json
+"plan": [
+  { "id": "T-1", "title": "实现 X", "spec": "完整任务书", "type": "implement", "skill_tags": ["编码"], "depends_on": [] },
+  { "id": "T-2", "title": "独立 review T-1", "spec": "按最小上下文审查…", "type": "review", "skill_tags": ["审查"], "depends_on": ["T-1"] }
+],
+"assumptions": ["不确定的技术假设，禁止编造"]
+```
+
+提案由代码裁决（id 白名单 / 无环 / 能力覆盖 / implement 必配 review），违例 = 提案被拒并重试。
+
 ## MISSION_REPORT（必须输出，JSON）
 {
   "task_id": "<id>",

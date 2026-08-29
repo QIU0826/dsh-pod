@@ -83,3 +83,22 @@ describe('listSkills / readSkill（安装清单与读取）', () => {
     expect(content).toContain('Code Reviewer')
   })
 })
+
+describe('P1 路径遍历防护（name 来自不可信 frontmatter）', () => {
+  it('installSkill：name 含路径分隔符/.. → 拒绝，不落盘', () => {
+    const dir = makeSkillsDir()
+    const evil = SKILL_MD.replace('name: code-reviewer', 'name: ../../.agents/pwned')
+    expect(() => installSkill({ dir, content: evil, source: 'market' })).toThrow(/skill name rejected/)
+    expect(() => installSkill({ dir, content: SKILL_MD.replace('name: code-reviewer', 'name: C:\\evil'), source: 'market' })).toThrow(/skill name rejected/)
+    expect(existsSync(join(dir, 'code-reviewer'))).toBe(false)
+    // 合法名字仍可安装
+    expect(installSkill({ dir, content: SKILL_MD, source: 'market' })).toBe(true)
+  })
+
+  it('readSkill：name 走同一白名单 → 拒绝遍历读取', () => {
+    const dir = makeSkillsDir()
+    installSkill({ dir, content: SKILL_MD, source: 'market' })
+    expect(() => readSkill(dir, '../../../etc/passwd')).toThrow(/skill name rejected/)
+    expect(readSkill(dir, 'code-reviewer')).toContain('Code Reviewer')
+  })
+})

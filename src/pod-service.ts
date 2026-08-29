@@ -8,9 +8,9 @@
  */
 
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { ApprovalEngine } from './core/approvals.js'
 import { ApplyPatch, execGitRunner, type ApplyResult } from './core/apply-patch.js'
 import { BackendsLock } from './core/backends-lock.js'
@@ -28,7 +28,7 @@ import { ArkBackend } from './workers/ark-headless.js'
 import { repairPath } from './workers/preflight.js'
 import { CronScheduler, type CronJob } from './core/cron.js'
 import type { ChannelTarget } from './core/channel.js'
-import type { ApprovalRequest, ApprovalRule, AgentSlot, Handoff, MemoryRecord, MemoryRelation, Mission, Task, Vendor, WorkerBackend } from './core/types.js'
+import type { ApprovalRequest, ApprovalRule, AgentSlot, Handoff, MemoryRecord, MemoryRelation, Mission, PodEvent, Task, Vendor, WorkerBackend } from './core/types.js'
 
 /**
  * 火山方舟后端装配（Berd-G 新 adapter）：从环境 ARK_API_KEY 或 ~/.claude/settings.json 的
@@ -214,22 +214,57 @@ export class PodService {
     const missionId = `M-${this.clock()}-${Math.floor(Math.random() * 1e6)}`
     const orchestrator = this.makeOrchestrator(missionId)
     const mission = orchestrator.launch(input)
-    // plan 缺省时自动生成「实现 + 独立 review」默认链（质量门默认开，CR-06-5）：
-    // 表单/工具未给任务 DAG 也能跑出完整链，而非空 mission 静默转人工
-    const plan = input.plan !== undefined && input.plan.length > 0 ? input.plan : defaultPlan(input.goal)
-    orchestrator.createTasks(plan)
-    // DoD-2：plan.md 落盘（唯一事实源，charter planner.md 契约）——mission 数据目录下持久化，
-    // 跨重启可回溯；Canvas 任务列表即该 plan 的可视化
-    this.writePlanFile(missionId, goalTitle(input.goal), plan)
+    // 任务 DAG 三级分流（P1 规划层）：
+    //   1. 显式 plan → 原样落盘（既有行为）；
+    //   2. 阵型含 planner 槽位 → goal 交给规划任务智能分解（提案经代码裁决后 expand，
+    //      plan.md 在落盘时经 onPlanExpanded 写入）；
+    //   3. 无 planner → 默认「实现 + 独立 review」两步链（CR-06-5 质量门默认开）。
+    // 原子性（P0 实证：planning 僵尸）：分流阶段任何异常 → mission 必须转 aborted，
+    // 否则落盘的 planning mission 无人驱动、且永久占用单活跃锁（后续 launch 全 409）。
+    try {
+      if (input.plan !== undefined && input.plan.length > 0) {
+        orchestrator.createTasks(input.plan)
+        this.writePlanFile(missionId, goalTitle(input.goal), input.plan)
+      } else if (orchestrator.hasPlannerCapability()) {
+        orchestrator.createPlannerTask(input.goal)
+      } else {
+        const plan = defaultPlan(input.goal)
+        orchestrator.createTasks(plan)
+        this.writePlanFile(missionId, goalTitle(input.goal), plan)
+      }
+    } catch (error) {
+      const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+      console.error('[dsh-pod] launch dispatch failed (mission aborted):', message)
+      this.store.appendEvent(missionId, {
+        id: `ev-launch-error-${this.clock()}`,
+        mission_id: missionId,
+        ts: this.clock(),
+        kind: 'mission_run_error',
+        payload: { error: `launch dispatch failed: ${message}` },
+      })
+      this.store.updateMission(missionId, { status: 'aborted', updated_at: this.clock() })
+      throw error
+    }
     this.orchestrator = orchestrator
     this.running = orchestrator.run().catch((error) => {
+      const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+      console.error('[dsh-pod] mission run crashed:', message)
       this.store.appendEvent(missionId, {
         id: `ev-run-error-${this.clock()}`,
         mission_id: missionId,
         ts: this.clock(),
         kind: 'mission_run_error',
-        payload: { error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) },
+        payload: { error: message },
       })
+      // P0：run 崩溃必须落到终态——否则 planning/running 僵尸永久占用单活跃锁
+      const stuck = this.store.getMission(missionId)
+      if (stuck !== undefined && stuck.status !== 'done' && stuck.status !== 'aborted') {
+        try {
+          orchestrator.abortMission(`run crashed: ${message.slice(0, 200)}`)
+        } catch {
+          this.store.updateMission(missionId, { status: 'aborted', updated_at: this.clock() })
+        }
+      }
       return { status: 'aborted' as const, doneTasks: [], escalatedTasks: [], pendingApprovals: [], reason: String(error) }
     })
     // 3.3 节：mission 独立会话承载 commander（编排逻辑）；创建失败仅落事件，不阻断 mission
@@ -304,7 +339,7 @@ export class PodService {
   }
 
   /** DoD-2：plan.md 落盘（mission 数据目录，唯一事实源）。序列化任务 DAG，可读且可回溯。 */
-  private writePlanFile(missionId: string, title: string, plan: PlanTaskInput[]): void {    try {
+  private writePlanFile(missionId: string, title: string, plan: PlanTaskInput[], sourceTaskId?: string): void {    try {
       const dir = join(this.dataDir, 'missions', missionId)
       mkdirSync(dir, { recursive: true })
       const lines: string[] = [
@@ -312,7 +347,9 @@ export class PodService {
         '',
         `> mission: ${missionId}`,
         `> 生成时间: ${new Date(this.clock()).toISOString()}`,
-        '> 本文件由 Pod 自动生成（plan.md 唯一事实源，DoD-2）；Canvas 任务列表即其可视化。',
+        sourceTaskId !== undefined
+          ? "> 来源：planner 提案已通过代码裁决（规划任务 ${sourceTaskId}）。"
+          : '> 本文件由 Pod 自动生成（plan.md 唯一事实源，DoD-2）；Canvas 任务列表即其可视化。',
         '',
       ]
       for (const task of plan) {
@@ -355,6 +392,23 @@ export class PodService {
       })
     } catch (error) {
       console.error('[dsh-pod] cron tick failed:', error)
+    }
+    // P0 僵尸自愈：store 里的活跃 mission 不属于当前编排器（launch 分流中途抛错、
+    // 或历史版本留下的 planning 僵尸）→ 落终态，释放单活跃锁（否则 launch 永远 409）
+    const activeMission = this.store.getActiveMission()
+    if (activeMission !== undefined) {
+      const owned = this.orchestrator !== undefined && this.orchestrator.missionId === activeMission.id
+      if (!owned) {
+        console.error(`[dsh-pod] zombie mission detected (no orchestrator owns it): ${activeMission.id} ${activeMission.status} -> aborted`)
+        this.store.appendEvent(activeMission.id, {
+          id: `ev-zombie-${this.clock()}`,
+          mission_id: activeMission.id,
+          ts: this.clock(),
+          kind: 'mission_run_error',
+          payload: { error: `zombie mission reclaimed: ${activeMission.status} without a live orchestrator` },
+        })
+        this.store.updateMission(activeMission.id, { status: 'aborted', updated_at: this.clock() })
+      }
     }
     if (this.orchestrator === undefined) return { staleApprovals: [], watchdogFired: 0 }
     const result = this.orchestrator.maintenanceTick()
@@ -439,7 +493,7 @@ export class PodService {
       diffProvider: async (task) => {
         const parts: string[] = []
         for (const targetId of task.depends_on) {
-          const target = this.store.getTask(targetId)
+          const target = this.store.getTask(task.mission_id, targetId)
           if (target === undefined) continue
           const slot = target.owner_slot_id !== undefined ? this.store.getSlot(target.owner_slot_id) : undefined
           const repoDir = slot?.worktree_path ?? ''
@@ -454,16 +508,31 @@ export class PodService {
         return parts.join('\n\n') || '（无 diff 内容）'
       },
       clock: this.clock,
+      // P1 规划层：planner 提案落盘时同步写 plan.md（DoD-2 唯一事实源，跨重启可回溯）
+      onPlanExpanded: (missionId, plan, sourceTaskId) => {
+        const mission = this.store.getMission(missionId)
+        this.writePlanFile(missionId, goalTitle(mission?.goal ?? ''), plan, sourceTaskId)
+      },
     })
   }
 
   private requireOrchestrator(): MissionOrchestrator {
     if (this.orchestrator === undefined) {
-      // 跨重启恢复：磁盘有 active mission 时按 mission id 重建编排器
+      // 跨重启恢复（DoD-11，P0 修复：此前只重建对象——孤儿任务永久卡 dispatched/running）：
+      // 1) 磁盘有 active mission 时按 mission id 重建编排器；
+      // 2) dispatched/running 任务的 worker 进程已随宿主死亡 → 按 crash 故障化（可重试则待重派）；
+      // 3) mission 处于可驱动状态时立即重驱（不等 maintenanceTick）。
       const active = this.store.getActiveMission()
       if (active !== undefined) {
-        this.orchestrator = this.makeOrchestrator(active.id)
-        return this.orchestrator
+        const orch = this.makeOrchestrator(active.id)
+        this.orchestrator = orch
+        try {
+          orch.recoverFromRestart()
+          orch.ensureDriving()
+        } catch (error) {
+          console.error('[dsh-pod] restart recovery failed:', error)
+        }
+        return orch
       }
       throw new Error('no active mission; launch one with pod_launch first')
     }
@@ -488,7 +557,8 @@ export class PodService {
       tasks: snapshot.tasks,
       slots: snapshot.slots,
       pendingApprovals: snapshot.pendingApprovals,
-      runStatus: this.running !== undefined ? 'running' : 'idle',
+      // 驱动在途判定：此前看 this.running（resolve 后仍非 undefined，永远显示 running）
+      runStatus: orch.driveActive() ? 'running' : 'idle',
       experiments: { topology_animation: this.experiments.isEnabled('topology-animation'), canvas_third_column: this.experiments.isEnabled('canvas-third-column') },
     }
   }
@@ -562,6 +632,172 @@ export class PodService {
     }
   }
 
+  // ── 会话中心（P2）：mission 历史 = 会话；store 是唯一事实源，active/归档同构 ──
+
+  /** 会话列表：全部 mission 摘要（状态/预算/任务/token/最新事件/槽位），按创建时间倒序。 */
+  missionSummaries(): Array<{
+    id: string
+    name: string
+    goal: string
+    status: Mission['status']
+    budget_usd: number
+    budget_tokens: number | null
+    spent_tokens: number
+    spent_equiv_usd: number
+    created_at: number
+    updated_at: number
+    task_total: number
+    task_done: number
+    tokens_in: number
+    tokens_out: number
+    slots: Array<{ id: string; role: string; vendor: string; avatar: string | null }>
+    last_event: { kind: string; ts: number; task_id?: string } | null
+    active: boolean
+  }> {
+    return this.store
+      .listMissions()
+      .sort((a, b) => b.created_at - a.created_at)
+      .map((m) => {
+        const tasks = this.store.listTasks(m.id)
+        const events = this.store.listEvents(m.id)
+        const entries = this.store.listLedger(m.id)
+        const tokensIn = entries.reduce((sum, e) => sum + e.tokens_in, 0)
+        const tokensOut = entries.reduce((sum, e) => sum + e.tokens_out, 0)
+        const last = events.length > 0 ? events[events.length - 1] : undefined
+        return {
+          id: m.id,
+          name: m.name,
+          goal: m.goal,
+          status: m.status,
+          budget_usd: m.budget_usd,
+          budget_tokens: m.budget_tokens ?? null,
+          spent_tokens: m.spent_tokens,
+          spent_equiv_usd: m.spent_equiv_usd,
+          created_at: m.created_at,
+          updated_at: m.updated_at,
+          task_total: tasks.length,
+          task_done: tasks.filter((t) => t.status === 'done').length,
+          tokens_in: tokensIn,
+          tokens_out: tokensOut,
+          slots: this.store.listSlots(m.id).map((s) => ({ id: s.id, role: s.role, vendor: s.vendor, avatar: s.avatar ?? null })),
+          last_event: last !== undefined ? { kind: last.kind, ts: last.ts, task_id: last.task_id } : null,
+          active: m.status !== 'done' && m.status !== 'aborted',
+        }
+      })
+  }
+
+  /** 单个 mission 归档快照（历史会话回看：对话流/任务/槽位/审批/账本）。 */
+  missionArchive(missionId: string): {
+    mission: { id: string; name: string; goal: string; status: Mission['status']; budget_usd: number; budget_tokens: number | null; spent_tokens: number; spent_equiv_usd: number; created_at: number }
+    tasks: Array<{ id: string; title: string; type: string; status: string; fault: string | null; attempts: number; owner: string | null; commit: string | null; depends_on: string[] }>
+    slots: Array<{ id: string; role: string; vendor: string; status: string; ctx_usage_pct: number; avatar: string | null }>
+    approvals: Array<{ id: string; status: string; decided_at: number | null; task_id: string | null; summary: string; worktree_path: string; kind: string }>
+    ledger: { total_tokens: number; total_equiv_usd: number; entries: Array<{ model: string; tokens_in: number; tokens_out: number; equiv_usd: number; ts: number }> }
+    events: PodEvent[]
+  } | undefined {
+    const mission = this.store.getMission(missionId)
+    if (mission === undefined) return undefined
+    const entries = this.store.listLedger(missionId)
+    const totalTokens = entries.reduce((sum, e) => sum + e.tokens_in + e.tokens_out, 0)
+    const totalUsd = entries.reduce((sum, e) => sum + e.equiv_usd, 0)
+    return {
+      mission: {
+        id: mission.id, name: mission.name, goal: mission.goal, status: mission.status,
+        budget_usd: mission.budget_usd, budget_tokens: mission.budget_tokens ?? null, spent_tokens: mission.spent_tokens,
+        spent_equiv_usd: mission.spent_equiv_usd, created_at: mission.created_at,
+      },
+      tasks: this.store.listTasks(missionId).map((t) => ({
+        id: t.id, title: t.title, type: t.type, status: t.status, fault: t.fault ?? null,
+        attempts: t.attempts, owner: t.owner_slot_id ?? null, commit: t.commit_sha?.slice(0, 8) ?? null, depends_on: t.depends_on,
+      })),
+      slots: this.store.listSlots(missionId).map((s) => ({ id: s.id, role: s.role, vendor: s.vendor, status: s.status, ctx_usage_pct: s.ctx_usage_pct, avatar: s.avatar ?? null })),
+      approvals: this.store.listApprovals(missionId).map((a) => ({
+        id: a.id, status: a.status, decided_at: a.decided_at ?? null, task_id: a.task_id ?? null,
+        summary: a.patch.summary, worktree_path: a.patch.worktree_path, kind: a.kind ?? 'merge',
+      })),
+      ledger: {
+        total_tokens: totalTokens,
+        total_equiv_usd: Number(totalUsd.toFixed(6)),
+        entries: entries.slice(-50).map((e) => ({ model: e.model, tokens_in: e.tokens_in, tokens_out: e.tokens_out, equiv_usd: e.equiv_usd, ts: e.ts })),
+      },
+      events: this.store.listEvents(missionId).slice(-500),
+    }
+  }
+
+  /** 审批详情（合并审批页）：完整记录 + 可读 diff 文本（白名单根内、64KB 上限）。 */
+  approvalDetail(approvalId: string): {
+    id: string
+    mission_id: string
+    kind: string
+    task_id: string | null
+    status: string
+    decided_at: number | null
+    summary: string
+    worktree_path: string
+    base_commit: string | null
+    head_commit: string | null
+    diff: string | null
+  } | undefined {
+    const approval = this.store.getApproval(approvalId)
+    if (approval === undefined) return undefined
+    let diff: string | null = null
+    const diffPath = approval.patch.diff_path
+    if (diffPath !== undefined && diffPath.length > 0) {
+      try {
+        const realDiff = realpathSync(diffPath)
+        const realRoot = this.missionRoots(approval.mission_id)
+          .map((r) => realpathSync(r))
+          .find((r) => realDiff === r || realDiff.startsWith(r + sep))
+        if (realRoot !== undefined && statSync(realDiff).isFile() && statSync(realDiff).size <= 64 * 1024) {
+          diff = readFileSync(realDiff, 'utf8')
+        }
+      } catch { /* diff 不可读（worktree 已清理等）→ 详情页降级为仅摘要 */ }
+    }
+    // 无落盘 diff 时，从 worktree 现算 base..head（真实 git 数据，非存储字段）；
+    // worktree 必须仍在该 mission 的白名单根内（防记录被篡改后任意目录执行 git）
+    if (diff === null && approval.patch.worktree_path.length > 0) {
+      const { base_commit, head_commit } = approval.patch
+      if (base_commit !== undefined && head_commit !== undefined) {
+        try {
+          const realWorktree = realpathSync(approval.patch.worktree_path)
+          const inRoots = this.missionRoots(approval.mission_id)
+            .map((r) => realpathSync(r))
+            .some((r) => realWorktree === r || realWorktree.startsWith(r + sep))
+          if (inRoots && existsSync(realWorktree)) {
+            const out = execFileSync('git', ['-C', realWorktree, 'diff', `${base_commit}..${head_commit}`], {
+              encoding: 'utf8', timeout: 10_000, maxBuffer: 256 * 1024,
+            })
+            diff = out.length > 64 * 1024 ? `${out.slice(0, 64 * 1024)}\n…（已截断）` : out
+          }
+        } catch { /* commits 已被 GC / worktree 清理 → 降级为仅摘要 */ }
+      }
+    }
+    return {
+      id: approval.id,
+      mission_id: approval.mission_id,
+      kind: approval.kind ?? 'merge',
+      task_id: approval.task_id ?? null,
+      status: approval.status,
+      decided_at: approval.decided_at ?? null,
+      summary: approval.patch.summary,
+      worktree_path: approval.patch.worktree_path,
+      base_commit: approval.patch.base_commit ?? null,
+      head_commit: approval.patch.head_commit ?? null,
+      diff,
+    }
+  }
+
+  /** 指定 mission 的资产白名单根（cwd + 各槽位 worktree）。 */
+  private missionRoots(missionId: string): string[] {
+    const mission = this.store.getMission(missionId)
+    if (mission === undefined) return []
+    const roots = [mission.cwd]
+    for (const slot of this.store.listSlots(missionId)) {
+      if (slot.worktree_path !== undefined && slot.worktree_path.length > 0) roots.push(slot.worktree_path)
+    }
+    return [...new Set(roots)]
+  }
+
   /**
    * v0.2 任务中途换人正式化（4.3）：把任务所有权转到目标槽位（kill 旧进程 + 交接四件套落盘 + 事件审计）。
    * 换人后任务置 ready，由接下来 run()/dispatchNext() 重派到新槽位。
@@ -573,6 +809,27 @@ export class PodService {
   /** 手动模式（3.3 节）：UI/工具直连状态机接口，绕开 LLM 编排。 */
   dispatchNext(): Promise<boolean> {
     return this.requireOrchestrator().dispatchNext()
+  }
+
+  // ── P1 规划层工具面（pod_plan：list / add / replan）─────────────────────
+
+  /** 运行中追加任务节点（走 createTasks 同一裁决：id 白名单/重复/环，fail-closed）。 */
+  addPlanTasks(tasks: PlanTaskInput[]): Task[] {
+    return this.requireOrchestrator().createTasks(tasks)
+  }
+
+  /** 有界重规划：把失败现状喂回 planner 重新分解（REPLAN_LIMIT + 预算门控）。 */
+  requestReplan(reason: string): { requested: boolean; remaining: number; message: string } {
+    return this.requireOrchestrator().requestReplan(reason)
+  }
+
+  replanRemaining(): number {
+    return this.requireOrchestrator().replanRemaining()
+  }
+
+  /** 当前阵型是否含 planner 槽位（pod_plan 提示与 UI 提示用）。 */
+  hasPlannerCapability(): boolean {
+    return this.requireOrchestrator().hasPlannerCapability()
   }
 
   steer(slotId: string, instruction: string): void {

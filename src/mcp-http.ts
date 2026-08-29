@@ -20,6 +20,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
 import type { PodService } from './pod-service.js'
 import { makeMcpServer } from './mcp-server.js'
+import { allowsJsonBody, bearerTokenEquals, hasAllowedLoopbackOrigin, isLocalHostHeader, isLoopbackBindHost } from './core/http-guard.js'
 
 export interface McpHttpOptions {
   token?: string
@@ -27,10 +28,25 @@ export interface McpHttpOptions {
   dataDir?: string
 }
 
+const MAX_MCP_BODY_BYTES = 1024 * 1024
+
+class BodyTooLargeError extends Error {}
+
 function readBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
-    req.on('data', (c: Buffer) => chunks.push(c))
+    let total = 0
+    req.on('data', (c: Buffer) => {
+      total += c.length
+      if (total > MAX_MCP_BODY_BYTES) {
+        // 立即拒绝但不 destroy 连接：后续 data 继续被本监听器消费（丢弃），
+        // 既不缓冲（内存安全）也不回压死客户端（destroy 会让 fetch 直接断连拿不到 413）
+        chunks.length = 0
+        reject(new BodyTooLargeError('body exceeds 1MB limit'))
+        return
+      }
+      chunks.push(c)
+    })
     req.on('end', () => {
       try {
         const raw = Buffer.concat(chunks).toString('utf8')
@@ -57,7 +73,7 @@ export function createMcpHttpServer(service: PodService, opts: McpHttpOptions = 
 
   function authorized(req: IncomingMessage): boolean {
     if (token.length === 0) return true
-    return (req.headers.authorization ?? '').trim() === 'Bearer ' + token
+    return bearerTokenEquals(token, req)
   }
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -77,6 +93,19 @@ export function createMcpHttpServer(service: PodService, opts: McpHttpOptions = 
     if (!authorized(req)) {
       res.writeHead(401, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ error: 'unauthorized' }))
+      return
+    }
+    // P1：无 token（loopback 信任模式）时叠加浏览器侧防线——Host 白名单堵 DNS rebinding
+    // （否则攻击页同源可读响应），Origin 校验堵跨站写。带 token 的远程模式由 token 兜底。
+    if (token.length === 0 && (!isLocalHostHeader(req) || !hasAllowedLoopbackOrigin(req))) {
+      res.writeHead(403, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'forbidden: non-local Host header or cross-origin request' }))
+      return
+    }
+    // P1：POST 带体强制 application/json（text/plain 属 CORS simple request，可被恶意网页无预检跨站提交）
+    if (req.method === 'POST' && !allowsJsonBody(req)) {
+      res.writeHead(415, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'content-type must be application/json' }))
       return
     }
 
@@ -100,9 +129,10 @@ export function createMcpHttpServer(service: PodService, opts: McpHttpOptions = 
     if (req.method === 'POST') {
       try {
         body = await readBody(req)
-      } catch {
-        res.writeHead(400, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ error: 'invalid json body' }))
+      } catch (error) {
+        const tooLarge = error instanceof BodyTooLargeError
+        res.writeHead(tooLarge ? 413 : 400, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: tooLarge ? 'body too large (1MB limit)' : 'invalid json body' }))
         return
       }
     }
@@ -170,7 +200,25 @@ export async function listenMcpHttp(
   const mcp = createMcpHttpServer(service, opts)
   await mcp.ready
   const host = opts.host ?? '127.0.0.1'
-  const server: Server = createServer((req, res) => void mcp.handle(req, res))
+  // 库层 fail-closed（P1，与 mcp-http-server.mjs 脚本层同款）：非 loopback 必须配 token
+  if (!isLoopbackBindHost(host) && (opts.token ?? '').trim().length === 0) {
+    throw new Error('refusing to bind MCP HTTP on non-loopback host without token (set POD_MCP_TOKEN)')
+  }
+  // async handler 的 rejection 无人接 = unhandledRejection 炸进程：统一兜底（headers 未发出时回 500）
+  const server: Server = createServer((req, res) => {
+    void mcp.handle(req, res).catch(() => {
+      try {
+        if (!res.headersSent) {
+          res.writeHead(500, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ error: 'internal error' }))
+        } else {
+          res.end()
+        }
+      } catch {
+        // 响应已不可写：放弃该连接
+      }
+    })
+  })
   await new Promise<void>((resolve) => server.listen(opts.port ?? 0, host, () => resolve()))
   const address = server.address()
   const port = typeof address === 'object' && address !== null ? address.port : (opts.port ?? 0)

@@ -7,6 +7,10 @@ function fakeService() {
   return {
     launch: vi.fn((input) => ({ id: 'M-1', name: input.name, status: 'planning', goal: input.goal })),
     status: vi.fn(() => ({ tasks: [], pendingApprovals: [] })),
+    hasPlannerCapability: vi.fn(() => true),
+    replanRemaining: vi.fn(() => 2),
+    addPlanTasks: vi.fn((tasks: Array<{ id: string }>) => tasks.map((t) => ({ ...t, status: 'ready' }))),
+    requestReplan: vi.fn(() => ({ requested: true, remaining: 1, message: 'replan task created' })),
     dispatchNext: vi.fn(async () => true),
     steer: vi.fn(),
     approve: vi.fn(async () => ({ ok: true, mergeCommit: 'abc123456789' })),
@@ -51,8 +55,9 @@ describe('pod_* 工具注册面（3.3 节工具作用域清单，七件套）', 
       'pod_pause',
       'pod_resume',
       'pod_cron_list',
+      'pod_plan',
     ])
-    expect(tools).toHaveLength(14)
+    expect(tools).toHaveLength(15)
   })
 
   it('每个工具带参数 schema 与输出渲染（契约完整）', () => {
@@ -267,3 +272,26 @@ describe('pod_commander_start（真实宿主的 commander 会话验证入口）'
     expect(typeof call.ms).toBe('number')
   })
 
+
+describe('pod_plan 工具（P1 规划层：list / add / replan）', () => {
+  it('list 返回任务与 planner 状态；add 走 addPlanTasks；replan 走 requestReplan', async () => {
+    const service = fakeService()
+    const { tools } = makePodTools(service as unknown as PodService)
+    const planTool = tools.find((t) => t.name === 'pod_plan')!
+    expect(planTool).toBeDefined()
+    const list = (await planTool.execute({ action: 'list' }, undefined as never)) as { ok: boolean; message: string }
+    expect(list.ok).toBe(true)
+    expect(list.message).toContain('planner')
+    const add = (await planTool.execute(
+      { action: 'add', tasks: [{ id: 'T-9', title: 't', spec: 's', type: 'doc' }] },
+      undefined as never,
+    )) as { ok: boolean; message: string }
+    expect(add.ok).toBe(true)
+    expect(service.addPlanTasks).toHaveBeenCalledTimes(1)
+    const replan = (await planTool.execute({ action: 'replan', reason: 'x' }, undefined as never)) as { ok: boolean; message: string }
+    expect(replan.ok).toBe(true)
+    expect(service.requestReplan).toHaveBeenCalledWith('x')
+    const bad = (await planTool.execute({ action: 'bogus' }, undefined as never)) as { ok: boolean }
+    expect(bad.ok).toBe(false)
+  })
+})

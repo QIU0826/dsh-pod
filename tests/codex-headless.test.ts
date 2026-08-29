@@ -5,6 +5,7 @@ import {
   extractCodexUsage,
   parseCodexJsonlLine,
   resolveCodexMode,
+  buildCodexArgs,
 } from '../src/workers/codex-headless.js'
 import { CodexHeadlessBackend } from '../src/workers/codex-headless.js'
 import type { AgentSlot } from '../src/core/types.js'
@@ -259,5 +260,24 @@ describe('CodexHeadlessBackend（FakeSpawner 集成）', () => {
       }),
     })
     await expect(backend.kill({})).resolves.toBeUndefined()
+  })
+})
+
+describe('buildCodexArgs 注入面收口（P1：win32 shell:true 下 cmd 元字符即命令注入）', () => {
+  it('model 含 cmd 元字符 → 拒绝（& | ^ % < > ! 引号）', () => {
+    for (const model of ['x&calc', 'a|b', 'p^wd', '%USERPROFILE%', 'a>b', 'x!y', 'mo"del', "it's"]) {
+      expect(() => buildCodexArgs({ kind: 'new-thread' }, 'C:/repo/.wt', model)).toThrow(/unsafe argv/)
+    }
+  })
+  it('worktree 含元字符 → 拒绝；合法路径（含空格）放行', () => {
+    expect(() => buildCodexArgs({ kind: 'new-thread' }, 'C:/repo/.wt&calc', undefined)).toThrow(/unsafe argv path/)
+    expect(() => buildCodexArgs({ kind: 'new-thread' }, 'C:/My Repo/.pod-worktrees/M-1-S-1', undefined)).not.toThrow()
+  })
+  it('resume threadId 走 token 白名单 → 元字符拒绝', () => {
+    expect(() => buildCodexArgs({ kind: 'resume', threadId: 't1&calc' }, 'W', undefined)).toThrow(/unsafe argv/)
+  })
+  it('合法 model/threadId 正常组装', () => {
+    expect(buildCodexArgs({ kind: 'new-thread' }, 'C:/repo/.wt', 'gpt-5.6-sol')).toContain('gpt-5.6-sol')
+    expect(buildCodexArgs({ kind: 'resume', threadId: 'th_abc-123' }, 'W', undefined)).toContain('th_abc-123')
   })
 })

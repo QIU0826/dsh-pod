@@ -134,6 +134,36 @@ export function makeMcpServer(service: PodService): McpServer {
     return { content: [{ type: 'text', text: JSON.stringify({ resumed: true }) }] }
   })
 
+  // ── pod_plan：规划层工具面（P1：list / add / replan）──
+  server.registerTool('pod_plan', {
+    description: '规划层操作：list 查看任务 DAG；add 追加任务节点（同一代码裁决）；replan 有界重规划（上限 2 次 + 预算门控）。',
+    inputSchema: z.object({
+      action: z.enum(['list', 'add', 'replan']),
+      tasks: z.array(z.object({
+        id: z.string(), title: z.string(), spec: z.string(),
+        type: z.enum(['implement', 'review', 'test', 'doc', 'research']),
+        skill_tags: z.array(z.string()).optional(),
+        depends_on: z.array(z.string()).optional(),
+      })).optional(),
+      reason: z.string().optional(),
+    }),
+  }, async (args) => {
+    try {
+      if (args.action === 'list') {
+        const st = service.status()
+        return { content: [{ type: 'text', text: JSON.stringify({ tasks: st.tasks.map((t) => ({ id: t.id, type: t.type, status: t.status, depends_on: t.depends_on })), planner: service.hasPlannerCapability(), replanRemaining: service.replanRemaining() }) }] }
+      }
+      if (args.action === 'add') {
+        const created = service.addPlanTasks((args.tasks ?? []).map((t) => ({ ...t, skill_tags: t.skill_tags ?? [], depends_on: t.depends_on ?? [] })))
+        return { content: [{ type: 'text', text: JSON.stringify({ added: created.map((t) => t.id) }) }] }
+      }
+      const r = service.requestReplan(args.reason ?? 'replan via mcp')
+      return { content: [{ type: 'text', text: JSON.stringify(r) }] }
+    } catch (error) {
+      return { content: [{ type: 'text', text: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }) }] }
+    }
+  })
+
   // ── pod_abort：终止 ──
   server.registerTool('pod_abort', { description: '中止当前 mission（终态，不可恢复）。', inputSchema: { reason: z.string().optional() } }, async (args) => {
     service.abort(args.reason ?? 'aborted via mcp')

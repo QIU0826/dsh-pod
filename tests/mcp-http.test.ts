@@ -117,3 +117,24 @@ describe('mcp-http（v0.3 Streamable HTTP 远程访问）', () => {
     }
   })
 })
+
+describe('mcp-http P1 加固（content-type + fail-closed）', () => {
+  it('POST 非 application/json → 415（text/plain 是 CORS simple request 注入通道）', async () => {
+    const service = fakeService()
+    const started = await listenMcpHttp(service, {})
+    try {
+      const res = await fetch(started.url, {
+        method: 'POST',
+        headers: { 'content-type': 'text/plain' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 't', version: '0' } } }),
+      })
+      expect(res.status).toBe(415)
+    } finally {
+      await started.close()
+    }
+  })
+
+  it('listenMcpHttp：非 loopback 无 token → 拒绝启动（库层 fail-closed）', async () => {
+    await expect(listenMcpHttp(fakeService(), { host: '0.0.0.0', port: 0 })).rejects.toThrow(/without token/)
+  })
+})

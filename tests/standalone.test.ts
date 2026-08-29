@@ -98,9 +98,9 @@ describe('standalone server', () => {
   })
 })
 
-describe('guard（CR-29 loopback/token 纪律）', () => {
-  function fakeReq(remoteAddress: string, authorization?: string): IncomingMessage {
-    const headers: Record<string, string> = {}
+describe('guard（CR-29 loopback/token 纪律 + P1 浏览器侧防线）', () => {
+  function fakeReq(remoteAddress: string, authorization?: string, extraHeaders: Record<string, string> = {}): IncomingMessage {
+    const headers: Record<string, string> = { host: '127.0.0.1:3930', ...extraHeaders }
     if (authorization !== undefined) headers.authorization = authorization
     return { socket: { remoteAddress }, headers } as unknown as IncomingMessage
   }
@@ -119,12 +119,42 @@ describe('guard（CR-29 loopback/token 纪律）', () => {
     return { res, status: () => state.code, body: () => state.text }
   }
 
-  it('loopback 直通（127.0.0.1 / ::1 / ::ffff:127.0.0.1）', () => {
+  it('loopback 直通（127.0.0.1 / ::1 / ::ffff:127.0.0.1，本机 Host）', () => {
     for (const addr of ['127.0.0.1', '::1', '::ffff:127.0.0.1']) {
       const { res, status } = fakeRes()
       expect(guard(fakeReq(addr), res, '', true)).toBe(true)
       expect(status()).toBe(0)
     }
+  })
+
+  it('P1 DNS rebinding 防护：loopback 连接但 Host 为外域/缺失 → 拒绝', () => {
+    const cases: Array<Record<string, string>> = [
+      { host: 'evil.com:3930' },
+      { host: '' },
+      { host: '127.0.0.1.evil.com' },
+    ]
+    for (const headers of cases) {
+      const { res, status, body } = fakeRes()
+      expect(guard(fakeReq('127.0.0.1', undefined, headers), res, '', true)).toBe(false)
+      expect(status()).toBe(403)
+      expect(body()).toContain('Host')
+    }
+    // [::1]:port 与 localhost:port 合法
+    for (const headers of [{ host: '[::1]:3930' }, { host: 'localhost:3930' }]) {
+      const { res, status } = fakeRes()
+      expect(guard(fakeReq('127.0.0.1', undefined, headers), res, '', true)).toBe(true)
+      expect(status()).toBe(0)
+    }
+  })
+
+  it('P1 CSRF 防护：loopback 连接带外域 Origin → 拒绝；本机 Origin/无 Origin 放行', () => {
+    const evil = fakeRes()
+    expect(guard(fakeReq('127.0.0.1', undefined, { origin: 'http://evil.com' }), evil.res, '', true)).toBe(false)
+    expect(evil.status()).toBe(403)
+    const nullOrigin = fakeRes()
+    expect(guard(fakeReq('127.0.0.1', undefined, { origin: 'null' }), nullOrigin.res, '', true)).toBe(false)
+    const ok = fakeRes()
+    expect(guard(fakeReq('127.0.0.1', undefined, { origin: 'http://localhost:3930' }), ok.res, '', true)).toBe(true)
   })
 
   it('非 loopback：无 token / 错 token / loopbackOnly 均拒；对 token 且放开时放行', () => {
@@ -173,5 +203,22 @@ describe('standalone CLI 参数解析', () => {
     expect(() => parseStandaloneArgs(['--port', 'abc'])).toThrow(/--port/)
     expect(() => parseStandaloneArgs(['--port'])).toThrow(/缺少值/)
     expect(() => parseStandaloneArgs(['--wat'])).toThrow(/未知参数/)
+  })
+})
+
+describe('P1 CSRF 加固（standalone 集成：text/plain 跨站面封堵）', () => {
+  it('POST /api/dsh-pod/launch 用 text/plain → 400（readJsonBody 强制 application/json）', async () => {
+    const s = await listenStandalone({ port: 0, dataDir: makeTmpDataDir() })
+    try {
+      const res = await fetch(`http://127.0.0.1:${s.port}/api/dsh-pod/launch`, {
+        method: 'POST',
+        headers: { 'content-type': 'text/plain' },
+        body: JSON.stringify({ name: 'x', goal: 'g', cwd: 'C:\tmp', slots: [{ id: 'S-1', vendor: 'claude', role: 'implementer', capabilities: [] }] }),
+      })
+      expect(res.status).toBe(400)
+      expect(((await res.json()) as { error: string }).error).toContain('JSON')
+    } finally {
+      await s.close()
+    }
   })
 })

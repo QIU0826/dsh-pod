@@ -221,3 +221,36 @@ describe('JsonStore mutations', () => {
     }
   })
 })
+
+describe('崩溃窗口恢复（P0：主文件缺失时回读 .bak，绝不静默开空库）', () => {
+  it('persist 两次 rename 之间中断（main 缺失、bak 完好）→ open 从 .bak 恢复', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pod-bak-'))
+    try {
+      const s1 = new JsonStore({ rootDir: dir, clock: () => clockNow })
+      s1.open()
+      s1.createMission(makeMission({ id: 'M-keep' }))
+      // 第二次落盘才会产生 .bak（首次 persist 无 main 可转）
+      s1.createMission(makeMission({ id: 'M-2nd' }))
+      // 模拟崩溃窗口：main→bak 已完成、tmp→main 未发生 → 磁盘只剩 .bak
+      rmSync(join(dir, 'store.json'))
+      expect(existsSync(join(dir, 'store.json.bak'))).toBe(true)
+      const s2 = new JsonStore({ rootDir: dir, clock: () => clockNow })
+      s2.open()
+      expect(s2.getMission('M-keep')).toBeDefined()
+      expect(s2.listMissions().map((m) => m.id)).toContain('M-keep')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('全新目录（main/bak 均缺失）→ 正常开空库', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pod-fresh-'))
+    try {
+      const s = new JsonStore({ rootDir: dir, clock: () => clockNow })
+      s.open()
+      expect(s.listMissions()).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

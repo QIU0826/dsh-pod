@@ -114,7 +114,7 @@ export class MissionMachine {
           throw new InvalidTransitionError('running', 'awaiting_approval', `review ${review.id} has no review target (fail-closed)`)
         }
         for (const targetId of review.depends_on) {
-          const target = this.store.getTask(targetId)
+          const target = this.store.getTask(this.missionId, targetId)
           if (target === undefined) {
             throw new InvalidTransitionError('running', 'awaiting_approval', `review ${review.id} targets missing task ${targetId}`)
           }

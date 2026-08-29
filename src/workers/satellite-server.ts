@@ -7,15 +7,22 @@
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { allowsJsonBody, bearerTokenEquals, hasAllowedLoopbackOrigin, isLocalHostHeader, isLoopbackBindHost } from '../core/http-guard.js'
 import type {
-  AgentSlot, Task, Vendor, WorkerBackend, WorkerCompletion, WorkerProgressEvent,
+  AgentSlot, Task, Vendor, WorkerBackend, WorkerCompletion, WorkerHandle, WorkerProgressEvent,
 } from '../core/types.js'
+
+const MAX_SATELLITE_BODY_BYTES = 1024 * 1024
+
+class BodyTooLargeError extends Error {}
 
 export interface SatelliteSessionState {
   session_ref: string
   events: WorkerProgressEvent[]
   completion: WorkerCompletion | null
   killed: boolean
+  /** /start 返回的底层句柄：/kill 必须经它真正终止远程 worker 进程（P0 审计修复）。 */
+  handle?: WorkerHandle
 }
 
 export interface SatelliteServerOptions {
@@ -28,7 +35,18 @@ export interface SatelliteServerOptions {
 function readBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
-    req.on('data', (c: Buffer) => chunks.push(c))
+    let total = 0
+    req.on('data', (c: Buffer) => {
+      total += c.length
+      if (total > MAX_SATELLITE_BODY_BYTES) {
+        // 立即拒绝但不 destroy 连接：后续 data 继续被本监听器消费（丢弃），
+        // 既不缓冲（内存安全）也不回压死客户端（destroy 会让 fetch 直接断连拿不到 413）
+        chunks.length = 0
+        reject(new BodyTooLargeError('body exceeds 1MB limit'))
+        return
+      }
+      chunks.push(c)
+    })
     req.on('end', () => {
       try {
         const raw = Buffer.concat(chunks).toString('utf8')
@@ -53,14 +71,19 @@ export function createSatelliteHandler(opts: SatelliteServerOptions): {
       res.end(JSON.stringify({ ok: true, satellite: 'dsh-pod' }))
       return
     }
-    // 双向认证：设了 token 就要求 Bearer 一致
+    // 双向认证：设了 token 就要求 Bearer 一致（恒时比较）
     if (token.length > 0) {
-      const auth = (req.headers.authorization ?? '').trim()
-      if (auth !== 'Bearer ' + token) {
+      if (!bearerTokenEquals(token, req)) {
         res.writeHead(401, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ error: 'unauthorized' }))
         return
       }
+    } else if (req.method === 'POST' && (!isLocalHostHeader(req) || !hasAllowedLoopbackOrigin(req))) {
+      // P1：无 token（loopback 信任模式）的 POST 叠加浏览器侧防线（Host/Origin），
+      // 堵 DNS rebinding 与跨站写；机器对机器的 RemoteBackend 本就直连本机名。
+      res.writeHead(403, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'forbidden: non-local Host header or cross-origin request' }))
+      return
     }
     if (req.method === 'GET' && url.pathname === '/detect') {
       const d = await opts.backend.detect()
@@ -77,9 +100,20 @@ export function createSatelliteHandler(opts: SatelliteServerOptions): {
       return
     }
     if (req.method === 'POST') {
+      // P1：带体 POST 强制 application/json（RemoteBackend 客户端已带；堵 text/plain 跨站面）
+      if (!allowsJsonBody(req)) {
+        res.writeHead(415, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: 'content-type must be application/json' }))
+        return
+      }
       let body: { slot?: AgentSlot; task?: Task; worktree?: string; session_ref?: string } = {}
-      try { body = (await readBody(req)) as typeof body } catch {
-        res.writeHead(400); res.end(JSON.stringify({ error: 'invalid json' })); return
+      try {
+        body = (await readBody(req)) as typeof body
+      } catch (error) {
+        const tooLarge = error instanceof BodyTooLargeError
+        res.writeHead(tooLarge ? 413 : 400, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: tooLarge ? 'body too large (1MB limit)' : 'invalid json' }))
+        return
       }
       if (url.pathname === '/start') {
         const slot = body.slot as AgentSlot
@@ -96,6 +130,7 @@ export function createSatelliteHandler(opts: SatelliteServerOptions): {
             state.completion = completion
           },
         })
+        state.handle = handle
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ session_ref: sessionRef, backend_vendor: opts.backend.vendor, handle }))
         return
@@ -105,12 +140,21 @@ export function createSatelliteHandler(opts: SatelliteServerOptions): {
         const state = sessions.get(sessionRef)
         if (state) {
           state.killed = true
+          // 真正终止远程 worker 进程：只置标记不杀进程会让任务继续烧 token（P0 审计修复）。
+          // kill 失败不阻断响应（尽力而为清理），完成信号仍由 killed 标记兜底。
+          if (state.handle !== undefined) {
+            try {
+              await opts.backend.kill(state.handle)
+            } catch {
+              // 底层 kill 抛错：保留 killed 状态，客户端以 200 + completion 为准
+            }
+          }
           if (state.completion === null) {
             state.completion = { exit: 'killed', usage: { tokens_in: 0, tokens_out: 0, source: 'unavailable' }, artifacts: [] }
           }
         }
         res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ killed: true }))
+        res.end(JSON.stringify({ killed: true, session_found: state !== undefined }))
         return
       }
     }
@@ -132,7 +176,27 @@ export async function listenSatellite(
 ): Promise<StartedSatellite> {
   const h = createSatelliteHandler(opts)
   const host = opts.host ?? '127.0.0.1'
-  const server: Server = createServer((req, res) => void h.handle(req, res))
+  // 库层 fail-closed（P1，与 MCP/Channel 同款纪律）：非 loopback 必须配 token——
+  // /start 的 task spec 完全客户端可控，零鉴权暴露 = 卫星机任意指令执行面
+  if (!isLoopbackBindHost(host) && (opts.token ?? '').trim().length === 0) {
+    throw new Error('refusing to bind satellite on non-loopback host without token (set POD_SATELLITE_TOKEN)')
+  }
+  // async handler 的 rejection 若无人接 = unhandledRejection 炸掉整个卫星进程：
+  // 统一兜底 500（headers 未发出时），失败细节不再带崩进程
+  const server: Server = createServer((req, res) => {
+    void h.handle(req, res).catch(() => {
+      try {
+        if (!res.headersSent) {
+          res.writeHead(500, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ error: 'internal error' }))
+        } else {
+          res.end()
+        }
+      } catch {
+        // 响应已不可写：放弃该连接
+      }
+    })
+  })
   await new Promise<void>((resolve) => server.listen(opts.port ?? 0, host, () => resolve()))
   const address = server.address()
   const port = typeof address === 'object' && address !== null ? address.port : (opts.port ?? 0)

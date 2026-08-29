@@ -12,7 +12,9 @@
  *     PATH shim 可能缺失 → 二进制候选含 node_modules 实路径
  */
 
-import { execFile, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
+import { killTree } from './kill-tree.js'
+import { assertSafeArgvPath, assertSafeArgvToken } from './argv-guard.js'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { extractReport, buildTaskPrompt } from './claude-headless.js'
@@ -53,7 +55,7 @@ export interface SpawnedOpenCode {
   pid?: number
   onLine(line: string): void
   writeStdin(text: string): void
-  exited: Promise<{ code: number | null; signal: string | null; timedOut: boolean }>
+  exited: Promise<{ code: number | null; signal: string | null; timedOut: boolean; spawnFailed?: boolean }>
   kill(): void
 }
 
@@ -69,6 +71,10 @@ export interface OpenCodeBackendOptions {
  * prompt 走 stdin（短固定 argv）；--dir 显式指定 worktree（cwd 探测不可靠，实证）。
  */
 export function buildOpenCodeArgs(mode: OpenCodeLaunchMode, worktree: string, model?: string): string[] {
+  // P1 注入面收口：--dir / --model / --session 均为运行期动态值（虽走 shell:false，统一纪律）
+  assertSafeArgvPath('opencode worktree', worktree)
+  assertSafeArgvToken('opencode model', model)
+  if (mode.kind === 'resume') assertSafeArgvToken('opencode sessionId', mode.sessionId)
   const args = ['run', '--dir', worktree, '--format', 'json']
   if (model !== undefined && model.length > 0) args.push('--model', model)
   if (mode.kind === 'resume') args.push('--session', mode.sessionId)
@@ -178,16 +184,26 @@ export class OpenCodeHeadlessBackend implements WorkerBackend {
   private spawnOpenCode(args: string[], cwd: string): SpawnedOpenCode & { onLine(line: string): void } {
     if (this.spawner !== undefined) return this.spawner(this.binary, args, { cwd })
     // 真 .exe → shell:false（无 cmd 引号破坏面）；PATH shim 缺失时由 detect 候选解析出全路径传入
-    const child = spawn(this.binary, args, { cwd, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+    const child = spawn(this.binary, args, {
+      cwd,
+      windowsHide: true,
+      // POSIX 建独立进程组：killTree 可组杀孙进程（Windows 走 taskkill /T）
+      detached: process.platform !== 'win32',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
     let buffer = ''
     let lineHandler: (line: string) => void = () => {}
     const spawned = {
       pid: child.pid,
       writeStdin(text: string) {
-        child.stdin?.write(text, 'utf8')
-        child.stdin?.end()
+        const stdin = child.stdin
+        if (stdin === null) return
+        // 对端提前关闭时写入报 EPIPE：吞掉（exit/error 路径接管），绝不炸宿主
+        stdin.on('error', () => {})
+        stdin.write(text, 'utf8')
+        stdin.end()
       },
-      exited: new Promise<{ code: number | null; signal: string | null; timedOut: boolean }>((resolve) => {
+      exited: new Promise<{ code: number | null; signal: string | null; timedOut: boolean; spawnFailed: boolean }>((resolve) => {
         const consume = (chunk: Buffer): void => {
           buffer += chunk.toString('utf8')
           let index: number
@@ -202,15 +218,22 @@ export class OpenCodeHeadlessBackend implements WorkerBackend {
         let timedOut = false
         const timer = setTimeout(() => {
           timedOut = true
-          child.kill()
+          // 树杀：仅杀直接子进程会留下 CLI 孙进程继续烧 token
+          void killTree(child.pid)
         }, 60 * 60_000)
+        // spawn 失败（ENOENT/EPERM，PATH shim 缺失时高发）：无 error 监听 = uncaught exception 炸宿主；
+        // 且 exit 不触发——必须在此 resolve 并标记 spawnFailed，否则悬挂到超时误分类 timeout
+        child.on('error', () => {
+          clearTimeout(timer)
+          resolve({ code: null, signal: null, timedOut: false, spawnFailed: true })
+        })
         child.on('exit', (code, signal) => {
           clearTimeout(timer)
-          resolve({ code, signal, timedOut })
+          resolve({ code, signal, timedOut, spawnFailed: false })
         })
       }),
       kill() {
-        child.kill()
+        void killTree(child.pid)
       },
     }
     Object.defineProperty(spawned, 'onLine', {
@@ -251,12 +274,13 @@ export class OpenCodeHeadlessBackend implements WorkerBackend {
       }
     }
     const exit = await spawned.exited
-    const fault = exit.timedOut ? null : exit.code !== null && exit.code !== 0 ? 'crash' : null
+    // spawn 失败显式 failed(crash)：code=null 否则不落入任何故障分支，会被误判 done
+    const fault = exit.spawnFailed ? 'crash' : exit.timedOut ? null : exit.code !== null && exit.code !== 0 ? 'crash' : null
     const report = extractReport(lastText)
     return {
       sessionId,
       completion: {
-        exit: exit.timedOut ? 'timeout' : fault === 'crash' ? 'failed' : 'done',
+        exit: exit.spawnFailed ? 'failed' : exit.timedOut ? 'timeout' : fault === 'crash' ? 'failed' : 'done',
         fault: fault ?? undefined,
         report,
         usage,
@@ -268,10 +292,8 @@ export class OpenCodeHeadlessBackend implements WorkerBackend {
   }
 
   async kill(handle: WorkerHandle): Promise<void> {
-    if (handle.pid === undefined) return
-    await new Promise<void>((resolve) => {
-      execFile('taskkill', ['/PID', String(handle.pid), '/T', '/F'], { windowsHide: true }, () => resolve())
-    })
+    // 树杀且跨平台：taskkill 仅 Windows 存在，此前 POSIX 上 ENOENT 被吞 = kill 静默 no-op
+    await killTree(handle.pid)
   }
 }
 

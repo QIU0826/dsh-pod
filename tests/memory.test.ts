@@ -95,4 +95,21 @@ describe('记忆子系统 2.8.1（MemoryStore，主动策展 + 图谱 + reflecti
     expect(store.all()).toHaveLength(3) // 2 去重后为1 + decision + fact = 3；过时已剪
     rmSync(dir, { recursive: true, force: true })
   })
+
+  it('runReflection 合并方向：同键保留 updated_ts 最新者（H4 回归——方向反了会系统性淘汰新记忆）', () => {
+    const dir = mkdtempSync(join(import.meta.dirname, '.mem-'))
+    let t = 1_800_000_000_000
+    const clock = () => (t += 1000)
+    const store = new MemoryStore({ filePath: join(dir, 'memory.json'), clock })
+    store.open()
+    const first = store.write({ owner_slot_id: 'S-1', type: 'lesson', content_ref: '同一经验' })
+    const second = store.write({ owner_slot_id: 'S-1', type: 'lesson', content_ref: '同一经验' })
+    expect(second.updated_ts).toBeGreaterThan(first.updated_ts)
+    const result = store.runReflection()
+    expect(result.merged).toBe(1)
+    const ids = store.all().map((r) => r.id)
+    expect(ids).toContain(second.id) // 保留最新
+    expect(ids).not.toContain(first.id) // 淘汰最旧
+    rmSync(dir, { recursive: true, force: true })
+  })
 })

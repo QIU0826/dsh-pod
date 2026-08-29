@@ -23,6 +23,7 @@ import { ConcurrencyLimitError, InvalidTransitionError, NotFoundError, PodError 
 import { buildHandoff } from './handoff.js'
 import { Ledger } from './ledger.js'
 import { MissionMachine } from './mission.js'
+import { PLAN_TASK_SKILL, REPLAN_LIMIT, buildPlannerSpec, extractPlanProposal, hasPlannerSlot, validatePlanProposal } from './planner.js'
 import { estimateCtxUsage } from './session-tiers.js'
 import type { PodStore } from './store.js'
 import { classifyFault, TaskMachine, type TaskVerifyFn } from './task-machine.js'
@@ -42,11 +43,12 @@ import type {
   WorkerHandle,
   WorkerProgressEvent,
 } from './types.js'
-import {
+import { UNLIMITED_BUDGET_USD,
   DEFAULT_MAX_WALL_CLOCK_MS,
   DEFAULT_SESSION_TIERS,
   MAX_PARALLEL_TASKS,
   MAX_SLOTS,
+  SAFE_ENTITY_ID,
 } from './types.js'
 import { Watchdog, type FiredWatchdog } from './watchdog.js'
 
@@ -57,6 +59,8 @@ export interface SlotInput {
   capabilities: string[]
   /** 模型名；空串/缺省 = 走该 CLI 的默认模型（codex/ChatGPT 内置约定，CR-03-1）。 */
   model?: string
+  /** 毕加索动物形象 id（P2 UI 展示；白名单外剔除）。 */
+  avatar?: string
   session_tier?: SessionTier
   window_tokens?: number
 }
@@ -94,7 +98,7 @@ export interface WorktreeManager {
   ensure(repoRoot: string, slotId: string): Promise<string>
 }
 
-export type RunStatus = 'awaiting_approval' | 'needs_human' | 'waiting_backoff' | 'budget_exceeded' | 'aborted' | 'done' | 'awaiting_dispatch'
+export type RunStatus = 'awaiting_approval' | 'needs_human' | 'waiting_backoff' | 'budget_exceeded' | 'aborted' | 'done' | 'awaiting_dispatch' | 'paused'
 
 export interface RunSummary {
   status: RunStatus
@@ -122,6 +126,12 @@ export interface OrchestratorDeps {
    * 未提供时保持指针式交接（审查者自行读取）。
    */
   diffProvider?: (task: Task) => Promise<string>
+  /**
+   * 规划提案落盘回调（P1 规划层，DoD-2 plan.md 唯一事实源的接线点）：
+   * planner 任务完成且提案通过代码裁决后调用；pod-service 借此写 plan.md。
+   * 回调抛错只记日志不阻断（plan.md 是回溯面，不是执行面）。
+   */
+  onPlanExpanded?: (missionId: string, plan: PlanTaskInput[], sourceTaskId: string) => void
 }
 
 /** 注入审查提示词的 diff 长度上限（超限截断并标注，防窗口爆炸）。 */
@@ -129,6 +139,9 @@ export const MAX_REVIEW_DIFF_CHARS = 120_000
 
 /** 并行执行上限的硬顶（v0.2 并行强化，防 fan-out 失控；仍受 MAX_SLOTS 约束）。 */
 export const MAX_PARALLEL_CEILING = 8
+
+/** slot/task id 白名单（P1）：定义已移至 types.ts（orchestrator/planner 共享），此处 re-export 兼容旧引用。 */
+export { SAFE_ENTITY_ID } from './types.js'
 
 /** 灰度开关的极小结构化接口（避免硬依赖 Experiments 实现，测试可注入桩）。 */
 export interface ExperimentsLike {
@@ -146,6 +159,9 @@ interface WakeLatch {
   resolve?: () => void
 }
 
+/** 停摆兜底窗口：active 任务无落盘进展超过此时长 → 故障化重派。 */
+const STALL_TIMEOUT_MS = 3 * 60_000
+
 export class MissionOrchestrator {
   private readonly store: PodStore
   private readonly backends: Partial<Record<Vendor, WorkerBackend>>
@@ -156,14 +172,23 @@ export class MissionOrchestrator {
   private readonly missionMachine: MissionMachine
   private readonly taskMachine: TaskMachine
   private readonly watchdog: Watchdog
-  private readonly missionId: string
+  /** 宿主层归属判定用（僵尸 mission 自愈：PodService 对比当前编排器归属）。 */
+  readonly missionId: string
   private maxParallel: number
   private readonly diffProvider: ((task: Task) => Promise<string>) | undefined
+  private readonly onPlanExpanded: ((missionId: string, plan: PlanTaskInput[], sourceTaskId: string) => void) | undefined
   private readonly experiments: ExperimentsLike
   private readonly handles = new Map<string, WorkerHandle>()
   private readonly queuedSteer = new Map<string, string[]>()
   private readonly wakeLatch: WakeLatch = { fired: false }
   private stopRequested = false
+  /** 本次 stopRequested 的语义（summarize 据此区分 paused/budget_exceeded/aborted）。 */
+  private stopReason: 'user' | 'budget' | 'abort' | undefined
+  /** 在途驱动循环的 promise：run() 重入守卫（防双循环并发派发同一任务，审计 M13）。 */
+  private currentRun: Promise<RunSummary> | undefined
+  /** P1 规划层：plan 任务序号（P-1、P-2…）与已用重规划次数（REPLAN_LIMIT 门控）。 */
+  private planSeq = 0
+  private replansUsed = 0
 
   constructor(missionId: string, deps: OrchestratorDeps) {
     this.missionId = missionId
@@ -173,11 +198,12 @@ export class MissionOrchestrator {
     this.clock = deps.clock ?? (() => Date.now())
     this.maxParallel = deps.maxParallel ?? MAX_PARALLEL_TASKS
     this.diffProvider = deps.diffProvider
+    this.onPlanExpanded = deps.onPlanExpanded
     this.experiments = deps.experiments ?? { isEnabled: () => false }
     this.approvals = new ApprovalEngine(this.store, { clock: this.clock })
     this.ledger = new Ledger(this.store, { clock: this.clock })
     this.missionMachine = new MissionMachine(this.store, this.approvals, missionId, { clock: this.clock })
-    this.taskMachine = new TaskMachine(this.store, { clock: this.clock, verify: deps.verify })
+    this.taskMachine = new TaskMachine(this.store, { clock: this.clock, verify: deps.verify, missionId })
     this.watchdog = new Watchdog({ clock: this.clock })
   }
 
@@ -185,6 +211,17 @@ export class MissionOrchestrator {
 
   /** 创建 mission + 名册（单 active mission / fan-out 上限，2.12/3.8 节）。 */
   launch(input: LaunchInput): Mission {
+    // P1 路径逃逸防护（fail-fast，先于任何落盘）：slot id 拼进 worktree 路径
+    // （join(cwd,'.pod-worktrees',slotId)），含 ../ 或分隔符的 id 可把 worktree 建到仓库外
+    for (const slotInput of input.slots) {
+      if (!SAFE_ENTITY_ID.test(slotInput.id)) {
+        throw new PodError(
+          `slot id rejected (allowed: letters/digits/._- , no path separators): ${slotInput.id}`,
+          'INVALID_ID',
+          { slotId: slotInput.id },
+        )
+      }
+    }
     if (this.store.getActiveMission() !== undefined) {
       throw new ConcurrencyLimitError(1, 'another mission is active; finish or abort it first')
     }
@@ -214,7 +251,8 @@ export class MissionOrchestrator {
       name: input.name,
       goal: input.goal,
       status: 'planning',
-      budget_usd: input.budgetUsd,
+      // 0/负数 = 不限预算（与 HTTP 层 validateLaunch 同语义归一；0 真上限会锁死一切派发）
+      budget_usd: input.budgetUsd > 0 ? input.budgetUsd : UNLIMITED_BUDGET_USD,
       budget_tokens: input.budgetTokens,
       spent_tokens: 0,
       spent_equiv_usd: 0,
@@ -238,6 +276,7 @@ export class MissionOrchestrator {
         role: slotInput.role,
         capabilities: slotInput.capabilities,
         model: slotInput.model ?? '',
+        avatar: slotInput.avatar,
         effort: 'medium',
         session_tier: slotInput.session_tier ?? DEFAULT_SESSION_TIERS[slotInput.vendor],
         status: 'idle',
@@ -261,15 +300,25 @@ export class MissionOrchestrator {
   /** 任务 DAG 落盘（拓扑就绪派发；环与悬空 review 目标拒绝，fail-closed）。 */
   createTasks(plan: PlanTaskInput[]): Task[] {
     const now = this.clock()
+    for (const item of plan) {
+      // P1：任务 id 同样走白名单（进事件 id / 提示词 / 派发 argv 上下文，纪律与 slot id 一致）
+      if (!SAFE_ENTITY_ID.test(item.id)) {
+        throw new PodError(
+          `task id rejected (allowed: letters/digits/._- , no path separators): ${item.id}`,
+          'INVALID_ID',
+          { taskId: item.id },
+        )
+      }
+    }
     const ids = new Set(plan.map((p) => p.id))
     for (const item of plan) {
-      if (this.store.getTask(item.id) !== undefined) {
+      if (this.store.getTask(this.missionId, item.id) !== undefined) {
         throw new PodError(`task ${item.id} already exists`, 'DUPLICATE_TASK', { id: item.id })
       }
     }
     for (const item of plan) {
       for (const dep of item.depends_on ?? []) {
-        if (!ids.has(dep) && this.store.getTask(dep) === undefined) {
+        if (!ids.has(dep) && this.store.getTask(this.missionId, dep) === undefined) {
           throw new PodError(`task ${item.id} depends on missing task ${dep}`, 'MISSING_DEPENDENCY', { id: item.id, dep })
         }
       }
@@ -316,14 +365,57 @@ export class MissionOrchestrator {
 
   // ── 驱动循环 ──────────────────────────────────────────────────────────
 
-  /** 完整驱动：拓扑派发（单路并行）→ 等待完成 → 重试/转人工 → 质量门 → 审批卡。 */
-  async run(): Promise<RunSummary> {
+  /**
+   * 完整驱动：拓扑派发 → 等待完成 → 重试/转人工 → 质量门 → 审批卡。
+   * 重入守卫：已有驱动循环在跑时返回在途 promise（并发 run() 会双循环抢派同一任务）。
+   */
+  run(): Promise<RunSummary> {
+    if (this.currentRun !== undefined) return this.currentRun
+    const run = this.driveLoop()
+    this.currentRun = run
+    const clear = (): void => {
+      if (this.currentRun === run) this.currentRun = undefined
+    }
+    run.then(clear, clear)
+    return run
+  }
+
+  /** 当前是否有驱动循环在跑（pod_status 的 runStatus 数据源）。 */
+  driveActive(): boolean {
+    return this.currentRun !== undefined
+  }
+
+  /**
+   * 幂等重驱入口（P0 修复「resume/deny/派发门放行/退避到期后无人再驱动」的停摆裂缝）：
+   * mission 处于可驱动状态且无在途循环时后台启动一轮；否则 no-op。
+   * 驱动循环自身错误落事件，绝不炸调用方。
+   */
+  ensureDriving(): boolean {
+    if (this.currentRun !== undefined) return true
+    const mission = this.store.getMission(this.missionId)
+    if (mission === undefined) return false
+    if (mission.status !== 'running' && mission.status !== 'planning') return false
+    void this.run().catch((error) => {
+      const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+      this.store.appendEvent(this.missionId, {
+        id: `ev-run-error-${this.clock()}`,
+        mission_id: this.missionId,
+        ts: this.clock(),
+        kind: 'mission_run_error',
+        payload: { error: message },
+      })
+    })
+    return true
+  }
+
+  private async driveLoop(): Promise<RunSummary> {
     const mission = this.requireMission()
     if (mission.status === 'planning') this.missionMachine.start()
     else if (mission.status !== 'running') {
       throw new InvalidTransitionError(mission.status, 'run', 'mission must be planning or running')
     }
     this.stopRequested = false
+    this.stopReason = undefined
     while (!this.stopRequested) {
       // v0.2 并行强化：每轮尽量填满 maxParallel 个就绪任务（双路+），而非单路派 1 个即等
       const dispatched = await this.dispatchBatch()
@@ -397,6 +489,10 @@ export class MissionOrchestrator {
 
   private async dispatchTask(task: Task): Promise<boolean> {
     const mission = this.requireMission()
+    // 停摆守卫（P0 修复「暂停期间任务照常派发」）：stopRequested（用户暂停/预算/中止）
+    // 或 mission 已离开可派发状态时，本批不再派新任务；在途任务完成仍走完成处理路径。
+    // planning 放行：pod_dispatch/测试可在 run() 前直接派发（与修复前行为一致）
+    if (this.stopRequested || (mission.status !== 'running' && mission.status !== 'planning')) return false
     // 429 恢复（3.4 节）：槽位因限流置 rate_limited；其任务退避期满后槽位回 idle 重新可路由
     const now = this.clock()
     for (const slot of this.store.listSlots(this.missionId)) {
@@ -417,7 +513,7 @@ export class MissionOrchestrator {
     if (task.type === 'review') {
       const targetOwners = new Set(
         task.depends_on
-          .map((id) => this.store.getTask(id)?.owner_slot_id)
+          .map((id) => this.store.getTask(this.missionId, id)?.owner_slot_id)
           .filter((s): s is string => s !== undefined),
       )
       availableSlots = availableSlots.filter((s) => !targetOwners.has(s.id))
@@ -439,6 +535,7 @@ export class MissionOrchestrator {
         task_id: task.id,
         payload: { reason: `no routable slot: ${routed.reason}` },
       })
+      this.maybeAutoReplan(task.id)
       this.signalCompletion()
       return false
     }
@@ -523,7 +620,7 @@ export class MissionOrchestrator {
     // 有 diffProvider 时把 diff 内容直接注入（审查者无需仓库命令权限，CR-03）
     let spec = task.spec
     if (task.type === 'review') {
-      const targets = task.depends_on.map((id) => this.store.getTask(id)).filter((t): t is Task => t !== undefined)
+      const targets = task.depends_on.map((id) => this.store.getTask(this.missionId, id)).filter((t): t is Task => t !== undefined)
       const diffRanges = targets
         .map((t) => `${t.id}（${t.parent_sha ?? '?'}..${t.commit_sha ?? '?'}）`)
         .join('、')
@@ -538,6 +635,24 @@ export class MissionOrchestrator {
         const truncated = diffText.length > MAX_REVIEW_DIFF_CHARS
         const bounded = truncated ? diffText.slice(0, MAX_REVIEW_DIFF_CHARS) : diffText
         spec += `\n\n## 被审 diff（宿主机注入，勿访问仓库）\n\`\`\`diff\n${bounded}\n\`\`\`${truncated ? '\n（diff 超长已截断；如需完整内容请以 need_clarify 说明）' : ''}`
+      }
+      // agent_relay：审查上下文注入是真实的 agent 间传信（实现者产物 → 审查者），
+      // 落盘事件让前端以对话形式呈现（不做前端表面的假消息）
+      const reviewFromSlot = targets.map((t) => t.owner_slot_id).find((x) => x !== undefined)
+      if (reviewFromSlot !== undefined) {
+        this.store.appendEvent(this.missionId, {
+          id: `ev-relay-review-${task.id}-${this.clock()}`,
+          mission_id: this.missionId,
+          ts: this.clock(),
+          kind: 'agent_relay',
+          task_id: task.id,
+          slot_id: reviewFromSlot,
+          payload: {
+            channel: 'review_input',
+            to_slot: slot.id,
+            note: `已注入被审任务的 diff 区间与产物摘要（${targets.map((t) => t.id).join('、')}），审查者无需访问仓库`,
+          },
+        })
       }
     }
     // CR-01-2：steer 排队指令，本次派单必带（运行中指令落盘，不打断进程）
@@ -604,7 +719,7 @@ export class MissionOrchestrator {
         task_id: taskId,
         payload: { error: message },
       })
-      const task = this.store.getTask(taskId)
+      const task = this.store.getTask(this.missionId, taskId)
       if (task !== undefined && (task.status === 'dispatched' || task.status === 'running')) {
         try {
           this.taskMachine.fail(taskId, { kind: 'crash', message: `internal error: ${message}` })
@@ -613,12 +728,14 @@ export class MissionOrchestrator {
         }
       }
     } finally {
+      // 完成即弃句柄：正常完成的任务此前从不清理，Map 无界增长（审计 M3）
+      this.handles.delete(taskId)
       this.signalCompletion()
     }
   }
 
   private async processCompletion(taskId: string, completion: WorkerCompletion): Promise<void> {
-    const task = this.store.getTask(taskId)
+    const task = this.store.getTask(this.missionId, taskId)
     if (task === undefined || task.owner_slot_id === undefined) {
       this.signalCompletion()
       return
@@ -641,6 +758,7 @@ export class MissionOrchestrator {
       } catch (error) {
         if (error instanceof PodError && error.code === 'BUDGET_EXCEEDED') {
           this.stopRequested = true
+          this.stopReason = 'budget'
           this.missionMachine.pause()
           this.store.appendEvent(this.missionId, {
             id: `ev-budget-${taskId}`,
@@ -665,12 +783,42 @@ export class MissionOrchestrator {
 
     switch (completion.exit) {
       case 'done': {
-        if (completion.report !== undefined) {
-          await this.taskMachine.report(taskId, completion.report)
-        } else {
+        if (completion.report === undefined) {
           // 无报告即静默假成功候选（Verifier 层 fail-closed 的同源判定）
           this.taskMachine.fail(taskId, { kind: 'silent_failure', message: 'process exited 0 but produced no MISSION_REPORT' })
+          break
         }
+        if (task.type === 'plan') {
+          // 规划任务（P1）：提案先经代码裁决，再报完成——顺序很关键：report() 会把任务
+          // 迁到 done，之后再拒绝就无法走 fail/重试路径了
+          const proposal = extractPlanProposal(completion.report)
+          const validation =
+            proposal !== undefined
+              ? validatePlanProposal(proposal, {
+                  slots: this.store.listSlots(this.missionId),
+                  existingTaskIds: new Set(this.store.listTasks(this.missionId).map((t) => t.id)),
+                })
+              : undefined
+          if (validation === undefined || !validation.ok) {
+            const errors = validation === undefined ? ['report.plan missing or malformed'] : validation.errors
+            this.taskMachine.fail(taskId, { kind: 'silent_failure', message: `plan proposal rejected: ${errors.join('; ').slice(0, 400)}` })
+            this.store.appendEvent(this.missionId, {
+              id: `ev-plan-rejected-${taskId}-${this.clock()}`,
+              mission_id: this.missionId,
+              ts: this.clock(),
+              kind: 'plan_rejected',
+              task_id: taskId,
+              payload: { errors },
+            })
+            break
+          }
+          await this.taskMachine.report(taskId, completion.report)
+          this.maybeEmitQuestion(task, completion.report)
+          this.expandPlan(validation.plan, taskId, validation.assumptions, validation.goalRestatement)
+          break
+        }
+        await this.taskMachine.report(taskId, completion.report)
+        this.maybeEmitQuestion(task, completion.report)
         break
       }
       case 'rate_limited':
@@ -689,6 +837,7 @@ export class MissionOrchestrator {
         this.taskMachine.fail(taskId, { kind: 'crash', message: 'worker process killed' })
         break
     }
+    this.maybeAutoReplan(taskId)
     this.signalCompletion()
   }
 
@@ -717,7 +866,7 @@ export class MissionOrchestrator {
     const fired = firedOverride ?? this.watchdog.tick(this.clock())
     for (const item of fired) {
       if (item.task_id === undefined) continue
-      const task = this.store.getTask(item.task_id)
+      const task = this.store.getTask(this.missionId, item.task_id)
       if (task === undefined) continue
       if (item.kind === 'task-wall-clock') {
         void this.killTask(item.task_id)
@@ -741,14 +890,217 @@ export class MissionOrchestrator {
   maintenanceTick(): { staleApprovals: string[]; watchdogFired: number } {
     const fired = this.watchdog.tick(this.clock())
     this.tickWatchdogs(fired)
+    // 停摆兜底（存储级，不依赖内存 watchdog 状态——实证：驱动循环存在静默挂起的
+    // 运行态）：active 任务超过 STALL_TIMEOUT_MS 无任何落盘进展 → 故障化（idle_timeout）
+    // 并确保重驱。任何停摆最多一个巡检周期 + 超时窗口后自愈。
+    for (const task of this.activeTasks()) {
+      if (this.clock() - task.updated_at < STALL_TIMEOUT_MS) continue
+      try {
+        this.killTask(task.id)
+      } catch { /* 句柄可能已死 */ }
+      try {
+        this.taskMachine.fail(task.id, { kind: 'idle_timeout', message: `stall guard: no progress for ${Math.round(STALL_TIMEOUT_MS / 60_000)}min` })
+        this.store.appendEvent(this.missionId, {
+          id: `ev-stall-${task.id}-${this.clock()}`,
+          mission_id: this.missionId,
+          ts: this.clock(),
+          kind: 'task_blocked',
+          task_id: task.id,
+          payload: { fault: 'idle_timeout', guard: 'stall-timeout', attempts: task.attempts },
+        })
+      } catch {
+        // 状态已漂移（恰好在兜底瞬间完成）：留事件即可
+      }
+      this.signalCompletion()
+    }
+    // 停摆补偿（P0）：mission 应在跑但驱动循环不在（退避到期/历史遗漏）且有活干 → 自动重驱。
+    // 条件收紧到「有可派/在途任务」或「全部完成待收口」，避免 escalated 等终态每 tick 空转。
+    if (this.currentRun === undefined) {
+      const mission = this.store.getMission(this.missionId)
+      if (mission !== undefined && mission.status === 'running') {
+        const tasks = this.store.listTasks(this.missionId)
+        const hasWork =
+          this.readyTasks().length > 0 ||
+          this.activeTasks().length > 0 ||
+          (tasks.length > 0 && tasks.every((t) => t.status === 'done'))
+        if (hasWork) this.ensureDriving()
+      }
+    }
     const stale = this.missionMachine.tickStaleApprovals()
     return { staleApprovals: stale.map((a) => a.id), watchdogFired: fired.length }
+  }
+
+  /**
+   * 跨重启恢复（DoD-11 真正落地，P0 修复：此前 recover 是死代码，重启后任务永久卡死）：
+   * 宿主重启后 dispatched/running 任务的 worker 进程已死——按 crash 故障化
+   * （attempts 未满则 blocked 待重派，否则转人工），审批卡索引重建，落恢复事件。
+   */
+  recoverFromRestart(): { orphanedTasks: string[] } {
+    const orphaned: string[] = []
+    for (const task of this.store.listTasks(this.missionId)) {
+      if (task.status !== 'dispatched' && task.status !== 'running') continue
+      try {
+        this.taskMachine.fail(task.id, { kind: 'crash', message: 'host restart: worker process lost' })
+        orphaned.push(task.id)
+      } catch {
+        // 状态已漂移（如重启前完成事件已落盘）：留给完成路径裁决，不覆盖
+      }
+    }
+    this.approvals.rebuildAfterRestart(this.missionId)
+    this.store.appendEvent(this.missionId, {
+      id: `ev-recovered-${this.clock()}`,
+      mission_id: this.missionId,
+      ts: this.clock(),
+      kind: 'mission_recovered',
+      payload: { orphaned_tasks: orphaned },
+    })
+    return { orphanedTasks: orphaned }
+  }
+
+  // ── 规划阶段（P1：goal → DAG 智能分解，AgentScope DAGPlanExecutor 借鉴）──────
+
+  /** 阵型是否具备 planner 槽位（launch 分流：有 → 规划任务；无 → 调用方走默认链）。 */
+  hasPlannerCapability(): boolean {
+    return hasPlannerSlot(this.store.listSlots(this.missionId))
+  }
+
+  /** 剩余可用重规划次数（REPLAN_LIMIT 门控，pod_plan 工具暴露）。 */
+  replanRemaining(): number {
+    return Math.max(0, REPLAN_LIMIT - this.replansUsed)
+  }
+
+  /**
+   * 创建规划任务（P-n，type 'plan'）：把 goal + 名册（重规划时附失败上下文）交给
+   * planner 槽位分解。它就是一个普通任务——路由/watchdog/账本/重试全套走既有资产。
+   */
+  createPlannerTask(goal: string, replan?: { reason: string }): Task {
+    const id = `P-${(this.planSeq += 1)}`
+    const spec = buildPlannerSpec({
+      goal,
+      roster: this.store.listSlots(this.missionId).map((s) => ({ id: s.id, role: s.role, capabilities: s.capabilities })),
+      replan:
+        replan !== undefined
+          ? { reason: replan.reason, failures: this.undoneTaskSummary() }
+          : undefined,
+    })
+    const [task] = this.createTasks([
+      { id, title: replan !== undefined ? `重规划：${replan.reason}` : '目标分解规划', spec, type: 'plan', skill_tags: [PLAN_TASK_SKILL] },
+    ])
+    this.store.appendEvent(this.missionId, {
+      id: `ev-plan-${id}-${this.clock()}`,
+      mission_id: this.missionId,
+      ts: this.clock(),
+      kind: replan !== undefined ? 'plan_replan_requested' : 'plan_delegation',
+      task_id: id,
+      payload: { reason: replan?.reason ?? null, replans_remaining: this.replanRemaining() },
+    })
+    return task!
+  }
+
+  /** 未完成任务摘要（重规划上下文的数据源）。 */
+  private undoneTaskSummary(): Array<{ id: string; title: string; status: string; fault?: string; last_error?: string }> {
+    return this.store
+      .listTasks(this.missionId)
+      .filter((t) => t.status !== 'done' && t.type !== 'plan')
+      .map((t) => ({ id: t.id, title: t.title, status: t.status, fault: t.fault, last_error: t.last_error }))
+  }
+
+  /**
+   * 有界重规划（自动 + 人工共用）：任务转人工时把失败现状喂回 planner 重新分解。
+   * 三重门：REPLAN_LIMIT / planner 槽位在阵 / 预算余量覆盖一次规划成本。
+   */
+  requestReplan(reason: string): { requested: boolean; remaining: number; message: string } {
+    if (this.replansUsed >= REPLAN_LIMIT) {
+      return { requested: false, remaining: 0, message: `replan limit reached (${REPLAN_LIMIT}); escalate to human` }
+    }
+    if (!this.hasPlannerCapability()) {
+      return { requested: false, remaining: this.replanRemaining(), message: 'no planner slot in roster (capabilities must include 规划)' }
+    }
+    const mission = this.requireMission()
+    const plannerModel = this.store
+      .listSlots(this.missionId)
+      .find((s) => s.capabilities.includes(PLAN_TASK_SKILL) && (s.model ?? '').length > 0)?.model ?? ''
+    const estimate = this.ledger.estimateTaskCostUsd(this.missionId, 'plan', plannerModel)
+    if (mission.budget_usd - mission.spent_equiv_usd < estimate) {
+      this.store.appendEvent(this.missionId, {
+        id: `ev-plan-replan-skip-${this.clock()}`,
+        mission_id: this.missionId,
+        ts: this.clock(),
+        kind: 'plan_replan_skipped',
+        payload: { reason: 'budget', remaining_usd: Number((mission.budget_usd - mission.spent_equiv_usd).toFixed(4)), estimate_usd: Number(estimate.toFixed(4)) },
+      })
+      return { requested: false, remaining: this.replanRemaining(), message: 'insufficient budget for replan' }
+    }
+    this.replansUsed += 1
+    this.createPlannerTask(mission.goal, { reason })
+    this.ensureDriving()
+    return { requested: true, remaining: this.replanRemaining(), message: `replan task created (${reason})` }
+  }
+
+  /**
+   * 有界自动重规划钩子（P1，AgentScope plan executor 反馈环借鉴）：
+   * 任务转人工（派发无人可派 / 完成处理失败耗尽）且阵型具备 planner → 重新分解。
+   * 规划任务自身失败不触发（防自我递归）。
+   */
+  private maybeAutoReplan(taskId: string): void {
+    const after = this.store.getTask(this.missionId, taskId)
+    if (after === undefined || after.type === 'plan' || after.status !== 'escalated') return
+    this.requestReplan(`任务 ${taskId} 转人工（fault=${after.fault ?? 'escalated'}）`)
+  }
+
+  /**
+   * 对话式控制台的问题通道（P2）：报告带 questions（或 need_clarify/blocked 陈述）时
+   * 落 task_question 事件——前端据此弹选项卡，人答后经 steer 回灌 + resolve 重派。
+   */
+  private maybeEmitQuestion(task: Task, report: import('./types.js').MissionReport): void {
+    const questions = report.questions ?? []
+    const hasBlockers = report.status !== 'done' && report.blockers !== undefined && report.blockers.length > 0
+    if (questions.length === 0 && !hasBlockers) return
+    this.store.appendEvent(this.missionId, {
+      id: `ev-question-${task.id}-${this.clock()}`,
+      mission_id: this.missionId,
+      ts: this.clock(),
+      kind: 'task_question',
+      task_id: task.id,
+      slot_id: task.owner_slot_id,
+      payload: {
+        questions,
+        blockers: report.blockers ?? [],
+        report_status: report.status,
+        summary: report.summary,
+      },
+    })
+  }
+
+  /** 规划提案通过裁决后落盘：建任务 + 事件 + plan.md 回调。 */
+  private expandPlan(plan: PlanTaskInput[], sourceTaskId: string, assumptions: string[], goalRestatement?: string): void {
+    this.createTasks(plan)
+    this.store.appendEvent(this.missionId, {
+      id: `ev-plan-expanded-${sourceTaskId}-${this.clock()}`,
+      mission_id: this.missionId,
+      ts: this.clock(),
+      kind: 'plan_expanded',
+      task_id: sourceTaskId,
+      payload: {
+        tasks: plan.map((p) => ({ id: p.id, type: p.type, depends_on: p.depends_on })),
+        assumptions,
+        goal_restatement: goalRestatement ?? null,
+      },
+    })
+    if (this.onPlanExpanded !== undefined) {
+      try {
+        this.onPlanExpanded(this.missionId, plan, sourceTaskId)
+      } catch (error) {
+        // plan.md 是回溯面不是执行面：落盘失败只记日志，不阻断任务图
+        console.error('[dsh-pod] writePlanFile after expansion failed:', error)
+      }
+    }
   }
 
   async killTask(taskId: string): Promise<void> {
     const handle = this.handles.get(taskId)
     if (handle !== undefined) {
-      const task = this.store.getTask(taskId)
+      const task = this.store.getTask(this.missionId, taskId)
       const backend = task?.owner_slot_id !== undefined ? this.backends[this.store.getSlot(task.owner_slot_id)?.vendor ?? 'dsh'] : undefined
       if (backend !== undefined) await backend.kill(handle)
       this.handles.delete(taskId)
@@ -805,17 +1157,27 @@ export class MissionOrchestrator {
     if (approval.kind !== 'dispatch') {
       throw new PodError('approval is not a dispatch gate', 'NOT_DISPATCH_GATE', { approvalId, kind: approval.kind })
     }
-    return this.approvals.decide(approvalId, 'approved', by)
+    const decided = this.approvals.decide(approvalId, 'approved', by)
+    // 放行后任务可派：自动重驱（P0 修复：此前 approve 后无人再驱动，等 pod_dispatch 手动触发）
+    this.ensureDriving()
+    return decided
   }
 
-  /** 暂停 mission（方案书 113 行/W4：可暂停/恢复；仅 running/awaiting_approval 可暂停）。 */
+  /** 暂停 mission（方案书 113 行/W4：可暂停/恢复；仅 running/awaiting_approval 可暂停）。
+   * 引擎同步停止派发（stopRequested）：状态字段与驱动行为不再分裂；在途任务自然完成。 */
   pause(): void {
+    this.stopRequested = true
+    this.stopReason = 'user'
     this.missionMachine.pause()
+    // 唤醒可能在 waitForCompletion 上等待的驱动循环：在途完成仍独立处理，不依赖循环存活
+    this.signalCompletion()
   }
 
-  /** 恢复 mission（paused → running 或 awaiting_approval，取决于有无 pending 审批卡）。 */
+  /** 恢复 mission（paused → running 或 awaiting_approval，取决于有无 pending 审批卡）；
+   * 回到 running 时自动重驱——此前 resume 后无人再调 run()，mission 永久停摆（P0 修复）。 */
   resume(): void {
     this.missionMachine.resume()
+    this.ensureDriving()
   }
 
   /** 模式 2 派发确认门：驳回一张 dispatch 卡（depends 任务转人工，不派发）。 */
@@ -827,7 +1189,7 @@ export class MissionOrchestrator {
     }
     const decided = this.approvals.decide(approvalId, 'denied', by, reason)
     if (approval.task_id !== undefined) {
-      const task = this.store.getTask(approval.task_id)
+      const task = this.store.getTask(this.missionId, approval.task_id)
       if (task !== undefined && task.status === 'ready') {
         this.taskMachine.escalate(task.id)
         this.store.appendEvent(this.missionId, {
@@ -865,12 +1227,21 @@ export class MissionOrchestrator {
       const feedback = `[审批驳回反馈] 你的实现被驳回（by ${by}）原因：${reason}。请据此修正后重新提交。`
       this.steer(approval.patch.slot_id, feedback)
     }
+    // deny → mission 回 running：任务可重跑，自动重驱（P0 修复：此前无人再驱动）
+    this.ensureDriving()
   }
 
-  /** 中止 mission（终态；状态机裁决合法性）。 */
+  /** 中止 mission（终态；状态机裁决合法性）。中止后已派发的 worker 已无意义：
+   * 全部树杀，防进程泄漏与预算继续燃烧（P0 修复：此前只切状态不杀进程）。 */
   abortMission(reason: string): void {
     this.stopRequested = true
+    this.stopReason = 'abort'
     this.missionMachine.abort(reason)
+    for (const taskId of [...this.handles.keys()]) {
+      void this.killTask(taskId)
+    }
+    // 唤醒驱动循环：被杀 worker 的退出信号可能永不到达（如远程后端），循环不得悬挂
+    this.signalCompletion()
   }
 
   /**
@@ -883,14 +1254,14 @@ export class MissionOrchestrator {
     taskId: string,
     resolution: { outcome: 'done' | 'blocked'; commit_sha?: string; parent_sha?: string; note?: string },
   ): void {
-    const task = this.store.getTask(taskId)
+    const task = this.store.getTask(this.missionId, taskId)
     if (task === undefined) throw new NotFoundError('task', taskId)
     if (task.status !== 'escalated') {
       throw new InvalidTransitionError(task.status, 'human-resolved', 'only escalated tasks can be human-resolved')
     }
     const now = this.clock()
     if (resolution.outcome === 'done') {
-      this.store.updateTask(taskId, {
+      this.store.updateTask(this.missionId, taskId, {
         status: 'done',
         commit_sha: resolution.commit_sha,
         parent_sha: resolution.parent_sha,
@@ -899,7 +1270,7 @@ export class MissionOrchestrator {
         last_error: undefined,
       })
     } else {
-      this.store.updateTask(taskId, {
+      this.store.updateTask(this.missionId, taskId, {
         status: 'blocked',
         fault: undefined,
         last_error: resolution.note ?? 'human takeover: retry',
@@ -924,7 +1295,7 @@ export class MissionOrchestrator {
    * done 已终态拒绝；目标槽位不可用（error/stopped/rate_limited/waiting_approval）拒绝。
    */
   async reassignTask(taskId: string, toSlotId: string, reason: string): Promise<Handoff> {
-    const task = this.store.getTask(taskId)
+    const task = this.store.getTask(this.missionId, taskId)
     if (task === undefined) throw new NotFoundError('task', taskId)
     if (task.mission_id !== this.missionId) throw new PodError('task not in this mission', 'MISSION_MISMATCH', { id: taskId })
     if (task.status === 'done') {
@@ -959,7 +1330,7 @@ export class MissionOrchestrator {
         verify: ['commit_exists', 'report_fields_complete'],
       },
     })
-    this.store.updateTask(taskId, {
+    this.store.updateTask(this.missionId, taskId, {
       owner_slot_id: to.id,
       status: 'ready',
       fault: undefined,
@@ -972,18 +1343,23 @@ export class MissionOrchestrator {
       mission_id: this.missionId,
       ts: this.clock(),
       kind: 'task_reassigned',
-      task_id: taskId,
+      task_id: task.id,
       slot_id: to.id,
       payload: { from: from?.id ?? null, to: to.id, reason, handoff_id: handoff.id },
     })
+    // 注意：此处不立即重驱——换人是人工动作，调用方常在重派前后做断言/补充操作；
+    // 且 dispatchTask 的 routeTask 不认 owner 偏好，立刻重派会无视换人指定重新路由。
+    // 停摆兜底由 maintenanceTick 补偿（mission running + ready 任务 → 自动重驱，≤30s）。
     return handoff
   }
 
   /** 由 done 实现任务汇总审批 patch（合并执行属 W5 apply_patch；此处仅生成待批卡）。 */
   buildApprovalRequest(): ApprovalRequest {
+    // 合并单元 = 有 commit 的产物任务：plan（无 commit）/纯叙事产物不构成合并对象
+    // （实证：planner 会话里 P-1 被误选为 primary，base/head 缺失 → 审批页无 diff 可审）
     const implementTasks = this.store
       .listTasks(this.missionId)
-      .filter((t) => t.type !== 'review' && t.status === 'done')
+      .filter((t) => t.type !== 'review' && t.status === 'done' && t.commit_sha !== undefined)
     if (implementTasks.length === 0) {
       throw new PodError('no implement tasks to approve', 'NO_PATCH', { mission: this.missionId })
     }
@@ -1002,8 +1378,18 @@ export class MissionOrchestrator {
     const tasks = this.store.listTasks(this.missionId)
     const done = tasks.filter((t) => t.status === 'done').map((t) => t.id)
     const escalated = tasks.filter((t) => t.status === 'escalated').map((t) => t.id)
-    if (this.stopRequested && this.requireMission().status === 'paused') {
-      return { status: 'budget_exceeded', doneTasks: done, escalatedTasks: escalated, pendingApprovals: [] }
+    const mission = this.requireMission()
+    // 中止/暂停的如实上报：此前 abort 后掉进 needs_human（guard 抛错被吞），语义误导（审计 M5）
+    if (mission.status === 'aborted') {
+      return { status: 'aborted', doneTasks: done, escalatedTasks: escalated, pendingApprovals: [] }
+    }
+    if (mission.status === 'paused') {
+      return {
+        status: this.stopReason === 'budget' ? 'budget_exceeded' : 'paused',
+        doneTasks: done,
+        escalatedTasks: escalated,
+        pendingApprovals: [],
+      }
     }
     if (escalated.length > 0) {
       return { status: 'needs_human', doneTasks: done, escalatedTasks: escalated, pendingApprovals: [] }

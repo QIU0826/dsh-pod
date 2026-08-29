@@ -16,14 +16,29 @@
  */
 
 import { createServer } from 'node:http'
+import { timingSafeEqual } from 'node:crypto'
 import { createPodRuntime } from '../dist/plugin.js'
 import { PodService } from '../dist/pod-service.js'
 import { parseInstruction, handleChannelCommand, sanitizeOutboundSignal } from '../dist/core/channel.js'
 
+const MAX_CHANNEL_BODY_BYTES = 64 * 1024
+
+class BodyTooLargeError extends Error {}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = []
-    req.on('data', (c) => chunks.push(c))
+    let total = 0
+    req.on('data', (c) => {
+      total += c.length
+      if (total > MAX_CHANNEL_BODY_BYTES) {
+        // 立即拒绝但不 destroy：后续 data 继续丢弃消费，不回压死客户端
+        chunks.length = 0
+        reject(new BodyTooLargeError('body exceeds 64KB limit'))
+        return
+      }
+      chunks.push(c)
+    })
     req.on('end', () => {
       try {
         const raw = Buffer.concat(chunks).toString('utf8')
@@ -32,6 +47,22 @@ function readBody(req) {
     })
     req.on('error', reject)
   })
+}
+
+/** 恒时 Bearer 比较（与 src/core/http-guard.ts 同款；脚本侧自包含，避免 build 顺序耦合）。 */
+function tokenEquals(expected, actual) {
+  const a = Buffer.from('Bearer ' + expected, 'utf8')
+  const b = Buffer.from(actual, 'utf8')
+  return a.length === b.length && timingSafeEqual(a, b)
+}
+
+/** loopback 无 token 模式的浏览器侧防线：Host 白名单堵 DNS rebinding，Origin 堵跨站写。 */
+function isLocalHostHeader(req) {
+  const host = (req.headers.host ?? '').trim().toLowerCase()
+  if (host.length === 0) return false
+  const stripped = host.startsWith('[') ? host.slice(0, host.indexOf(']') + 1 || undefined) : host.slice(0, host.lastIndexOf(':') > 0 ? host.lastIndexOf(':') : undefined)
+  const hostname = stripped.length > 0 ? stripped : host
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]'
 }
 
 async function main() {
@@ -87,21 +118,39 @@ async function main() {
     }
     if (token.length > 0) {
       const auth = (req.headers.authorization ?? '').trim()
-      if (auth !== 'Bearer ' + token) {
+      if (!tokenEquals(token, auth)) {
         res.writeHead(401, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ error: 'unauthorized' }))
         return
       }
+    } else if (!isLocalHostHeader(req)) {
+      // P1：无 token（loopback 信任模式）叠加 Host 白名单，堵 DNS rebinding
+      res.writeHead(403, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'forbidden: non-local Host header (DNS rebinding guard)' }))
+      return
     }
     let body
-    try { body = await readBody(req) } catch {
-      res.writeHead(400, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ error: 'invalid json' }))
+    try {
+      body = await readBody(req)
+    } catch (error) {
+      const tooLarge = error instanceof BodyTooLargeError
+      res.writeHead(tooLarge ? 413 : 400, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: tooLarge ? 'body too large (64KB limit)' : 'invalid json' }))
       return
     }
     const text = typeof body.text === 'string' ? body.text : ''
     const cmd = parseInstruction(text)
-    const reply = await handleChannelCommand(target, cmd)
+    // 无 active mission 时 pause/deny/steer 等经 requireOrchestrator 抛错——
+    // async handler 的 rejection 无人接 = unhandledRejection 直接打崩进程（Node 22 默认退出）
+    let reply
+    try {
+      reply = await handleChannelCommand(target, cmd)
+    } catch (error) {
+      console.error('[dsh-pod-channel] command failed:', error)
+      res.writeHead(500, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ ok: false, error: 'command failed', detail: error instanceof Error ? error.message : String(error) }))
+      return
+    }
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ ...reply, outbound: sanitizeOutboundSignal({ kind: 'channel_reply' }) }))
   })

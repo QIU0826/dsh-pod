@@ -85,7 +85,7 @@ export function buildHandoff(store: PodStore, draft: HandoffDraft, options: Hand
   if (from === undefined) throw new NotFoundError('slot', draft.from_slot)
   const to = store.getSlot(draft.to_slot)
   if (to === undefined) throw new NotFoundError('slot', draft.to_slot)
-  const task = store.getTask(draft.task_id)
+  const task = store.getTask(from.mission_id, draft.task_id)
   if (task === undefined) throw new NotFoundError('task', draft.task_id)
   if (task.mission_id !== from.mission_id || task.mission_id !== to.mission_id) {
     throw new HandoffValidationError([{ check: 'mission_scope', detail: 'slots and task must share one mission' }])

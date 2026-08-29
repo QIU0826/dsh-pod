@@ -47,6 +47,9 @@ export function parseStandaloneArgs(argv: string[]): StandaloneCliArgs {
       case '--opencode-bin':
         out.opencodeBin = value()
         break
+      case '--demo':
+        out.demo = true
+        break
       default:
         throw new Error(`cli: 未知参数 ${flag}`)
     }
@@ -64,6 +67,7 @@ export function printUsage(): string {
     '  --data-dir <dir>    数据根（默认 ~/.dsh/pod，与 DSH 插件形态共用磁盘事实源）',
     '  --token <t>         Bearer token（非 loopback 监听时必填）',
     '  --opencode-bin <p>  opencode 可执行文件路径（缺省走候选探测）',
+    '  --demo              演示模式：脚本化后端（零 LLM 成本，真实 git/问答/审批链路）',
     '  -h, --help          显示本帮助',
   ].join('\n')
 }
@@ -82,7 +86,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   }
   const s = await listenStandalone(args)
   const display = s.host === '0.0.0.0' || s.host === '::' ? '127.0.0.1' : s.host
-  console.log(`[dsh-pod] standalone console: http://${display}:${s.port}  (data: ${s.runtime.dataDir})`)
+  console.log(`[dsh-pod] standalone console: http://${display}:${s.port}  (data: ${s.runtime.dataDir}${args.demo === true ? ' · demo 模式' : ''})`)
   const shutdown = (): void => {
     s.close()
       .then(() => process.exit(0))

@@ -20,6 +20,14 @@ async function main() {
   const token = (process.env.POD_SATELLITE_TOKEN ?? '').trim()
   const backendName = (process.env.POD_SATELLITE_BACKEND ?? 'stub').trim()
 
+  // fail-closed（P1，与 mcp-http-server.mjs/channel-http-server.mjs 同款 CR-29 纪律）：
+  // 非 loopback 监听必须配共享密钥——/start 的 task spec 完全客户端可控，零鉴权暴露即任意指令执行面
+  const isLoopback = host === '127.0.0.1' || host === 'localhost' || host === '::1'
+  if (!isLoopback && token.length === 0) {
+    console.error('[dsh-satellite] refusing to bind non-loopback host without POD_SATELLITE_TOKEN (external entry must be explicitly enabled)')
+    process.exit(1)
+  }
+
   let backend
   if (backendName === 'stub') {
     backend = new StubBackend('dsh')

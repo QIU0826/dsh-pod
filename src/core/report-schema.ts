@@ -39,6 +39,20 @@ export const MissionReportSchema = z.object({
       tokens_out: NON_NEG_INT,
     })
     .optional(),
+  // 仅 plan 任务（P1 规划层）：任务分解 DAG 提案；形状与 types.ts MissionReport.plan 同源，
+  // 落盘前经 planner.ts validatePlanProposal 代码裁决（LLM 提议、代码裁决不变量）
+  plan: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        title: z.string().min(1),
+        spec: z.string().min(1),
+        type: z.enum(['implement', 'review', 'test', 'doc', 'research']),
+        skill_tags: z.array(z.string()).optional(),
+        depends_on: z.array(z.string()).optional(),
+      }),
+    )
+    .optional(),
 })
 
 /** 类型 = schema 推断（单一事实源，types.ts 不重复定义）。 */
@@ -76,6 +90,7 @@ const FIELD_ORDER: Array<keyof MissionReport> = [
   'blockers',
   'questions',
   'usage',
+  'plan',
 ]
 
 /**
@@ -133,5 +148,7 @@ function fieldHint(key: keyof MissionReport): string {
       return '[]'
     case 'usage':
       return '{ "tokens_in": 0, "tokens_out": 0 }'
+    case 'plan':
+      return '[{"id":"T-1","title":"…","spec":"…","type":"implement","skill_tags":["编码"],"depends_on":[]}]（仅 plan 任务：任务分解 DAG，其余任务省略此字段）'
   }
 }

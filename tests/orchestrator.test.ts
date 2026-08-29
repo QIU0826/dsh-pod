@@ -203,7 +203,7 @@ afterEach(() => {
 
 function makeOrchestrator(
   fixture: Fixture,
-  script: Record<string, { progress?: WorkerProgressEvent[]; completion?: WorkerCompletion; hang?: boolean; delayMs?: number }>,
+  script: Record<string, { progress?: WorkerProgressEvent[]; completion?: WorkerCompletion; next?: WorkerCompletion; hang?: boolean; delayMs?: number }>,
   missionId = 'M-1',
 ) {
   const backends: Record<string, FakeBackend> = {
@@ -944,3 +944,242 @@ describe('DoD-19 result_summary（非写码任务 report 摘要落盘 + review �
   })
 })
 
+
+describe('P0 修复：驱动循环可靠性与重启恢复', () => {
+  async function until(cond: () => boolean, ms = 3000): Promise<void> {
+    const start = Date.now()
+    while (!cond()) {
+      if (Date.now() - start > ms) throw new Error('condition timeout')
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+  }
+  const doneC = (id: string): WorkerCompletion => ({
+    exit: 'done',
+    report: doneReport(id),
+    usage: { tokens_in: 10, tokens_out: 5, source: 'measured' },
+    artifacts: [],
+  })
+  const rateLimited = (): WorkerCompletion => ({
+    exit: 'rate_limited',
+    usage: { tokens_in: 1, tokens_out: 1, source: 'measured' },
+    artifacts: [],
+  })
+
+  it('pause 停止派发并如实上报 paused；resume 自动重驱（此前 resume 后永久停摆）', async () => {
+    const orch = makeOrchestrator(fixture, { 'T-1': { delayMs: 20, completion: doneC('T-1') } })
+    orch.launch(launchInput({ cwd: fixture.repo }))
+    orch.createTasks([
+      { id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'] },
+      { id: 'T-2', title: '审查', spec: 'r', type: 'review', skill_tags: ['审查'], depends_on: ['T-1'] },
+    ])
+    const runPromise = orch.run()
+    await until(() => fixture.backends.claude!.started.length === 1)
+    orch.pause()
+    expect(fixture.store.getMission('M-1')!.status).toBe('paused')
+    const summary = await runPromise
+    expect(summary.status).toBe('paused')
+    // 暂停期间不再派新任务（T-2 依赖 T-1，此处验证无派发行为）
+    const dispatchedDuringPause = fixture.backends.codex!.started.length
+    expect(dispatchedDuringPause).toBe(0)
+    // resume → 不显式调 run()，自动重驱，链条走完进审批
+    orch.resume()
+    expect(orch.driveActive()).toBe(true)
+    await until(() => fixture.store.getMission('M-1')!.status === 'awaiting_approval')
+    expect(fixture.store.getTask('T-1')!.status).toBe('done')
+    expect(fixture.store.getTask('T-2')!.status).toBe('done')
+  })
+
+  it('maintenanceTick 停摆补偿：退避到期的 blocked 任务自动重派（此前无人重驱）', async () => {
+    const orch = makeOrchestrator(fixture, { 'T-1': { completion: rateLimited(), next: doneC('T-1') } })
+    orch.launch(launchInput({ cwd: fixture.repo }))
+    orch.createTasks([{ id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'] }])
+    const s1 = await orch.run()
+    expect(s1.status).toBe('waiting_backoff')
+    expect(fixture.store.getTask('T-1')!.status).toBe('blocked')
+    expect(orch.driveActive()).toBe(false)
+    // 退避到期（首次 rate_limited 退避 ≤ 2×BASE=10s，推进 60s 足够）
+    fixture.clockNow += 60_000
+    orch.maintenanceTick()
+    await until(() => fixture.store.getTask('T-1')!.status === 'done')
+    expect(fixture.backends.claude!.started.length).toBe(2) // 重试派发发生
+  })
+
+  it('abortMission：树杀在途 worker + summary 如实上报 aborted（此前不杀进程且伪装 needs_human）', async () => {
+    const orch = makeOrchestrator(fixture, { 'T-1': { hang: true } })
+    orch.launch(launchInput({ cwd: fixture.repo }))
+    orch.createTasks([{ id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'] }])
+    const runPromise = orch.run()
+    await until(() => fixture.backends.claude!.started.length === 1)
+    orch.abortMission('测试中止')
+    await until(() => fixture.backends.claude!.kills.length === 1)
+    expect(fixture.store.getMission('M-1')!.status).toBe('aborted')
+    const summary = await runPromise
+    expect(summary.status).toBe('aborted')
+  })
+
+  it('run() 重入守卫：驱动在途时并发调用返回同一 promise（防双循环抢派）', async () => {
+    const orch = makeOrchestrator(fixture, { 'T-1': { hang: true } })
+    orch.launch(launchInput({ cwd: fixture.repo }))
+    orch.createTasks([{ id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'] }])
+    const p1 = orch.run()
+    const p2 = orch.run()
+    expect(p2).toBe(p1)
+    orch.abortMission('收尾')
+    await p1
+  })
+
+  it('recoverFromRestart：孤儿 dispatched 任务按 crash 故障化（此前重启后永久卡死）', async () => {
+    const orch1 = makeOrchestrator(fixture, { 'T-1': { hang: true } })
+    orch1.launch(launchInput({ cwd: fixture.repo }))
+    orch1.createTasks([{ id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'] }])
+    // 模拟宿主重启前的在途状态：任务已派发，worker 进程随宿主死亡
+    await orch1.dispatchNext()
+    // dispatchTask 内 dispatch→start 连续迁移，孤儿态是 running（dispatched 为瞬态，两者恢复逻辑同 path）
+    expect(['dispatched', 'running']).toContain(fixture.store.getTask('T-1')!.status)
+    // 模拟重启：同 store 上的新编排器实例做恢复
+    const orch2 = makeOrchestrator(fixture, {})
+    const recovery = orch2.recoverFromRestart()
+    expect(recovery.orphanedTasks).toEqual(['T-1'])
+    const task = fixture.store.getTask('T-1')!
+    expect(task.status).toBe('blocked')
+    expect(task.fault).toBe('crash')
+    expect(fixture.store.listEvents('M-1').some((e) => e.kind === 'mission_recovered')).toBe(true)
+  })
+})
+
+describe('P1 id 白名单（防 worktree 路径逃逸与 argv 注入）', () => {
+  it('slot id 含路径分隔符/.. → launch 拒绝（INVALID_ID）', () => {
+    const orch = makeOrchestrator(fixture, {})
+    for (const id of ['../evil', 'a/b', 'a\\b', 'a b', '.hidden']) {
+      expect(() =>
+        orch.launch(launchInput({ cwd: fixture.repo, slots: [{ id, vendor: 'claude', role: 'implementer', capabilities: ['编码'], model: 'm', session_tier: 'per-mission' }] })),
+      ).toThrow(/slot id rejected/)
+    }
+  })
+  it('task id 含路径分隔符 → createTasks 拒绝', () => {
+    const orch = makeOrchestrator(fixture, {})
+    orch.launch(launchInput({ cwd: fixture.repo }))
+    expect(() =>
+      orch.createTasks([{ id: 'T-1/../../evil', title: 'x', spec: 's', type: 'implement', skill_tags: ['编码'] }]),
+    ).toThrow(/task id rejected/)
+  })
+})
+
+describe('P1 规划层（goal → DAG 智能分解，AgentScope DAGPlanExecutor 借鉴）', () => {
+  const plannerRoster = [
+    { id: 'S-P', vendor: 'claude' as const, role: 'planner', capabilities: ['规划'], model: 'm', session_tier: 'per-mission' as const },
+    { id: 'S-1', vendor: 'claude' as const, role: 'implementer', capabilities: ['编码'], model: 'm', session_tier: 'per-mission' as const },
+    { id: 'S-2', vendor: 'codex' as const, role: 'reviewer', capabilities: ['审查'], model: '', session_tier: 'transient' as const },
+  ]
+  const validPlan = [
+    { id: 'T-1', title: '实现', spec: 's', type: 'implement' as const, skill_tags: ['编码'], depends_on: [] },
+    { id: 'T-2', title: '独立 review', spec: 'r', type: 'review' as const, skill_tags: ['审查'], depends_on: ['T-1'] },
+  ]
+  const planDone = (taskId: string, plan: typeof validPlan | undefined): WorkerCompletion => ({
+    exit: 'done',
+    report: doneReport(taskId, { task_type: 'plan', ...(plan !== undefined ? { plan } : {}) }),
+    usage: { tokens_in: 10, tokens_out: 5, source: 'measured' },
+    artifacts: [],
+  })
+
+  it('planner 槽位检测 + createPlannerTask：P-1 type=plan、skill_tags=[规划]', () => {
+    const orch = makeOrchestrator(fixture, {})
+    orch.launch(launchInput({ cwd: fixture.repo, slots: plannerRoster }))
+    expect(orch.hasPlannerCapability()).toBe(true)
+    const task = orch.createPlannerTask('给仓库加登录')
+    expect(task.id).toBe('P-1')
+    expect(task.type).toBe('plan')
+    expect(task.skill_tags).toEqual(['规划'])
+    expect(task.spec).toContain('给仓库加登录')
+    expect(task.spec).toContain('S-P（planner）：规划')
+    expect(fixture.store.listEvents('M-1').some((e) => e.kind === 'plan_delegation')).toBe(true)
+  })
+
+  it('规划任务完成 + 提案通过裁决 → expand 为任务 DAG 并走完质量门', async () => {
+    const orch = makeOrchestrator(fixture, { 'P-1': { completion: planDone('P-1', validPlan) } })
+    orch.launch(launchInput({ cwd: fixture.repo, slots: plannerRoster }))
+    orch.createPlannerTask('目标')
+    const summary = await orch.run()
+    // P-1 → 提案落盘 T-1/T-2 → 实现+审查完成 → 进审批
+    expect(fixture.store.getTask('P-1')!.status).toBe('done')
+    expect(fixture.store.getTask('T-1')!.status).toBe('done')
+    expect(fixture.store.getTask('T-2')!.status).toBe('done')
+    expect(summary.status).toBe('awaiting_approval')
+    expect(fixture.store.listEvents('M-1').some((e) => e.kind === 'plan_expanded')).toBe(true)
+    // 回归（审批 diff 实证）：plan 任务（无 commit）不得成为合并单元——primary 必须
+    // 是带 commit 的实现任务，否则审批卡 base/head 缺失、详情页无 diff 可审
+    const pending = fixture.store.listApprovals('M-1').find((a) => a.status === 'pending')
+    expect(pending).toBeDefined()
+    expect(pending!.patch.base_commit).toBeDefined()
+    expect(pending!.patch.head_commit).toBeDefined()
+  })
+
+  it('提案缺失/非法 → silent_failure 走重试，绝不落盘脏任务图', async () => {
+    // 首次完成无 plan；重试（默认完成）也无 plan → attempts 用尽转人工
+    const orch = makeOrchestrator(fixture, { 'P-1': { completion: planDone('P-1', undefined) } })
+    orch.launch(launchInput({ cwd: fixture.repo, slots: plannerRoster }))
+    orch.createPlannerTask('目标')
+    const summary = await orch.run()
+    expect(summary.status).toBe('needs_human')
+    expect(fixture.store.getTask('P-1')!.status).toBe('escalated')
+    // 展开从未发生：任务图里只有规划任务自身
+    expect(fixture.store.listTasks('M-1').map((t) => t.id)).toEqual(['P-1'])
+    expect(fixture.store.listEvents('M-1').some((e) => e.kind === 'plan_rejected')).toBe(true)
+    // 规划任务自身失败不触发自动重规划
+    expect(orch.replanRemaining()).toBe(2)
+  })
+
+  it('自动重规划：实现任务转人工 → 带 failure 上下文的 P 任务；REPLAN_LIMIT 有界', async () => {
+    // T-1 能力无人覆盖 → 派发即 escalate → 自动 requestReplan 生成 P-1；
+    // P-1 完成仍无 plan → 重试耗尽 escalate（规划任务不再触发重规划）
+    const orch = makeOrchestrator(fixture, { 'P-1': { completion: planDone('P-1', undefined) } })
+    orch.launch(launchInput({ cwd: fixture.repo, slots: [plannerRoster[0]!, plannerRoster[1]!] }))
+    orch.createTasks([{ id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['运维'] }])
+    const summary = await orch.run()
+    expect(summary.status).toBe('needs_human')
+    const planTasks = fixture.store.listTasks('M-1').filter((t) => t.type === 'plan')
+    expect(planTasks.length).toBe(1) // T-1 escalate 触发一次；P-1 自身 escalate 不再触发
+    expect(planTasks[0]!.id).toBe('P-1')
+    expect(fixture.store.listEvents('M-1').some((e) => e.kind === 'plan_replan_requested')).toBe(true)
+    expect(orch.replanRemaining()).toBe(1)
+  })
+
+  it('requestReplan 三重门：无 planner 拒绝 / 超限拒绝 / 预算不足跳过', () => {
+    const orch = makeOrchestrator(fixture, {})
+    orch.launch(launchInput({ cwd: fixture.repo })) // 无 planner 槽位（默认名册：编码+审查）
+    expect(orch.requestReplan('x').requested).toBe(false)
+    orch.abortMission('测试收尾') // 单 active mission：先终止再启下一个
+    // 超限：直接消耗完额度
+    const orch3 = makeOrchestrator(fixture, {}, 'M-3')
+    orch3.launch(launchInput({ cwd: fixture.repo, slots: plannerRoster, budgetUsd: 100 }))
+    expect(orch3.requestReplan('r1').requested).toBe(true)
+    expect(orch3.requestReplan('r2').requested).toBe(true)
+    expect(orch3.requestReplan('r3').requested).toBe(false) // REPLAN_LIMIT=2
+    orch3.abortMission('测试收尾')
+    // 预算门控：花光预算后拒绝
+    const orch4 = makeOrchestrator(fixture, {}, 'M-4')
+    orch4.launch(launchInput({ cwd: fixture.repo, slots: plannerRoster, budgetUsd: 0.001 }))
+    const r = orch4.requestReplan('r')
+    expect(r.requested).toBe(false)
+    expect(fixture.store.listEvents('M-4').some((e) => e.kind === 'plan_replan_skipped')).toBe(true)
+  })
+})
+
+describe('P2 对话式问题通道（task_question 事件）', () => {
+  it('报告带 questions → task_question 事件落盘（前端弹选项卡的数据源）', async () => {
+    const orch = makeOrchestrator(fixture, {
+      'T-1': { completion: { exit: 'done', report: doneReport('T-1', { status: 'need_clarify', questions: ['用 SQLite 还是 LevelDB？'] }), usage: { tokens_in: 5, tokens_out: 5, source: 'measured' }, artifacts: [] }, next: { exit: 'done', report: doneReport('T-2'), usage: { tokens_in: 5, tokens_out: 5, source: 'measured' }, artifacts: [] } },
+    })
+    orch.launch(launchInput({ cwd: fixture.repo }))
+    orch.createTasks([
+      { id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'] },
+      { id: 'T-2', title: '独立 review', spec: 'r', type: 'review', skill_tags: ['审查'], depends_on: ['T-1'] },
+    ])
+    const summary = await orch.run()
+    const q = fixture.store.listEvents('M-1').filter((e) => e.kind === 'task_question')
+    expect(q.length).toBeGreaterThanOrEqual(1)
+    expect((q[0]!.payload as { questions: string[] }).questions).toContain('用 SQLite 还是 LevelDB？')
+    expect(q[0]!.task_id).toBe('T-1')
+    void summary
+  })
+})

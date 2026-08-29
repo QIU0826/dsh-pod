@@ -15,7 +15,10 @@ import { lstatSync, realpathSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { PodService } from './pod-service.js'
 import { resolveAsset, contentTypeFor } from './core/asset-whitelist.js'
+import { allowsJsonBody } from './core/http-guard.js'
+import { browseDirectories } from './core/fs-browse.js'
 import type { PlanTaskInput } from './core/orchestrator.js'
+import { AGENT_AVATARS, UNLIMITED_BUDGET_USD } from './core/types.js'
 import type { TaskType, Vendor } from './core/types.js'
 
 /** SSE 帧格式化（AgentScope-I / EV-2：replay 优先 + live 增量；测试可断言纯函数）。 */
@@ -41,6 +44,9 @@ function writeJson(res: ServerResponse, status: number, body: unknown): void {
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown> | undefined> {
+  // P1 CSRF 修复：带 body 的请求强制 application/json——text/plain / form-encoded 属
+  // CORS simple request，恶意网页可无预检跨站 POST（副作用照常生效）
+  if (!allowsJsonBody(req)) return undefined
   let raw = ''
   for await (const chunk of req) {
     raw += chunk.toString('utf8')
@@ -66,13 +72,14 @@ export interface LaunchRouteBody {
   budget_tokens?: unknown
 }
 
-export function validateLaunch(body: LaunchRouteBody): { ok: true; value: { name: string; goal: string; cwd: string; budgetUsd: number; budgetTokens?: number; slots: Array<{ id: string; vendor: Vendor; role: string; capabilities: string[]; model?: string }>; plan?: unknown } } | { ok: false; error: string } {  if (typeof body.name !== 'string' || body.name.length === 0) return { ok: false, error: 'name is required' }
+
+export function validateLaunch(body: LaunchRouteBody): { ok: true; value: { name: string; goal: string; cwd: string; budgetUsd: number; budgetTokens?: number; slots: Array<{ id: string; vendor: Vendor; role: string; capabilities: string[]; model?: string; avatar?: string }>; plan?: unknown } } | { ok: false; error: string } {  if (typeof body.name !== 'string' || body.name.length === 0) return { ok: false, error: 'name is required' }
   if (typeof body.goal !== 'string' || body.goal.length === 0) return { ok: false, error: 'goal is required' }
   if (typeof body.cwd !== 'string' || body.cwd.length === 0) return { ok: false, error: 'cwd is required' }
   if (!Array.isArray(body.slots) || body.slots.length === 0) return { ok: false, error: 'slots must be a non-empty array' }
-  const slots: Array<{ id: string; vendor: Vendor; role: string; capabilities: string[]; model?: string }> = []
+  const slots: Array<{ id: string; vendor: Vendor; role: string; capabilities: string[]; model?: string; avatar?: string }> = []
   for (const raw of body.slots) {
-    const slot = raw as { id?: unknown; vendor?: unknown; role?: unknown; capabilities?: unknown; model?: unknown }
+    const slot = raw as { id?: unknown; vendor?: unknown; role?: unknown; capabilities?: unknown; model?: unknown; avatar?: unknown }
     if (typeof slot.id !== 'string' || typeof slot.vendor !== 'string' || typeof slot.role !== 'string') {
       return { ok: false, error: 'each slot needs id/vendor/role' }
     }
@@ -83,9 +90,14 @@ export function validateLaunch(body: LaunchRouteBody): { ok: true; value: { name
       role: slot.role,
       capabilities: Array.isArray(slot.capabilities) ? (slot.capabilities as string[]) : [],
       model: typeof slot.model === 'string' ? slot.model : undefined,
+      avatar: typeof slot.avatar === 'string' && (AGENT_AVATARS as readonly string[]).includes(slot.avatar) ? slot.avatar : undefined,
     })
   }
-  const budgetUsd = typeof body.budget_usd === 'number' && body.budget_usd > 0 ? body.budget_usd : 3
+  // 预算（P2 token 主计价）：缺省 $3 安全兜底；显式 0/负数 = 不限（事实无限）；
+  // token 上限可选——设了则以 token 熔断为主闸
+  const budgetUsd = typeof body.budget_usd === 'number' && body.budget_usd > 0 ? body.budget_usd
+    : typeof body.budget_usd === 'number' ? UNLIMITED_BUDGET_USD
+    : 3
   const budgetTokens = typeof body.budget_tokens === 'number' && body.budget_tokens > 0 ? body.budget_tokens : undefined
   return { ok: true, value: { name: body.name, goal: body.goal, cwd: body.cwd, budgetUsd, budgetTokens, slots, plan: body.plan } }
 }
@@ -115,6 +127,7 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
                 spent_tokens: snapshot.mission.spent_tokens,
                 spent_equiv_usd: Number(snapshot.mission.spent_equiv_usd.toFixed(4)),
                 budget_usd: snapshot.mission.budget_usd,
+                budget_tokens: snapshot.mission.budget_tokens ?? null,
               }
             : null,
           tasks: snapshot.tasks.map((t) => ({
@@ -134,6 +147,7 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
             vendor: s.vendor,
             status: s.status,
             ctx_usage_pct: s.ctx_usage_pct,
+            avatar: s.avatar ?? null,
           })),
           pending_approvals: snapshot.pendingApprovals.map((a) => ({
             id: a.id,
@@ -272,6 +286,29 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
       },
     },
     {
+      // 设置页「选择仓库目录」的数据源（P2 点选化）：只列目录名，只读，loopback-only。
+      // 不依赖 mission runtime（无 mission 也要能先选路径）。
+      kind: 'exact',
+      path: '/api/dsh-pod/fs/browse',
+      handler: async (req, res) => {
+        if (!isLoopback(req)) {
+          writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        if (req.method !== 'GET') {
+          writeJson(res, 405, { error: 'method not allowed' })
+          return
+        }
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const raw = url.searchParams.get('path') ?? ''
+        try {
+          writeJson(res, 200, browseDirectories(raw))
+        } catch (error) {
+          writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
       kind: 'exact',
       path: '/api/dsh-pod/launch',
       handler: async (req, res) => {
@@ -301,6 +338,7 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
           })
           writeJson(res, 200, { mission_id: mission.id, status: mission.status })
         } catch (error) {
+          console.error('[dsh-pod] route handler failed:', error)
           writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
         }
       },
@@ -329,6 +367,7 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
           current.steer(slotId, instruction)
           writeJson(res, 200, { ok: true })
         } catch (error) {
+          console.error('[dsh-pod] route handler failed:', error)
           writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
         }
       },
@@ -400,8 +439,160 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
           current.deny(approvalId, 'canvas-ui', reason)
           writeJson(res, 200, { ok: true })
         } catch (error) {
+          console.error('[dsh-pod] route handler failed:', error)
           writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
         }
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/api/dsh-pod/plan',
+      handler: async (req, res) => {
+        if (!isLoopback(req)) {
+          writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        const current = service()
+        if (current === undefined) {
+          writeJson(res, 503, { error: 'pod runtime not initialized' })
+          return
+        }
+        if (req.method !== 'POST') {
+          writeJson(res, 405, { error: 'method not allowed' })
+          return
+        }
+        const body = await readJsonBody(req)
+        const action = body?.action
+        if (typeof action !== 'string') {
+          writeJson(res, 422, { error: 'action is required (list | add | replan)' })
+          return
+        }
+        try {
+          if (action === 'list') {
+            const st = current.status()
+            writeJson(res, 200, {
+              mission_status: st.mission?.status ?? null,
+              planner: current.hasPlannerCapability(),
+              replan_remaining: current.replanRemaining(),
+              tasks: st.tasks.map((t) => ({ id: t.id, title: t.title, type: t.type, status: t.status, depends_on: t.depends_on })),
+            })
+            return
+          }
+          if (action === 'add') {
+            const raw = body?.tasks
+            if (!Array.isArray(raw) || raw.length === 0) {
+              writeJson(res, 422, { error: 'tasks must be a non-empty array' })
+              return
+            }
+            const tasks: PlanTaskInput[] = []
+            for (const item of raw as Array<Record<string, unknown>>) {
+              const t = item as { id?: unknown; title?: unknown; spec?: unknown; type?: unknown; skill_tags?: unknown; depends_on?: unknown }
+              if (typeof t.id !== 'string' || typeof t.title !== 'string' || typeof t.spec !== 'string' || typeof t.type !== 'string') {
+                writeJson(res, 422, { error: 'each task needs id/title/spec/type' })
+                return
+              }
+              if (!['implement', 'review', 'test', 'doc', 'research'].includes(t.type)) {
+                writeJson(res, 422, { error: `unknown task type: ${t.type}` })
+                return
+              }
+              tasks.push({
+                id: t.id, title: t.title, spec: t.spec,
+                type: t.type as PlanTaskInput['type'],
+                skill_tags: Array.isArray(t.skill_tags) ? (t.skill_tags as string[]) : [],
+                depends_on: Array.isArray(t.depends_on) ? (t.depends_on as string[]) : [],
+              })
+            }
+            const created = current.addPlanTasks(tasks)
+            writeJson(res, 200, { added: created.map((t) => t.id) })
+            return
+          }
+          if (action === 'replan') {
+            const reason = typeof body?.reason === 'string' ? (body?.reason as string) : 'replan via http'
+            writeJson(res, 200, current.requestReplan(reason))
+            return
+          }
+          writeJson(res, 422, { error: `unknown action: ${action}` })
+        } catch (error) {
+          console.error('[dsh-pod] route handler failed:', error)
+          writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
+      // 会话中心（P2）：mission 历史 = 会话列表；active/归档同构（store 唯一事实源）。
+      kind: 'exact',
+      path: '/api/dsh-pod/missions',
+      handler: async (req, res) => {
+        if (!isLoopback(req)) {
+          writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        const current = service()
+        if (current === undefined) {
+          writeJson(res, 503, { error: 'pod runtime not initialized' })
+          return
+        }
+        if (req.method !== 'GET') {
+          writeJson(res, 405, { error: 'method not allowed' })
+          return
+        }
+        writeJson(res, 200, { missions: current.missionSummaries() })
+      },
+    },
+    {
+      // 历史会话回看：任意 mission 的归档快照（对话流/任务/槽位/审批/账本）。
+      kind: 'exact',
+      path: '/api/dsh-pod/missions/detail',
+      handler: async (req, res) => {
+        if (!isLoopback(req)) {
+          writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        const current = service()
+        if (current === undefined) {
+          writeJson(res, 503, { error: 'pod runtime not initialized' })
+          return
+        }
+        if (req.method !== 'GET') {
+          writeJson(res, 405, { error: 'method not allowed' })
+          return
+        }
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const id = url.searchParams.get('id') ?? ''
+        const archive = id.length > 0 ? current.missionArchive(id) : undefined
+        if (archive === undefined) {
+          writeJson(res, 404, { error: `mission not found: ${id}` })
+          return
+        }
+        writeJson(res, 200, archive)
+      },
+    },
+    {
+      // 合并审批详情：完整审批记录 + 可读 diff（白名单根内）。
+      kind: 'exact',
+      path: '/api/dsh-pod/approvals/detail',
+      handler: async (req, res) => {
+        if (!isLoopback(req)) {
+          writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        const current = service()
+        if (current === undefined) {
+          writeJson(res, 503, { error: 'pod runtime not initialized' })
+          return
+        }
+        if (req.method !== 'GET') {
+          writeJson(res, 405, { error: 'method not allowed' })
+          return
+        }
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const id = url.searchParams.get('id') ?? ''
+        const detail = id.length > 0 ? current.approvalDetail(id) : undefined
+        if (detail === undefined) {
+          writeJson(res, 404, { error: `approval not found: ${id}` })
+          return
+        }
+        writeJson(res, 200, detail)
       },
     },
     {
@@ -422,6 +613,7 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
           const dispatched = await current.dispatchNext()
           writeJson(res, 200, { dispatched })
         } catch (error) {
+          console.error('[dsh-pod] route handler failed:', error)
           writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
         }
       },
@@ -456,6 +648,7 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
           })
           writeJson(res, 200, { ok: true, run_status: summary.status })
         } catch (error) {
+          console.error('[dsh-pod] route handler failed:', error)
           writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
         }
       },
@@ -494,6 +687,7 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
           })
           writeJson(res, 201, { ok: true, rule })
         } catch (error) {
+          console.error('[dsh-pod] route handler failed:', error)
           writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
         }
       },
@@ -517,6 +711,7 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
           current.abort(reason)
           writeJson(res, 200, { ok: true })
         } catch (error) {
+          console.error('[dsh-pod] route handler failed:', error)
           writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
         }
       },

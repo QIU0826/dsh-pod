@@ -192,3 +192,12 @@ describe('OpenCodeHeadlessBackend（FakeSpawner 集成，回放真机事件流�
     await expect(backend.kill({})).resolves.toBeUndefined()
   })
 })
+
+describe('buildOpenCodeArgs 注入面收口（P1 统一 argv 纪律）', () => {
+  it('model/sessionId 含元字符 → 拒绝；合法值放行', () => {
+    expect(() => buildOpenCodeArgs({ kind: 'new-run' }, 'W', 'glm&calc')).toThrow(/unsafe argv/)
+    expect(() => buildOpenCodeArgs({ kind: 'resume', sessionId: 's&calc' }, 'W', undefined)).toThrow(/unsafe argv/)
+    expect(() => buildOpenCodeArgs({ kind: 'new-run' }, 'W&|', undefined)).toThrow(/unsafe argv/)
+    expect(buildOpenCodeArgs({ kind: 'resume', sessionId: 'ses-9' }, 'W', 'glm/GLM-5.3-Flash')).toContain('ses-9')
+  })
+})

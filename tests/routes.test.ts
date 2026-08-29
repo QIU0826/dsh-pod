@@ -67,6 +67,29 @@ describe('validateLaunch（Team Builder 提交校验）', () => {
     expect(result.value.slots[0]!.model).toBeUndefined()
   })
 
+  it('预算语义（token 主计价）：显式 0 = 不限（事实无限）；缺省仍 $3 安全兜底；avatar 白名单透传', () => {
+    const unlimited = validateLaunch({
+      name: 'm', goal: 'g', cwd: 'x', budget_usd: 0,
+      slots: [{ id: 'S-1', vendor: 'claude', role: 'planner', capabilities: ['规划'], avatar: 'owl' }],
+    })
+    expect(unlimited.ok).toBe(true)
+    if (!unlimited.ok) return
+    expect(unlimited.value.budgetUsd).toBe(1_000_000_000)
+    expect(unlimited.value.slots[0]!.avatar).toBe('owl')
+    const tokens = validateLaunch({
+      name: 'm', goal: 'g', cwd: 'x', budget_usd: 0, budget_tokens: 2_000_000,
+      slots: [{ id: 'S-1', vendor: 'claude', role: 'r', avatar: 'griffin' }],
+    })
+    expect(tokens.ok).toBe(true)
+    if (!tokens.ok) return
+    expect(tokens.value.budgetTokens).toBe(2_000_000)
+    expect(tokens.value.slots[0]!.avatar).toBeUndefined()
+    const fallback = validateLaunch({ name: 'm', goal: 'g', cwd: 'x', slots: [{ id: 's', vendor: 'claude', role: 'r' }] })
+    expect(fallback.ok).toBe(true)
+    if (!fallback.ok) return
+    expect(fallback.value.budgetUsd).toBe(3)
+  })
+
   it('缺 goal / 未知 vendor / 空 slots → 422 校验失败', () => {
     expect(validateLaunch({ name: 'm', cwd: 'x', slots: [] }).ok).toBe(false)
     expect(validateLaunch({ name: 'm', goal: 'g', cwd: 'x', slots: [{ id: 's', vendor: 'grok', role: 'r' }] }).ok).toBe(false)
@@ -273,5 +296,86 @@ describe('pod 数据面路由（W3/W4）', () => {
     const { res, written } = captureResponse()
     await status.handler(loopbackRequest('/api/dsh-pod/status'), res)
     expect(written[0]!.status).toBe(503)
+  })
+})
+
+describe('POST /api/dsh-pod/plan（P1 规划层：list / add / replan）', () => {
+  it('action=list 返回任务 DAG 与重规划余量', async () => {
+    const service = fakeService({
+      status: () => ({ tasks: [] as never[], slots: [], pendingApprovals: [], experiments: { topology_animation: false, canvas_third_column: false } }),
+      hasPlannerCapability: () => true,
+      replanRemaining: () => 1,
+    })
+    const routes = makePodRoutes(() => service as unknown as PodService)
+    const route = routes.find((r) => r.path === '/api/dsh-pod/plan')!
+    const { res, written } = captureResponse()
+    const req = {
+      url: '/api/dsh-pod/plan',
+      method: 'POST',
+      socket: { remoteAddress: '127.0.0.1' },
+      headers: { 'content-type': 'application/json', 'content-length': '22' },
+      [Symbol.asyncIterator]() {
+        const chunks = [Buffer.from(JSON.stringify({ action: 'list' }))]
+        let i = 0
+        return { next: () => (i < chunks.length ? Promise.resolve({ done: false, value: chunks[i++] }) : Promise.resolve({ done: true, value: undefined })) }
+      },
+    } as unknown as IncomingMessage
+    await route.handler(req, res)
+    expect(written[0]!.status).toBe(200)
+    expect((written[0]!.body as { planner: boolean }).planner).toBe(true)
+    expect((written[0]!.body as { replan_remaining: number }).replan_remaining).toBe(1)
+  })
+
+  it('action=add 任务缺字段 → 422', async () => {
+    const service = fakeService()
+    const routes = makePodRoutes(() => service as unknown as PodService)
+    const route = routes.find((r) => r.path === '/api/dsh-pod/plan')!
+    const { res, written } = captureResponse()
+    const req = {
+      url: '/api/dsh-pod/plan',
+      method: 'POST',
+      socket: { remoteAddress: '127.0.0.1' },
+      headers: { 'content-type': 'application/json', 'content-length': '40' },
+      [Symbol.asyncIterator]() {
+        const chunks = [Buffer.from(JSON.stringify({ action: 'add', tasks: [{ id: 'T-1' }] }))]
+        let i = 0
+        return { next: () => (i < chunks.length ? Promise.resolve({ done: false, value: chunks[i++] }) : Promise.resolve({ done: true, value: undefined })) }
+      },
+    } as unknown as IncomingMessage
+    await route.handler(req, res)
+    expect(written[0]!.status).toBe(422)
+  })
+})
+
+describe('GET /api/dsh-pod/fs/browse（设置页目录点选器）', () => {
+  it('空 path → 根级（盘符 / POSIX 根），200', async () => {
+    const routes = makePodRoutes(() => fakeService())
+    const route = routes.find((r) => r.path === '/api/dsh-pod/fs/browse')!
+    const { res, written } = captureResponse()
+    await route.handler(loopbackRequest('/api/dsh-pod/fs/browse'), res)
+    expect(written[0]!.status).toBe(200)
+    const body = written[0]!.body as { path: string; home: string }
+    expect(typeof body.home).toBe('string')
+    if (process.platform === 'win32') expect(body.path).toBe('')
+    else expect(body.path).toBe('/')
+  })
+
+  it('非法 path（相对路径）→ 400', async () => {
+    const routes = makePodRoutes(() => fakeService())
+    const route = routes.find((r) => r.path === '/api/dsh-pod/fs/browse')!
+    const { res, written } = captureResponse()
+    await route.handler(loopbackRequest('/api/dsh-pod/fs/browse?path=relative'), res)
+    expect(written[0]!.status).toBe(400)
+  })
+
+  it('非 GET → 405；非 loopback → 403', async () => {
+    const routes = makePodRoutes(() => fakeService())
+    const route = routes.find((r) => r.path === '/api/dsh-pod/fs/browse')!
+    const methodRes = captureResponse()
+    await route.handler({ ...loopbackRequest('/api/dsh-pod/fs/browse'), method: 'POST' } as IncomingMessage, methodRes.res)
+    expect(methodRes.written[0]!.status).toBe(405)
+    const remoteRes = captureResponse()
+    await route.handler({ url: '/', socket: { remoteAddress: '10.0.0.5' } } as unknown as IncomingMessage, remoteRes.res)
+    expect(remoteRes.written[0]!.status).toBe(403)
   })
 })

@@ -569,6 +569,76 @@ export function makePodTools(service: PodService): PodToolBundle {
         }
       },
     }),
+    defineTool({
+      name: 'pod_plan',
+      description:
+        'P1 规划层工具面（AgentScope DAGPlanExecutor 借鉴）：action=list 查看当前任务 DAG；' +
+        'action=add 运行中追加任务节点（走 createTasks 同一裁决：id 白名单/环检测 fail-closed）；' +
+        'action=replan 有界重规划——把失败现状喂回 planner 槽位重新分解（上限 ' + '2 次 + 预算门控）。触发词：Pod 计划 / 重规划 / 加任务。',
+      parameters: {
+        action: { type: 'string', required: true, description: 'list | add | replan' },
+        tasks: {
+          type: 'array',
+          description: 'action=add 必填：追加的任务节点',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              id: { type: 'string', required: true, description: '任务 id（T-n 形式，字母数字._-）' },
+              title: { type: 'string', required: true },
+              spec: { type: 'string', required: true, description: '完整任务书（给员工的）' },
+              type: { type: 'string', required: true, description: 'implement | review | test | doc | research' },
+              skill_tags: { type: 'array', items: { type: 'string' } },
+              depends_on: { type: 'array', items: { type: 'string' } },
+            },
+          },
+        },
+        reason: { type: 'string', description: 'action=replan 时的重规划原因' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            ok: { type: 'boolean', required: true },
+            message: { type: 'string', required: true },
+            tasks: { type: 'array' },
+          },
+        },
+        render: (_args, value: { ok: boolean; message: string }) => text(value.message),
+      },
+      async execute(args: { action: string; tasks?: Array<{ id: string; title: string; spec: string; type: string; skill_tags?: string[]; depends_on?: string[] }>; reason?: string }) {
+        try {
+          if (args.action === 'list') {
+            const st = service.status()
+            return {
+              ok: true,
+              message: `任务 ${st.tasks.length} 个（mission ${st.mission?.status ?? '无'}；planner 槽位：${service.hasPlannerCapability() ? '有' : '无'}；重规划余量 ${service.replanRemaining()} 次）`,
+              tasks: st.tasks.map((t) => ({ id: t.id, title: t.title, type: t.type, status: t.status, depends_on: t.depends_on })),
+            }
+          }
+          if (args.action === 'add') {
+            const tasks = args.tasks ?? []
+            if (tasks.length === 0) return { ok: false, message: 'action=add 需要 tasks 数组' }
+            const created = service.addPlanTasks(
+              tasks.map((t) => ({
+                id: t.id, title: t.title, spec: t.spec,
+                type: t.type as PlanTaskInput['type'],
+                skill_tags: t.skill_tags ?? [], depends_on: t.depends_on ?? [],
+              })),
+            )
+            return { ok: true, message: `已追加 ${created.length} 个任务节点（同一裁决：id 白名单/环 fail-closed）`, tasks: created.map((t) => ({ id: t.id, title: t.title, type: t.type, status: t.status })) }
+          }
+          if (args.action === 'replan') {
+            const r = service.requestReplan(args.reason ?? '人工触发重规划')
+            return { ok: r.requested, message: `${r.message}（剩余 ${r.remaining} 次）` }
+          }
+          return { ok: false, message: `未知 action：${args.action}（支持 list | add | replan）` }
+        } catch (error) {
+          return { ok: false, message: error instanceof Error ? error.message : String(error) }
+        }
+      },
+    }),
   ]
   // AgentScope-E 工具级 middleware（Should 落地）：每个 pod_* 工具 execute 包审计钩子——
   // 调用前记开始、调用后记耗时/成败（service.recordToolAudit → pod_tool_called 事件）。

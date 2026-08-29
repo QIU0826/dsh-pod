@@ -9,7 +9,7 @@ import {
   type SatelliteTransport,
 } from '../src/workers/remote-backend.js'
 import { listenSatellite, StubBackend } from '../src/workers/satellite-server.js'
-import type { AgentSlot, Task, WorkerCompletion } from '../src/core/types.js'
+import type { AgentSlot, Task, WorkerBackend, WorkerCompletion, WorkerHandle, WorkerProgressEvent } from '../src/core/types.js'
 
 function slot(): AgentSlot {
   return {
@@ -162,6 +162,108 @@ describe('satellite-server 真实 loopback 链（RemoteBackend <-> HTTP <-> stub
       const remote = new RemoteBackend({ url: satellite.url, vendor: 'dsh', token: 'secret', pollMs: 5 })
       const d = await remote.detect()
       expect(d.installed).toBe(true)
+    } finally {
+      await satellite.close()
+    }
+  })
+})
+
+describe('satellite 服务端 /kill 真杀（P0：此前只置标记，远程 worker 继续烧 token）', () => {
+  class KillSpyBackend implements WorkerBackend {
+    readonly vendor = 'dsh' as const
+    readonly protocol = {
+      family: 'native' as const,
+      version: 'stub',
+      capabilities: { kill: true, session_persist: false, structured_output: true, usage_audit: true },
+    }
+    readonly killed: WorkerHandle[] = []
+    async detect() {
+      return { installed: true, authed: true, models: ['m'], session_tiers: ['transient'] as Array<'transient'> }
+    }
+    async start(
+      _slot: AgentSlot,
+      task: Task,
+      _worktree: string,
+      callbacks: { onProgress?(event: WorkerProgressEvent): void; onExit?(completion: WorkerCompletion): void } = {},
+    ): Promise<WorkerHandle> {
+      queueMicrotask(() =>
+        callbacks.onExit?.({ exit: 'done', usage: { tokens_in: 0, tokens_out: 0, source: 'unavailable' }, artifacts: [] }),
+      )
+      return { pid: 4321, session_ref: `spy-${task.id}` }
+    }
+    async kill(handle: WorkerHandle): Promise<void> {
+      this.killed.push(handle)
+    }
+  }
+
+  it('/start 存 handle；/kill 经 backend.kill 真正终止远程进程', async () => {
+    const backend = new KillSpyBackend()
+    const satellite = await listenSatellite({ backend, port: 0 })
+    try {
+      const startRes = await fetch(satellite.url + '/start', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ slot: slot(), task: task() }),
+      })
+      const startBody = (await startRes.json()) as { session_ref: string }
+      expect(startRes.status).toBe(200)
+      const killRes = await fetch(satellite.url + '/kill', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ session_ref: startBody.session_ref }),
+      })
+      const killBody = (await killRes.json()) as { killed: boolean; session_found: boolean }
+      expect(killBody).toEqual({ killed: true, session_found: true })
+      expect(backend.killed).toHaveLength(1)
+      expect(backend.killed[0]!.pid).toBe(4321)
+    } finally {
+      await satellite.close()
+    }
+  })
+
+  it('/kill 不存在的 session → 200 + session_found=false（不再静默装作杀掉了）', async () => {
+    const backend = new KillSpyBackend()
+    const satellite = await listenSatellite({ backend, port: 0 })
+    try {
+      const res = await fetch(satellite.url + '/kill', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ session_ref: 'nope' }),
+      })
+      expect(res.status).toBe(200)
+      expect(((await res.json()) as { session_found: boolean }).session_found).toBe(false)
+      expect(backend.killed).toHaveLength(0)
+    } finally {
+      await satellite.close()
+    }
+  })
+})
+
+describe('satellite P1 加固（fail-closed + content-type + 请求体上限）', () => {
+  it('listenSatellite：非 loopback 无 token → 拒绝启动（fail-closed）', async () => {
+    await expect(listenSatellite({ backend: new StubBackend(), host: '0.0.0.0', port: 0 })).rejects.toThrow(/without token/)
+    // loopback 无 token / 非 loopback 带 token 均合法
+    const a = await listenSatellite({ backend: new StubBackend(), host: '127.0.0.1', port: 0 })
+    await a.close()
+    const b = await listenSatellite({ backend: new StubBackend(), host: '0.0.0.0', port: 0, token: 't' })
+    await b.close()
+  })
+
+  it('POST 非 application/json → 415；超 1MB body → 413', async () => {
+    const satellite = await listenSatellite({ backend: new StubBackend(), port: 0 })
+    try {
+      const wrongCt = await fetch(satellite.url + '/kill', {
+        method: 'POST',
+        headers: { 'content-type': 'text/plain' },
+        body: 'x',
+      })
+      expect(wrongCt.status).toBe(415)
+      const huge = await fetch(satellite.url + '/kill', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: 'x'.repeat(2 * 1024 * 1024),
+      })
+      expect(huge.status).toBe(413)
     } finally {
       await satellite.close()
     }
