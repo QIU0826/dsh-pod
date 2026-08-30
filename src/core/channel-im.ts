@@ -13,6 +13,8 @@
  *     出站文本一律过 `sanitizeOutboundSignal`（代码/diff/凭据字段被白名单剔除）。
  *
  * fail-closed：验签失败、时间窗过期、缺凭据、解析不出指令 → 一律拒绝，不降级放行。
+ * 飞书明文模式（无 encryptKey）必须配置 verification token 做入站鉴权；
+ * vendor 重投递按事件 id 去重（ImReplayGuard），非幂等指令不会被二次执行。
  *
  * 纯逻辑 + 注入式副作用（clock 由调用方给），可离线单测；不硬编码任何网络调用。
  */
@@ -58,13 +60,65 @@ export interface ImVerification {
   reason?: string
   inbound?: ImInbound
   challenge?: string
+  /** vendor 事件 id（Slack event_id / 飞书 header.event_id），重放去重键；可能缺失。 */
+  eventId?: string
+}
+
+function extractEventId(vendor: ImVendor, body: Record<string, unknown>): string | undefined {
+  if (vendor === 'slack') return typeof body.event_id === 'string' && body.event_id.length > 0 ? body.event_id : undefined
+  const header = body.header
+  if (header !== null && typeof header === 'object') {
+    const eid = (header as Record<string, unknown>).event_id
+    if (typeof eid === 'string' && eid.length > 0) return eid
+  }
+  return undefined
+}
+
+/** 取飞书 verification token（v1 顶层 token / schema 2.0 header.token）。 */
+function extractLarkToken(body: Record<string, unknown>): string {
+  if (typeof body.token === 'string') return body.token
+  const header = body.header
+  if (header !== null && typeof header === 'object') {
+    const t = (header as Record<string, unknown>).token
+    if (typeof t === 'string') return t
+  }
+  return ''
+}
+
+/**
+ * 重放去重（审计 P2 修复）：vendor 会因超时重投递同一事件（Slack 官方明确会重试），
+ * 暂停/恢复/派发这类非幂等指令会被重复执行。按 vendor 事件 id 做有界 TTL 去重，
+ * TTL 与签名时间窗同量级——超出窗口的请求本就被验签拒绝，这里只兜窗口内的重放。
+ */
+export class ImReplayGuard {
+  private readonly seen = new Map<string, number>()
+  constructor(private readonly ttlMs: number = 10 * 60 * 1000) {}
+  /** true = 首次见到（放行）；false = 窗口内的重复投递（拒绝）。 */
+  firstSeen(eventId: string, nowMs: number): boolean {
+    if (eventId.length === 0) return true
+    for (const [k, ts] of this.seen) {
+      if (nowMs - ts > this.ttlMs) this.seen.delete(k)
+    }
+    if (this.seen.has(eventId)) return false
+    this.seen.set(eventId, nowMs)
+    // 有界：异常洪峰下也不会无界增长
+    if (this.seen.size > 10_000) {
+      const oldest = [...this.seen.entries()].sort((a, b) => a[1] - b[1]).slice(0, 1_000)
+      for (const [k] of oldest) this.seen.delete(k)
+    }
+    return true
+  }
 }
 
 /** vendor 凭据（由调用方从环境注入；本模块不读 process.env，便于测试与凭据隔离）。 */
 export interface ImCredentials {
   slackSigningSecret?: string
   larkEncryptKey?: string
-  /** 飞书挑战握手需回显的 verification token（可选；配置时校验来源）。 */
+  /**
+   * 飞书 verification token：明文模式（无 encryptKey）时**必配**——此时签名不可校验，
+   * token 比对是唯一的入站鉴权手段（审计 P1 修复：此前明文模式完全跳过验签）。
+   * 加密模式下作为挑战握手回显用（可选）。
+   */
   larkVerificationToken?: string
 }
 
@@ -204,15 +258,15 @@ export function verifyAndParseIm(req: ImRequest, opts: ImOptions): ImVerificatio
     if (!constantEquals(signature, slackExpectedSignature(secret, timestamp, req.rawBody))) {
       return { ok: false, reason: 'slack signature mismatch' }
     }
-    const parsed = parseSlack(parseJson(req.rawBody))
-    if (parsed.challenge !== undefined) return { ok: true, challenge: parsed.challenge }
-    if (parsed.inbound === undefined) return { ok: true, reason: parsed.reason }
-    return { ok: true, inbound: parsed.inbound }
+    const raw = parseJson(req.rawBody)
+    const eventId = extractEventId('slack', raw)
+    const parsed = parseSlack(raw)
+    if (parsed.challenge !== undefined) return { ok: true, challenge: parsed.challenge, eventId }
+    if (parsed.inbound === undefined) return { ok: true, reason: parsed.reason, eventId }
+    return { ok: true, inbound: parsed.inbound, eventId }
   }
 
   const encrypted = (opts.larkEncryptKey ?? '').length > 0
-  // 明文模式（未配置 encryptKey）时 vendor 仍会带签名头，但已知签名不可校验——
-  // 此时不强依赖签名，改由 loopback/token 等外层网关把关（fail-closed 交外层，不静默放行）
   if (encrypted) {
     const signature = header(req.headers, 'x-lark-signature')
     const nonce = header(req.headers, 'x-lark-request-nonce')
@@ -220,12 +274,25 @@ export function verifyAndParseIm(req: ImRequest, opts: ImOptions): ImVerificatio
     if (!withinWindow(timestamp, opts.nowMs, tolerance)) return { ok: false, reason: 'lark timestamp out of window' }
     const expected = larkExpectedSignature(opts.larkEncryptKey ?? '', timestamp, nonce, req.rawBody)
     if (!constantEquals(signature, expected)) return { ok: false, reason: 'lark signature mismatch' }
+  } else {
+    // 明文模式（审计 P1 修复）：签名不可校验，verification token 比对是唯一入站鉴权——
+    // 未配置 token 或请求不带/不匹配 → 一律拒绝（此前完全跳过验签，等于不设防）
+    const configured = opts.larkVerificationToken ?? ''
+    if (configured.length === 0) return { ok: false, reason: 'lark verification token not configured (plaintext mode)' }
+    const raw = parseJson(req.rawBody)
+    const presented = extractLarkToken(raw)
+    if (presented.length === 0) return { ok: false, reason: 'missing lark verification token' }
+    if (!constantEquals(presented, configured)) return { ok: false, reason: 'lark verification token mismatch' }
+    const parsed = parseLark(raw)
+    if (parsed.challenge !== undefined) return { ok: true, challenge: parsed.challenge, eventId: extractEventId('lark', raw) }
+    if (parsed.inbound === undefined) return { ok: true, reason: parsed.reason, eventId: extractEventId('lark', raw) }
+    return { ok: true, inbound: parsed.inbound, eventId: extractEventId('lark', raw) }
   }
 
   const parsed = parseLark(parseJson(req.rawBody))
-  if (parsed.challenge !== undefined) return { ok: true, challenge: parsed.challenge }
-  if (parsed.inbound === undefined) return { ok: true, reason: parsed.reason }
-  return { ok: true, inbound: parsed.inbound }
+  if (parsed.challenge !== undefined) return { ok: true, challenge: parsed.challenge, eventId: extractEventId('lark', parseJson(req.rawBody)) }
+  if (parsed.inbound === undefined) return { ok: true, reason: parsed.reason, eventId: extractEventId('lark', parseJson(req.rawBody)) }
+  return { ok: true, inbound: parsed.inbound, eventId: extractEventId('lark', parseJson(req.rawBody)) }
 }
 
 /** 出站回复体（vendor 无关的中间表示，由 sender 转成具体 API 调用）。 */
@@ -268,12 +335,19 @@ export interface ImHandleResult {
 export async function handleImRequest(
   req: ImRequest,
   target: ChannelTarget,
-  opts: ImOptions,
+  opts: ImOptions & { replayGuard?: ImReplayGuard },
   send?: ImSender,
 ): Promise<ImHandleResult> {
   const verified = verifyAndParseIm(req, opts)
   if (!verified.ok) return { handled: false, reason: verified.reason }
   if (verified.challenge !== undefined) return { handled: true, challenge: verified.challenge }
+
+  // 重放去重（审计 P2 修复）：vendor 超时重投递同一事件 → 二次执行非幂等指令
+  if (verified.inbound !== undefined && opts.replayGuard !== undefined && verified.eventId !== undefined) {
+    if (!opts.replayGuard.firstSeen(verified.eventId, opts.nowMs)) {
+      return { handled: true, reason: `duplicate event (replay): ${verified.eventId}` }
+    }
+  }
 
   const inbound = verified.inbound
   if (inbound === undefined) return { handled: true, reason: verified.reason ?? 'no instruction' }

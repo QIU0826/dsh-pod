@@ -144,6 +144,8 @@ export interface ChatViewProps {
   slots: StatusSlot[]
   events: PodEvent[]
   ledger: { total_tokens: number; total_equiv_usd: number; tokens_in: number; tokens_out: number }
+  /** 按执行阶段（任务类型）的 token 归因（unknown = 无任务归属）。 */
+  ledgerByStage: Record<string, { tokens: number; equiv_usd: number; entries: number }>
   pendingApprovals: Array<{ id: string; summary: string }>
   userMessages: Array<{ id: string; ts: number; text: string }>
   answered: Set<string>
@@ -170,7 +172,7 @@ const SIDE_MIN = 232
 const SIDE_MAX = 480
 
 export function ChatView(props: ChatViewProps): ReactElement {
-  const { live, mission, tasks, slots, events, ledger, pendingApprovals, userMessages, answered, settings, selectedSlot, onSelectSlot, onSend, onAnswer, onApprove, onViewApproval, onDispatch, onAbort, onPause, onResume, canPause, isPaused, onNewSession } = props
+  const { live, mission, tasks, slots, events, ledger, ledgerByStage, pendingApprovals, userMessages, answered, settings, selectedSlot, onSelectSlot, onSend, onAnswer, onApprove, onViewApproval, onDispatch, onAbort, onPause, onResume, canPause, isPaused, onNewSession } = props
   const [draft, setDraft] = useState('')
   const [dismissed, setDismissed] = useState<Set<string>>(new Set())
   const [modalChoice, setModalChoice] = useState<'continue' | 'clarify' | 'escalate'>('continue')
@@ -397,7 +399,15 @@ export function ChatView(props: ChatViewProps): ReactElement {
         createElement('span', null, 'Token 明细'),
         createElement('span', { className: 'dsh-mono', style: { color: 'var(--ink)' } }, fmtTokens(ledger.total_tokens))),
       createElement('div', { className: 'dsh-kvrow' }, createElement('span', null, '输入'), createElement('span', { className: 'dsh-mono' }, fmtTokens(ledger.tokens_in))),
-      createElement('div', { className: 'dsh-kvrow' }, createElement('span', null, '输出'), createElement('span', { className: 'dsh-mono' }, fmtTokens(ledger.tokens_out)))),
+      createElement('div', { className: 'dsh-kvrow' }, createElement('span', null, '输出'), createElement('span', { className: 'dsh-mono' }, fmtTokens(ledger.tokens_out))),
+      Object.keys(ledgerByStage).length > 0
+        ? createElement('div', { style: { marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--line)' }, key: 'stage' },
+            createElement('div', { className: 'dsh-kvrow', style: { marginTop: 0, color: 'var(--ink-3)' } }, createElement('span', null, '阶段归因')),
+            Object.entries(ledgerByStage).sort((a, b) => b[1].tokens - a[1].tokens).map(([stage, v]) =>
+              createElement('div', { className: 'dsh-kvrow', key: stage },
+                createElement('span', null, TASK_TYPE_LABEL[stage] ?? stage),
+                createElement('span', { className: 'dsh-mono' }, `${fmtTokens(v.tokens)} · $${v.equiv_usd.toFixed(4)}`))))
+        : null),
     createElement('div', null,
       createElement('div', { className: 'dsh-side-title' }, `代理槽位（${slots.length}）`),
       slots.length === 0

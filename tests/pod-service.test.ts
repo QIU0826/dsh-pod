@@ -110,6 +110,39 @@ describe('PodService 宿主闭环（CR-05-6）', () => {
   })
 })
 
+describe('eventsAfter id 游标（SSE 路径：同毫秒事件不丢，审计 P1 修复）', () => {
+  let root: string
+  let store: JsonStore
+  let service: PodService
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'pod-events-after-'))
+    store = new JsonStore({ rootDir: root, clock: () => 1_700_000_000_000 })
+    store.open()
+    service = new PodService({ store, backends: {}, clock: () => 1_700_000_000_000, dataDir: root })
+    service.launch({ name: 'm', goal: 'g', cwd: 'C:\repo', budgetUsd: 2, slots: [] })
+  })
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  it('同毫秒事件：id 游标逐帧续读不丢（ts 游标会跳过兄弟事件）', () => {
+    const id = store.listMissions()[0]!.id
+    for (let i = 0; i < 4; i += 1) {
+      store.appendEvent(id, { id: `s${i}`, mission_id: id, ts: 2_000_000_000_000, kind: 'worker_progress', payload: { seq: i } })
+    }
+    // 旧实现：SSE 游标推进到该 ts 后，`ts > ts` 把同毫秒兄弟事件整批跳过
+    expect(service.eventsAfter(2_000_000_000_000 - 1).map((e) => e.id)).toEqual(['s0', 's1', 's2', 's3'])
+    expect(service.eventsAfter(2_000_000_000_000).map((e) => e.id)).toEqual([])
+    // 新实现：按事件 id 精确定位，逐帧续读
+    expect(service.eventsAfter(0, 's1').map((e) => e.id)).toEqual(['s2', 's3'])
+    expect(service.eventsAfter(0, 's3')).toEqual([])
+    // afterId 失效（不在窗口）→ 回退 ts 语义，不静默返回空
+    expect(service.eventsAfter(2_000_000_000_000 - 1, 'no-such-id').map((e) => e.id)).toEqual(['s0', 's1', 's2', 's3'])
+  })
+})
+
 describe('eventsTail 分页游标（HTTP 轮询路径：超限不丢、同毫秒不跳）', () => {
   let root: string
   let store: JsonStore

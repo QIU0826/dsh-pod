@@ -266,20 +266,21 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
           connection: 'keep-alive',
         })
         res.write('retry: 2000\n\n')
-        let lastTs = 0
+        // id 游标（审计 P1 修复）：ts 严格比较会同毫秒丢事件，与轮询路径同源
+        let lastId = ''
         const push = (events: Array<{ id: string; ts: number; kind: string; task_id?: string; slot_id?: string; payload: Record<string, unknown> }>): void => {
           for (const event of events) {
             if (res.writableEnded) return
             res.write(formatSseFrame(event))
-            if (event.ts > lastTs) lastTs = event.ts
+            lastId = event.id
           }
         }
         // 1) replay：新订阅者先收 buffered history（不丢上下文）
         push(current.eventsAfter(0))
-        // 2) live：增量轮询（ts 游标；客户端按 id 去重，容忍同 ts 重复帧）
+        // 2) live：增量轮询（id 精确游标，同毫秒事件不丢；客户端仍按 id 去重）
         const timer = setInterval(() => {
           try {
-            push(current.eventsAfter(lastTs))
+            push(lastId.length > 0 ? current.eventsAfter(0, lastId) : current.eventsAfter(0))
           } catch {
             /* 订阅期间 store 读取异常：保持连接，下轮重试 */
           }

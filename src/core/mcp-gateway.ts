@@ -7,7 +7,8 @@
  *
  * 纪律（沿用项目既有不变量）：
  *   - 命名空间隔离：工具名一律 `serverId__toolName`，跨 server 同名互不覆盖；
- *   - 审批门不绕过：写类工具调用前过 `beforeCall` 钩子，未获批即拒绝，不降级执行；
+ *   - 审批门不绕过：写类工具调用前过 `beforeCall` 钩子，未获批即拒绝；
+ *     未接线审批钩子时 gated 工具一律拒绝（fail-closed，不静默放行）；
  *   - 凭据不出会话：server 凭据由调用方从环境注入，不落事件流/记忆/日志；
  *   - fail-closed：未知 server / 未知工具 / 调用异常 → 抛 PodError，不静默成功。
  *
@@ -108,7 +109,13 @@ export class McpGateway {
   private readonly now: () => number
 
   constructor(opts: McpGatewayOptions) {
-    for (const s of opts.servers) this.specs.set(s.id, s)
+    for (const s of opts.servers) {
+      // serverId 是命名空间的一部分（serverId__toolName），含分隔符会让 callTool 解析错位
+      if (s.id.length === 0 || s.id.includes('__')) {
+        throw new McpGatewayError(`非法 MCP server id（非空且不含 __）: ${JSON.stringify(s.id)}`)
+      }
+      this.specs.set(s.id, s)
+    }
     for (const c of opts.connections) this.conns.set(c.id, c)
     this.beforeCall = opts.beforeCall
     this.audit = opts.audit
@@ -151,7 +158,13 @@ export class McpGateway {
 
     const gated = (this.specs.get(serverId)?.gatedTools ?? []).includes(toolName)
     let approved = true
-    if (gated && this.beforeCall !== undefined) {
+    if (gated) {
+      // fail-closed（审计 P1 修复）：gated 工具在没有审批钩子时必须拒绝，
+      // 而不是静默放行——此前「未接线 beforeCall = 全部免审批」与头注声明矛盾
+      if (this.beforeCall === undefined) {
+        this.audit?.({ ts: this.now(), serverId, tool: toolName, gated, approved: false, ok: false, error: 'approval hook not wired' })
+        return { ok: false, error: '写类工具未配置审批钩子，已拒绝执行（fail-closed）' }
+      }
       approved = await this.beforeCall(
         { ref, serverId, name: toolName, gated },
         args,

@@ -62,6 +62,30 @@ describe('MCP Gateway（AgentScope-J）', () => {
     expect(spy).not.toHaveBeenCalled()
   })
 
+  it('gated 工具在未接线审批钩子时拒绝执行（fail-closed，不静默放行）', async () => {
+    const gateway = new McpGateway({
+      servers: [{ id: 'fs', gatedTools: ['write'] }],
+      connections: [conn('fs', [{ name: 'write' }, { name: 'read' }])],
+    })
+    const result = await gateway.callTool('fs__write', { path: 'x' })
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain('fail-closed')
+    // 非 gated 工具不受影响（无钩子仍可执行只读调用）
+    const ok = await gateway.callTool('fs__read', {})
+    expect(ok.ok).toBe(true)
+  })
+
+  it('serverId 含 __ 或为空 → 构造即失败（命名空间解析错位防护）', () => {
+    expect(() => new McpGateway({
+      servers: [{ id: 'a__b' }],
+      connections: [conn('a__b', [])],
+    })).toThrow(/非法 MCP server id/)
+    expect(() => new McpGateway({
+      servers: [{ id: '' }],
+      connections: [conn('', [])],
+    })).toThrow(/非法 MCP server id/)
+  })
+
   it('写类工具获审批 → 正常执行；非 gated 工具不触发审批钩子', async () => {
     const gate = vi.fn(async () => true)
     const gw = makeMcpGateway({

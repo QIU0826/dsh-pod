@@ -62,7 +62,13 @@ export interface StatusResponse {
   slots: StatusSlot[]
   pending_approvals: Array<{ id: string; summary: string; worktree_path: string }>
   experiments: { topology_animation: boolean; canvas_third_column: boolean }
-  ledger: { total_tokens: number; total_equiv_usd: number; entries: LedgerEntry[] }
+  ledger: {
+    total_tokens: number
+    total_equiv_usd: number
+    entries: LedgerEntry[]
+    /** 按任务类型（执行阶段）归因：plan/implement/review/…；无任务归属归入 unknown。 */
+    by_stage?: Record<string, { tokens: number; equiv_usd: number; entries: number }>
+  }
   runStatus?: string
   message: string
 }
@@ -166,7 +172,12 @@ export interface MissionArchive {
   tasks: StatusTask[]
   slots: StatusSlot[]
   approvals: Array<{ id: string; status: string; decided_at: number | null; task_id: string | null; summary: string; worktree_path: string; kind: string }>
-  ledger: { total_tokens: number; total_equiv_usd: number; entries: Array<{ model: string; tokens_in: number; tokens_out: number; equiv_usd: number; ts: number }> }
+  ledger: {
+    total_tokens: number
+    total_equiv_usd: number
+    entries: Array<{ model: string; tokens_in: number; tokens_out: number; equiv_usd: number; ts: number }>
+    by_stage?: Record<string, { tokens: number; equiv_usd: number; entries: number }>
+  }
   events: PodEvent[]
 }
 

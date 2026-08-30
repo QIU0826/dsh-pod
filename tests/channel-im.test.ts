@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   handleImRequest,
+  ImReplayGuard,
   larkExpectedSignature,
   slackExpectedSignature,
   verifyAndParseIm,
@@ -213,5 +214,51 @@ describe('端到端：入站 → 指令路由 → 出站（审批门不绕过）
     )
     expect(res.handled).toBe(false)
     expect(touched).toBe(false)
+  })
+})
+
+describe('飞书明文模式验签 + 重放去重（审计修复）', () => {
+  const TOKEN = 'lark-verification-token'
+  const larkPlain = (over: { token?: string; eventId?: string } = {}): ImRequest => ({
+    vendor: 'lark',
+    headers: {},
+    rawBody: JSON.stringify({
+      header: { token: over.token ?? TOKEN, event_id: over.eventId, event_type: 'im.message.receive_v1' },
+      event: {
+        message: { message_type: 'text', chat_id: 'oc1', content: JSON.stringify({ text: '状态' }) },
+        sender: { sender_id: { open_id: 'ou_1' } },
+      },
+    }),
+  })
+
+  it('明文模式未配置 verification token → 拒绝（不再不设防）', () => {
+    const r = verifyAndParseIm(larkPlain(), { nowMs: NOW })
+    expect(r.ok).toBe(false)
+    expect(r.reason).toContain('not configured')
+  })
+
+  it('明文模式 token 缺失/不匹配 → 拒绝；匹配 → 放行', () => {
+    expect(verifyAndParseIm(larkPlain({ token: '' }), { larkVerificationToken: TOKEN, nowMs: NOW }).ok).toBe(false)
+    const bad = verifyAndParseIm(larkPlain({ token: 'wrong' }), { larkVerificationToken: TOKEN, nowMs: NOW })
+    expect(bad.ok).toBe(false)
+    expect(bad.reason).toContain('mismatch')
+    const good = verifyAndParseIm(larkPlain(), { larkVerificationToken: TOKEN, nowMs: NOW })
+    expect(good.ok).toBe(true)
+    expect(good.inbound?.text).toBe('状态')
+  })
+
+  it('重放去重：同一 event_id 二次投递被拒，不同 id 放行；无 id 事件不受影响', async () => {
+    const guard = new ImReplayGuard(10 * 60 * 1000)
+    const target = { id: 't', status: () => ({ mission: null }), describe: async () => 'x', steer: async () => {}, approve: async () => ({ ok: true }), deny: async () => {} } as unknown as ChannelTarget
+    const sent: unknown[] = []
+    const opts = { nowMs: NOW, larkVerificationToken: TOKEN, replayGuard: guard }
+    const first = await handleImRequest(larkPlain({ eventId: 'E1' }), target, opts, async (r) => { sent.push(r) })
+    const dup = await handleImRequest(larkPlain({ eventId: 'E1' }), target, opts, async () => {})
+    expect(first.handled).toBe(true)
+    expect(dup.handled).toBe(true)
+    expect(dup.reason).toContain('duplicate event')
+    expect(sent).toHaveLength(1)
+    const other = await handleImRequest(larkPlain({ eventId: 'E2' }), target, opts, async () => {})
+    expect(other.reason).toBeUndefined()
   })
 })

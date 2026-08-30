@@ -313,7 +313,7 @@ export function PodPanel(): ReactElement {
           : view === 'chat'
             ? createElement(ChatView, {
                 live: isLive,
-                mission, tasks, slots, events: threadEvents, ledger, pendingApprovals,
+                mission, tasks, slots, events: threadEvents, ledger, ledgerByStage: isLive ? status?.ledger?.by_stage ?? {} : archive?.ledger.by_stage ?? {}, pendingApprovals,
                 userMessages, answered, settings, selectedSlot,
                 onSelectSlot: setSelectedSlot,
                 onSend: handleSend,

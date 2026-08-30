@@ -591,20 +591,29 @@ export class PodService {
   }
 
   /** 全量事件（SSE replay 用：无上限，新订阅者先收 buffered history 再收 live）。 */
-  eventsAfter(afterTs: number): Array<{ id: string; ts: number; kind: string; task_id?: string; slot_id?: string; payload: Record<string, unknown> }> {
+  /**
+   * SSE 增量取数（events/stream 数据源）。游标语义与 eventsTail 对齐：
+   * 优先 afterId（事件 id 精确定位，同毫秒事件不丢）；缺省/失效回退 ts 严格比较。
+   * （审计 P1 修复：此前 SSE 与轮询只有后者修了同毫秒丢事件，此处是漏掉的对称路径。）
+   */
+  eventsAfter(afterTs: number, afterId?: string): Array<{ id: string; ts: number; kind: string; task_id?: string; slot_id?: string; payload: Record<string, unknown> }> {
     const missions = this.store.listMissions().filter((m) => m.status !== 'done' && m.status !== 'aborted')
-    const events = missions.flatMap((m) => this.store.listEvents(m.id))
-    return events
-      .filter((e) => e.ts > afterTs)
-      .sort((a, b) => a.ts - b.ts)
-      .map((e) => ({
-        id: e.id,
-        ts: e.ts,
-        kind: e.kind,
-        task_id: e.task_id,
-        slot_id: e.slot_id,
-        payload: e.payload,
-      }))
+    // Array.sort 自 ES2019 稳定：同 ts 事件保持落盘顺序，id 定位才可靠
+    const sorted = missions.flatMap((m) => this.store.listEvents(m.id)).sort((a, b) => a.ts - b.ts)
+    const firstAfterTs = sorted.findIndex((e) => e.ts > afterTs)
+    let start = firstAfterTs === -1 ? sorted.length : firstAfterTs
+    if (afterId !== undefined && afterId.length > 0) {
+      const idx = sorted.findIndex((e) => e.id === afterId)
+      start = idx === -1 ? start : idx + 1
+    }
+    return sorted.slice(start).map((e) => ({
+      id: e.id,
+      ts: e.ts,
+      kind: e.kind,
+      task_id: e.task_id,
+      slot_id: e.slot_id,
+      payload: e.payload,
+    }))
   }
 
   /**
@@ -659,14 +668,16 @@ export class PodService {
     total_tokens: number
     total_equiv_usd: number
     entries: LedgerEntry[]
+    by_stage: Record<string, { tokens: number; equiv_usd: number; entries: number }>
   } {
     const active = this.store.getActiveMission()
-    if (active === undefined) return { total_tokens: 0, total_equiv_usd: 0, entries: [] }
+    if (active === undefined) return { total_tokens: 0, total_equiv_usd: 0, entries: [], by_stage: {} }
     const summary = new Ledger(this.store).summary(active.id)
     return {
       total_tokens: summary.total_tokens,
       total_equiv_usd: Number(summary.total_equiv_usd.toFixed(6)),
       entries: summary.entries,
+      by_stage: summary.byStage,
     }
   }
 
@@ -730,7 +741,7 @@ export class PodService {
     tasks: Array<{ id: string; title: string; type: string; status: string; fault: string | null; attempts: number; owner: string | null; commit: string | null; depends_on: string[] }>
     slots: Array<{ id: string; role: string; vendor: string; status: string; ctx_usage_pct: number; avatar: string | null }>
     approvals: Array<{ id: string; status: string; decided_at: number | null; task_id: string | null; summary: string; worktree_path: string; kind: string }>
-    ledger: { total_tokens: number; total_equiv_usd: number; entries: Array<{ model: string; tokens_in: number; tokens_out: number; equiv_usd: number; ts: number }> }
+    ledger: { total_tokens: number; total_equiv_usd: number; entries: Array<{ model: string; tokens_in: number; tokens_out: number; equiv_usd: number; ts: number }>; by_stage: Record<string, { tokens: number; equiv_usd: number; entries: number }> }
     events: PodEvent[]
   } | undefined {
     const mission = this.store.getMission(missionId)
@@ -757,6 +768,7 @@ export class PodService {
         total_tokens: totalTokens,
         total_equiv_usd: Number(totalUsd.toFixed(6)),
         entries: entries.slice(-50).map((e) => ({ model: e.model, tokens_in: e.tokens_in, tokens_out: e.tokens_out, equiv_usd: e.equiv_usd, ts: e.ts })),
+        by_stage: new Ledger(this.store).summary(missionId).byStage,
       },
       events: this.store.listEvents(missionId).slice(-500),
     }
