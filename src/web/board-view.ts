@@ -22,13 +22,15 @@ export interface BoardViewProps {
   onDispatch: () => void
   onRefresh: () => void
   onAddTask: (title: string, type: string) => void
+  /** 点任务卡 → 上下文查看器。 */
+  onOpenContext: (taskId: string) => void
 }
 
-function TaskCard(props: { task: StatusTask }): ReactElement {
+function TaskCard(props: { task: StatusTask; onOpen: (id: string) => void }): ReactElement {
   const { task } = props
   const cls = task.status === 'blocked' ? 'dsh-task-card blocked' : task.status === 'escalated' ? 'dsh-task-card escalated' : task.status === 'done' ? 'dsh-task-card done' : 'dsh-task-card'
   const typeCls = `dsh-type-badge ${task.type}`
-  return createElement('article', { className: cls },
+  return createElement('article', { className: cls, onClick: () => props.onOpen(task.id), title: '点击查看任务上下文（Context Builder）', style: { cursor: 'pointer' } },
     createElement('div', { className: 'dsh-task-head' },
       createElement('span', { className: 'dsh-task-id' }, task.id),
       createElement('span', { className: typeCls }, TASK_TYPE_LABEL[task.type] ?? task.type)),
@@ -55,7 +57,7 @@ function TaskCard(props: { task: StatusTask }): ReactElement {
 }
 
 export function BoardView(props: BoardViewProps): ReactElement {
-  const { missionLive, tasks, slots, onDispatch, onRefresh, onAddTask } = props
+  const { missionLive, tasks, slots, onDispatch, onRefresh, onAddTask, onOpenContext } = props
   const [query, setQuery] = useState('')
   const [adding, setAdding] = useState(false)
   const [addTitle, setAddTitle] = useState('')
@@ -86,7 +88,7 @@ export function BoardView(props: BoardViewProps): ReactElement {
               ? createElement('button', { className: 'dsh-btn sm icon', type: 'button', 'aria-label': '添加任务', onClick: () => setAdding(true) }, Icon('plus', 13))
               : null),
           createElement('div', { className: 'dsh-kcol-cards' },
-            filtered.filter((t) => col.statuses.includes(t.status)).map((t) => createElement(TaskCard, { key: t.id, task: t }))))),
+            filtered.filter((t) => col.statuses.includes(t.status)).map((t) => createElement(TaskCard, { key: t.id, task: t, onOpen: onOpenContext }))))),
       createElement('aside', { className: 'dsh-agent-rail', 'aria-label': '智能体槽位' },
         createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 } },
           createElement('span', { style: { fontSize: 13.5, fontWeight: 600 } }, 'Agent 槽位'),

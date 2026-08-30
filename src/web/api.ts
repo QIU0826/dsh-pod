@@ -173,7 +173,7 @@ export async function fetchMissions(): Promise<MissionSummary[]> {
 /** 历史会话归档快照（对话流/任务/槽位/审批/账本回看）。 */
 export interface MissionArchive {
   mission: { id: string; name: string; goal: string; status: string; budget_usd: number; budget_tokens?: number | null; spent_tokens: number; spent_equiv_usd: number; created_at: number }
-  tasks: StatusTask[]
+  tasks: Array<StatusTask & { spec?: string }>
   slots: StatusSlot[]
   approvals: Array<{ id: string; status: string; decided_at: number | null; task_id: string | null; summary: string; worktree_path: string; kind: string }>
   ledger: {
@@ -219,6 +219,8 @@ export interface LaunchPayload {
   budget_usd: number
   /** token 预算上限（可选，方案书 2.3 节⑤）。 */
   budget_tokens?: number
+  /** 并行执行上限（1-8）。 */
+  parallel?: number
   slots: Array<{ id: string; vendor: string; role: string; capabilities: string[]; model?: string }>
 }
 

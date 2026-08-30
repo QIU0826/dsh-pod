@@ -179,6 +179,8 @@ export interface ChatViewProps {
   onViewApproval: (id: string) => void
   onDispatch: () => void
   onAbort: () => void
+  /** 打开该任务的上下文查看器（Context Builder）。 */
+  onOpenContext: (taskId: string) => void
   /** 暂停 / 恢复：此前只在 pod_pause / pod_resume 工具面可达，HTTP 与 UI 都没有入口。 */
   onPause: () => void
   onResume: () => void
@@ -193,13 +195,14 @@ const SIDE_MIN = 232
 const SIDE_MAX = 480
 
 export function ChatView(props: ChatViewProps): ReactElement {
-  const { live, mission, tasks, slots, events, ledger, ledgerByStage, pendingApprovals, userMessages, answered, settings, selectedSlot, onSelectSlot, onSend, onAnswer, onApprove, onViewApproval, onDispatch, onAbort, onPause, onResume, canPause, isPaused, onNewSession } = props
+  const { live, mission, tasks, slots, events, ledger, ledgerByStage, pendingApprovals, userMessages, answered, settings, selectedSlot, onSelectSlot, onSend, onAnswer, onApprove, onViewApproval, onDispatch, onAbort, onOpenContext, onPause, onResume, canPause, isPaused, onNewSession } = props
   const [draft, setDraft] = useState('')
   const [dismissed, setDismissed] = useState<Set<string>>(new Set())
   const [modalChoice, setModalChoice] = useState<'continue' | 'clarify' | 'escalate'>('continue')
   const [clarify, setClarify] = useState('')
   const [sideWidth, setSideWidth] = useState(288)
   const [sideOpen, setSideOpen] = useState(true)
+  const [, setHeartbeat] = useState(0)
   const drag = useRef<{ startX: number; startW: number } | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
@@ -214,6 +217,12 @@ export function ChatView(props: ChatViewProps): ReactElement {
     // 可选调用降级为「不滚动」，不能因为一个视觉效果让会话视图整体挂掉。
     bottomRef.current?.scrollIntoView?.({ block: 'end' })
   }, [visible.length])
+
+  // 1s 心跳：活动卡耗时计时（事件粒度 2s，本地补 1s）
+  useEffect(() => {
+    const t = setInterval(() => setHeartbeat((n) => n + 1), 1000)
+    return () => clearInterval(t)
+  }, [])
 
   // 侧面板拖拽调宽（window 级 pointermove）
   useEffect(() => {
@@ -395,6 +404,24 @@ export function ChatView(props: ChatViewProps): ReactElement {
             }, '提交答复'))))
     : null
 
+  // 活动推导：槽位 → 当前任务 + 最近工具 + 开始时刻（Context Builder 入口在活动卡上）
+  const startedAt = new Map<string, number>()
+  const lastTool = new Map<string, { tool: string; ts: number }>()
+  for (const e of events) {
+    if ((e.kind === 'task_started' || e.kind === 'task_dispatched') && e.task_id !== undefined) {
+      startedAt.set(e.task_id, e.ts)
+    } else if (e.kind === 'worker_progress' && e.slot_id !== undefined) {
+      const p = e.payload as { kind?: string; tool?: string }
+      if (p.kind === 'tool_call' && p.tool !== undefined) lastTool.set(e.slot_id, { tool: p.tool, ts: e.ts })
+    }
+  }
+  const currentTaskOf = (slotId: string): StatusTask | undefined =>
+    tasks.find((t) => t.owner === slotId && (t.status === 'running' || t.status === 'dispatched'))
+  const fmtElapsed = (ms: number): string => {
+    const sec = Math.max(0, Math.floor(ms / 1000))
+    return sec >= 60 ? `${Math.floor(sec / 60)}m${String(sec % 60).padStart(2, '0')}s` : `${sec}s`
+  }
+
   const target = live && mission !== null ? (selectedSlot.length > 0 ? selectedSlot : slots[0]?.id ?? '') : ''
   const budgetTokens = mission?.budget_tokens ?? null
   const unlimited = budgetTokens === null || budgetTokens <= 0
@@ -441,6 +468,17 @@ export function ChatView(props: ChatViewProps): ReactElement {
         ? createElement('div', { className: 'dsh-hint' }, '（无名册）')
         : slots.map((s) => {
             const busy = s.status === 'working' || s.status === 'running' || s.status === 'dispatched'
+            const cur = currentTaskOf(s.id)
+            const tool = lastTool.get(s.id)
+            const startTs = cur !== undefined ? startedAt.get(cur.id) : undefined
+            const elapsed = startTs !== undefined ? Date.now() - startTs : 0
+            const ctxBtn = cur !== undefined
+              ? createElement('span', {
+                  className: 'ctx', role: 'button', tabIndex: 0,
+                  onClick: (e: { stopPropagation: () => void }) => { e.stopPropagation(); onOpenContext(cur.id) },
+                  title: '查看发给该 agent 的完整上下文（Context Builder）',
+                }, '上下文')
+              : null
             return createElement('button', {
               key: s.id, className: selectedSlot === s.id ? 'dsh-slotrow on' : 'dsh-slotrow', type: 'button',
               onClick: () => onSelectSlot(s.id), title: live ? '点选为指令目标' : undefined,
@@ -448,8 +486,14 @@ export function ChatView(props: ChatViewProps): ReactElement {
               Avatar(s.avatar, s.status, 26),
               createElement('span', { className: busy ? 'dsh-dot on' : s.status === 'error' ? 'dsh-dot err' : 'dsh-dot' }),
               createElement('span', { className: 'grow' },
-                createElement('div', { className: 't1' }, `${shortSlotId(s.id)} · ${s.vendor}`),
-                createElement('div', { className: 't2' }, `${s.role} · ${SLOT_LABEL[s.status] ?? s.status}`)))
+                createElement('div', { className: 't1' }, `${shortSlotId(s.id)} · ${s.vendor} · ${s.role}`),
+                createElement('div', { className: 't2' }, `${SLOT_LABEL[s.status] ?? s.status}${cur !== undefined ? ` · ${cur.id} ${cur.title.slice(0, 14)}` : ''}`),
+                cur !== undefined
+                  ? createElement('span', { className: 'dsh-actline' },
+                      busy && tool !== undefined ? createElement('span', { className: 'tool' }, `⚒ ${tool.tool}`) : null,
+                      createElement('span', { className: 'el' }, fmtElapsed(elapsed)),
+                      ctxBtn)
+                  : null))
           })),
     live && mission !== null
       ? createElement('div', null,

@@ -1106,6 +1106,14 @@ describe('P1 规划层（goal → DAG 智能分解，AgentScope DAGPlanExecutor 
     expect(fixture.store.getTask('T-2')!.status).toBe('done')
     expect(summary.status).toBe('awaiting_approval')
     expect(fixture.store.listEvents('M-1').some((e) => e.kind === 'plan_expanded')).toBe(true)
+    // Context Builder：每次派发落 task_context 事件（实际发给 agent 的完整上下文）
+    const ctxEvents = fixture.store.listEvents('M-1').filter((e) => e.kind === 'task_context')
+    expect(ctxEvents.length).toBeGreaterThanOrEqual(3) // 每次派发一条（P-1 + 实现任务；重派也各落一条）
+    const ctxPayload = ctxEvents[0]!.payload as { spec?: string; to_slot?: string; base_length?: number; final_length?: number }
+    expect(typeof ctxPayload.spec).toBe('string')
+    expect(ctxPayload.spec!.length).toBeGreaterThan(0)
+    expect(ctxPayload.to_slot).toContain('S-')
+    expect(ctxPayload.final_length).toBeGreaterThanOrEqual(ctxPayload.base_length ?? 0)
     // 回归（审批 diff 实证）：plan 任务（无 commit）不得成为合并单元——primary 必须
     // 是带 commit 的实现任务，否则审批卡 base/head 缺失、详情页无 diff 可审
     const pending = fixture.store.listApprovals('M-1').find((a) => a.status === 'pending')

@@ -780,7 +780,7 @@ export class PodService {
   /** 单个 mission 归档快照（历史会话回看：对话流/任务/槽位/审批/账本）。 */
   missionArchive(missionId: string): {
     mission: { id: string; name: string; goal: string; status: Mission['status']; budget_usd: number; budget_tokens: number | null; spent_tokens: number; spent_equiv_usd: number; created_at: number }
-    tasks: Array<{ id: string; title: string; type: string; status: string; fault: string | null; attempts: number; owner: string | null; commit: string | null; depends_on: string[] }>
+    tasks: Array<{ id: string; title: string; type: string; status: string; fault: string | null; attempts: number; owner: string | null; commit: string | null; depends_on: string[]; spec: string }>
     slots: Array<{ id: string; role: string; vendor: string; status: string; ctx_usage_pct: number; avatar: string | null }>
     approvals: Array<{ id: string; status: string; decided_at: number | null; task_id: string | null; summary: string; worktree_path: string; kind: string }>
     ledger: { total_tokens: number; total_equiv_usd: number; entries: Array<{ model: string; tokens_in: number; tokens_out: number; equiv_usd: number; ts: number }>; by_stage: Record<string, { tokens: number; equiv_usd: number; entries: number }> }
@@ -800,6 +800,7 @@ export class PodService {
       tasks: this.store.listTasks(missionId).map((t) => ({
         id: t.id, title: t.title, type: t.type, status: t.status, fault: t.fault ?? null,
         attempts: t.attempts, owner: t.owner_slot_id ?? null, commit: t.commit_sha?.slice(0, 8) ?? null, depends_on: t.depends_on,
+        spec: t.spec.slice(0, 4_000),
       })),
       slots: this.store.listSlots(missionId).map((s) => ({ id: s.id, role: s.role, vendor: s.vendor, status: s.status, ctx_usage_pct: s.ctx_usage_pct, avatar: s.avatar ?? null })),
       approvals: this.store.listApprovals(missionId).map((a) => ({

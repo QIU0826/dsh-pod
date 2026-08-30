@@ -50,6 +50,8 @@ export interface ConsoleSettings {
   /** 预算模式：不限 / Token 上限（token 是主计价单位）。 */
   budgetMode: BudgetMode
   budgetTokens: string
+  /** 并行执行上限（1-8；更高 = 更快但 token 消耗更集中）。 */
+  parallel: string
   roster: RosterMember[]
   density: Density
   defaultView: 'chat' | 'board' | 'dag'
@@ -61,6 +63,7 @@ export const DEFAULT_SETTINGS: ConsoleSettings = {
   budgetUsd: '3',
   budgetMode: 'tokens',
   budgetTokens: '2000000',
+  parallel: '2',
   roster: DEFAULT_ROSTER,
   density: 'standard',
   defaultView: 'chat',

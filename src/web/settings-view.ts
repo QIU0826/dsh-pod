@@ -124,6 +124,14 @@ export function SettingsView(props: SettingsViewProps): ReactElement {
                 type: 'button', className: draft.budgetMode === 'tokens' ? 'on' : '',
                 onClick: () => patch({ budgetMode: 'tokens' }),
               }, 'Token 上限'))),
+          createElement('div', { className: 'dsh-form-row', key: 'parallel' },
+            createElement('span', { className: 'dsh-label' }, '并行执行上限（速度 × 成本）'),
+            createElement('div', { className: 'dsh-seg', role: 'group', 'aria-label': '并行执行上限' },
+              ['1', '2', '4', '8'].map((n) => createElement('button', {
+                key: n, type: 'button', className: draft.parallel === n ? 'on' : '',
+                onClick: () => patch({ parallel: n }),
+              }, `${n} 路`))),
+            createElement('span', { className: 'dsh-hint' }, '同时执行的 agent 任务数。并行越高墙钟越快，但 token 消耗与出错重试成本同步上升；2-4 适合多数仓库。')),
           draft.budgetMode === 'tokens'
             ? createElement('div', { className: 'dsh-form-row', key: 'tokens' },
                 createElement('label', { className: 'dsh-label', htmlFor: 'set-tokens' }, '会话 Token 上限'),

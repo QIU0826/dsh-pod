@@ -95,6 +95,21 @@ describe('validateLaunch（Team Builder 提交校验）', () => {
     expect(fallback.value.budgetUsd).toBe(3)
   })
 
+  it('parallel：1-8 整数透传，非法值忽略（引擎默认）', () => {
+    const ok = validateLaunch({ name: 'm', goal: 'g', cwd: 'x', parallel: 4, slots: [{ id: 's', vendor: 'claude', role: 'r' }] })
+    expect(ok.ok).toBe(true)
+    if (!ok.ok) return
+    expect(ok.value.parallel).toBe(4)
+    const clamped = validateLaunch({ name: 'm', goal: 'g', cwd: 'x', parallel: 99, slots: [{ id: 's', vendor: 'claude', role: 'r' }] })
+    expect(clamped.ok).toBe(true)
+    if (!clamped.ok) return
+    expect(clamped.value.parallel).toBe(8)
+    const bad = validateLaunch({ name: 'm', goal: 'g', cwd: 'x', parallel: 'fast', slots: [{ id: 's', vendor: 'claude', role: 'r' }] })
+    expect(bad.ok).toBe(true)
+    if (!bad.ok) return
+    expect(bad.value.parallel).toBeUndefined()
+  })
+
   it('缺 goal / 未知 vendor / 空 slots → 422 校验失败', () => {
     expect(validateLaunch({ name: 'm', cwd: 'x', slots: [] }).ok).toBe(false)
     expect(validateLaunch({ name: 'm', goal: 'g', cwd: 'x', slots: [{ id: 's', vendor: 'grok', role: 'r' }] }).ok).toBe(false)

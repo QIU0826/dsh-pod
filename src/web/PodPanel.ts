@@ -58,6 +58,7 @@ export function PodPanel(): ReactElement {
   const [answered, setAnswered] = useState<Set<string>>(new Set())
   const [selectedSlot, setSelectedSlot] = useState('')
   const [approvalId, setApprovalId] = useState('')
+  const [ctxTaskId, setCtxTaskId] = useState('')
   const lastEventId = useRef('')
 
   const activeId = status?.mission?.id ?? ''
@@ -198,6 +199,7 @@ export function PodPanel(): ReactElement {
         // token 主计价：两种模式美元闸都放开（0 = 不限语义），token 模式另设 token 闸
         budget_usd: 0,
         budget_tokens: settings.budgetMode === 'tokens' && Number(settings.budgetTokens) > 0 ? Number(settings.budgetTokens) : undefined,
+        parallel: Number(settings.parallel) >= 1 ? Math.min(8, Number(settings.parallel)) : undefined,
         slots: rosterToSlots(settings.roster),
       }))
       return
@@ -331,6 +333,7 @@ export function PodPanel(): ReactElement {
                 onApprove: handleApprove,
                 onViewApproval: (id) => { setApprovalId(id); setView('approval') },
                 onDispatch: () => void runAction(() => postDispatch()),
+                onOpenContext: (taskId: string) => setCtxTaskId(taskId),
                 // 暂停/恢复只对活跃会话有意义（历史回放时编排器已释放）
                 canPause: isLive && mission !== null && mission.status !== 'done' && mission.status !== 'aborted',
                 isPaused: mission?.status === 'paused',
@@ -345,6 +348,7 @@ export function PodPanel(): ReactElement {
                   tasks, slots,
                   onDispatch: () => void runAction(() => postDispatch()),
                   onRefresh: () => { void poll(); void pollMissions() },
+                  onOpenContext: (taskId: string) => setCtxTaskId(taskId),
                   onAddTask: (title, type) => void runAction(async () => {
                     await fetch('/api/dsh-pod/plan', {
                       method: 'POST',
@@ -362,5 +366,31 @@ export function PodPanel(): ReactElement {
                       onApprove: (id, remember) => { void runAction(() => postApprove(id, undefined, remember)); setView('chat') },
                       onDeny: handleDeny,
                     })
-                  : createElement(SettingsView, { settings, onSave: updateSettings }))))
+                  : createElement(SettingsView, { settings, onSave: updateSettings })),
+    ctxTaskId.length > 0
+      ? (() => {
+          const ctxEvents = events.filter((e) => e.kind === 'task_context' && e.task_id === ctxTaskId)
+          const ev = ctxEvents[ctxEvents.length - 1]
+          const task = tasks.find((t) => t.id === ctxTaskId)
+          const p = (ev?.payload ?? {}) as { spec?: string; base_length?: number; final_length?: number; review_injected?: boolean; steer_injected?: boolean }
+          const spec = p.spec ?? (archive?.tasks.find((t) => t.id === ctxTaskId)?.spec ?? '')
+          return createElement('div', { className: 'dsh-overlay', role: 'dialog', 'aria-modal': 'true', onClick: (e: { target: Element; currentTarget: Element }) => { if (e.target === e.currentTarget) setCtxTaskId('') } },
+            createElement('div', { className: 'dsh-modal', style: { maxWidth: 760 } },
+              createElement('div', { className: 'dsh-modal-header' },
+                createElement('div', { className: 'dsh-modal-badge' }, Icon('fileText', 19)),
+                createElement('div', null,
+                  createElement('div', { className: 'dsh-modal-title' }, `任务上下文 · ${ctxTaskId}`),
+                  createElement('div', { className: 'dsh-hint' },
+                    `${task?.title ?? ''} · 基础规格 ${p.base_length ?? spec.length} 字符` +
+                    (p.final_length !== undefined ? ` → 注入后 ${p.final_length}` : '') +
+                    (p.review_injected === true ? ' · 已注入审查上下文' : '') +
+                    (p.steer_injected === true ? ' · 已注入排队指令' : '')))),
+              createElement('div', { className: 'dsh-modal-body' },
+                spec.length > 0
+                  ? createElement('pre', { className: 'dsh-ctxspec' }, spec)
+                  : createElement('span', { className: 'dsh-hint' }, '（无落盘上下文——该任务派发于上下文记录上线前，或尚未派发）')),
+              createElement('div', { className: 'dsh-modal-footer', style: { display: 'flex', gap: 8 } },
+                createElement('button', { className: 'dsh-btn ghost', type: 'button', style: { width: 'auto', flex: 1 }, onClick: () => setCtxTaskId('') }, '关闭'))))
+        })()
+      : null))
 }

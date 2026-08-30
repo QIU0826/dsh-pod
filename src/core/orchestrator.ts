@@ -665,6 +665,24 @@ export class MissionOrchestrator {
     }
 
     const enriched: Task = { ...task, spec }
+    // Context Builder 落盘：把「实际发给该 agent 的完整上下文」存为事件——
+    // 前端上下文查看器的唯一事实源（base 规格 + 审查注入 + steer 注入，按段落可辨）
+    this.store.appendEvent(this.missionId, {
+      id: `ev-ctx-${task.id}-${this.clock()}`,
+      mission_id: this.missionId,
+      ts: this.clock(),
+      kind: 'task_context',
+      task_id: task.id,
+      slot_id: slot.id,
+      payload: {
+        to_slot: slot.id,
+        spec: spec.slice(0, 8_000),
+        base_length: task.spec.length,
+        final_length: spec.length,
+        review_injected: task.type === 'review',
+        steer_injected: queued.length > 0,
+      },
+    })
     this.taskMachine.dispatch(task.id, slot.id)
     this.taskMachine.start(task.id)
     // DoD-19：新派发 = 新 reply（重置聚合游标）

@@ -403,6 +403,12 @@ export const CONSOLE_CSS = `
 /* ── 流式输出 / 传信行 / 侧面板拖拽 ───────── */
 .dsh-caret { display: inline-block; width: 2px; height: 1em; margin-left: 3px; vertical-align: -2px; background: var(--primary); animation: dsh-caret-blink 0.9s steps(1) infinite; }
 @keyframes dsh-caret-blink { 0%, 55% { opacity: 1; } 56%, 100% { opacity: 0; } }
+.dsh-actline { display: inline-flex; align-items: center; gap: 8px; margin-top: 3px; font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.dsh-actline .tool { color: var(--primary); max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsh-actline .el { flex: none; }
+.dsh-actline .ctx { color: var(--primary); cursor: pointer; border-bottom: 1px dotted var(--primary); }
+.dsh-actline .ctx:hover { color: var(--ink); border-color: var(--ink); }
+.dsh-ctxspec { max-height: 56vh; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; font-family: var(--mono); font-size: 11.5px; line-height: 1.6; color: var(--ink-2); white-space: pre-wrap; word-break: break-word; margin: 0; }
 .dsh-toolline {
   align-self: flex-start; display: flex; align-items: center; gap: 8px; max-width: 60%;
   font-family: var(--mono); font-size: 11px; color: var(--ink-3);
