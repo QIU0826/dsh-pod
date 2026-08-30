@@ -19,8 +19,9 @@ import { allowsJsonBody } from './core/http-guard.js'
 import { NotFoundError } from './core/errors.js'
 import { browseDirectories } from './core/fs-browse.js'
 import type { PlanTaskInput } from './core/orchestrator.js'
+import { buildAgentCard, internalEventToA2a, isFinalA2aEvent, missionToA2aTask } from './core/a2a.js'
 import { AGENT_AVATARS, UNLIMITED_BUDGET_USD } from './core/types.js'
-import type { TaskType, Vendor } from './core/types.js'
+import type { PodEvent, TaskType, Vendor } from './core/types.js'
 
 /** SSE 帧格式化（AgentScope-I / EV-2：replay 优先 + live 增量；测试可断言纯函数）。 */
 export function formatSseFrame(
@@ -104,6 +105,141 @@ export function validateLaunch(body: LaunchRouteBody): { ok: true; value: { name
   const budgetTokens = typeof body.budget_tokens === 'number' && body.budget_tokens > 0 ? body.budget_tokens : undefined
   const parallel = typeof body.parallel === 'number' && Number.isInteger(body.parallel) && body.parallel >= 1 ? Math.min(8, body.parallel) : undefined
   return { ok: true, value: { name: body.name, goal: body.goal, cwd: body.cwd, budgetUsd, budgetTokens, parallel, slots, plan: body.plan } }
+}
+
+/** A2A 对外基址（loopback-only 部署的固定形态）。 */
+const A2A_BASE_URL = 'http://127.0.0.1:3930'
+
+/** A2A 调用方未指定名册时的默认员工面（实现 + 独立审查，质量门默认开）。 */
+const A2A_DEFAULT_SLOTS: Array<{ id: string; vendor: Vendor; role: string; capabilities: string[] }> = [
+  { id: 'S-1', vendor: 'claude', role: '实现工程师', capabilities: ['实现', '测试'] },
+  { id: 'S-2', vendor: 'claude', role: '审查员', capabilities: ['审查', '文档'] },
+]
+
+/** A2A 消息体 → launch 入参（message.parts[].text 提取 + configuration 透传校验）。 */
+export function parseA2aBody(
+  body: Record<string, unknown> | undefined,
+): { ok: true; value: { goal: string; launchBody: LaunchRouteBody } } | { ok: false; error: string } {
+  const message = body?.message
+  let text = ''
+  if (message !== null && typeof message === 'object') {
+    const m = message as { parts?: unknown; text?: unknown }
+    if (Array.isArray(m.parts)) {
+      text = m.parts
+        .filter((p): p is { text: string } => typeof p === 'object' && p !== null && typeof (p as { text?: unknown }).text === 'string')
+        .map((p) => p.text)
+        .join('\n')
+    } else if (typeof m.text === 'string') {
+      text = m.text
+    }
+  }
+  if (text.trim().length === 0 && typeof body?.text === 'string') text = body.text
+  if (text.trim().length === 0) return { ok: false, error: 'message.parts[].text is required' }
+  const cfg = (body?.configuration ?? {}) as Record<string, unknown>
+  const slots = Array.isArray(cfg.slots) && cfg.slots.length > 0 ? cfg.slots : A2A_DEFAULT_SLOTS
+  return {
+    ok: true,
+    value: {
+      goal: text,
+      launchBody: {
+        name: typeof cfg.name === 'string' && cfg.name.length > 0 ? cfg.name : `A2A-${Date.now()}`,
+        goal: text,
+        cwd: typeof cfg.cwd === 'string' ? cfg.cwd : '',
+        budget_usd: typeof cfg.budget_usd === 'number' ? cfg.budget_usd : undefined,
+        parallel: typeof cfg.parallel === 'number' ? cfg.parallel : undefined,
+        slots,
+      },
+    },
+  }
+}
+
+/**
+ * A2A sendMessage / sendMessageStream 公共处理：
+ * 消息 → launch mission（A2A Task = mission）→ 非流式回 Task 快照；
+ * 流式转 SSE：首帧 Task 快照，后续 internalEventToA2a 映射的 status/artifact 增量，
+ * 终态（mission done/denied/aborted、预算短路）后收口。
+ */
+async function handleA2aSend(
+  req: IncomingMessage,
+  res: ServerResponse,
+  service: () => PodService | undefined,
+  opts: { stream: boolean; jsonRpcId?: unknown },
+): Promise<void> {
+  if (!isLoopback(req)) {
+    writeJson(res, 403, { error: 'forbidden: loopback-only' })
+    return
+  }
+  const current = service()
+  if (current === undefined) {
+    writeJson(res, 503, { error: 'pod runtime not initialized' })
+    return
+  }
+  const body = await readJsonBody(req)
+  const params = body !== undefined && body.params !== null && typeof body.params === 'object'
+    ? (body.params as Record<string, unknown>)
+    : body
+  const parsed = parseA2aBody(params)
+  if (!parsed.ok) {
+    writeJson(res, 422, { jsonrpc: '2.0', id: opts.jsonRpcId ?? null, error: { code: -32602, message: parsed.error } })
+    return
+  }
+  const validated = validateLaunch(parsed.value.launchBody)
+  if (!validated.ok) {
+    writeJson(res, 422, { jsonrpc: '2.0', id: opts.jsonRpcId ?? null, error: { code: -32602, message: validated.error } })
+    return
+  }
+  let mission
+  try {
+    mission = current.launch({ ...validated.value, plan: undefined })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    writeJson(res, 409, { jsonrpc: '2.0', id: opts.jsonRpcId ?? null, error: { code: -32000, message } })
+    return
+  }
+  const snapshot = missionToA2aTask(mission, parsed.value.goal)
+  if (!opts.stream) {
+    writeJson(res, 200, opts.jsonRpcId !== undefined ? { jsonrpc: '2.0', id: opts.jsonRpcId, result: snapshot } : snapshot)
+    return
+  }
+  // 流式：SSE（首帧 Task 快照 → status/artifact 增量 → 终态收口）
+  res.writeHead(200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-store',
+    connection: 'keep-alive',
+  })
+  res.write(`data: ${JSON.stringify(snapshot)}\n\n`)
+  let lastId = ''
+  let closed = false
+  const finish = (): void => {
+    closed = true
+    clearInterval(timer)
+    if (!res.writableEnded) res.end()
+  }
+  const pushInternal = (events: Array<{ id: string; ts: number; kind: string; mission_id?: string; task_id?: string; slot_id?: string; payload: Record<string, unknown> }>): void => {
+    for (const event of events) {
+      if (closed || res.writableEnded) return
+      lastId = event.id
+      for (const mapped of internalEventToA2a(event as PodEvent)) {
+        res.write(`data: ${JSON.stringify(mapped)}\n\n`)
+        if (isFinalA2aEvent(mapped)) {
+          finish()
+          return
+        }
+      }
+    }
+  }
+  // replay 全量（mission 刚建，事件很少）再 1s 增量轮询（与 /events/stream 同源机制）
+  pushInternal(current.eventsAfter(0))
+  const timer = setInterval(() => {
+    if (closed) return
+    try {
+      pushInternal(lastId.length > 0 ? current.eventsAfter(0, lastId) : current.eventsAfter(0))
+    } catch {
+      /* 读取异常：保持连接，下轮重试 */
+    }
+  }, 1_000)
+  req.on('close', finish)
+  res.on('close', finish)
 }
 
 export function makePodRoutes(service: () => PodService | undefined): WebRoute[] {
@@ -801,6 +937,115 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
           console.error('[dsh-pod] route handler failed:', error)
           writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
         }
+      },
+    },
+    {
+      // 任务级暂停（任务生命周期 InProgress→Paused）：终止在途进程，不消费 attempts。
+      kind: 'exact',
+      path: '/api/dsh-pod/task/pause',
+      handler: async (req, res) => {
+        if (!isLoopback(req)) {
+          writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        const current = service()
+        if (current === undefined) {
+          writeJson(res, 503, { error: 'pod runtime not initialized' })
+          return
+        }
+        const body = await readJsonBody(req)
+        if (typeof body?.task_id !== 'string' || body.task_id.length === 0) {
+          writeJson(res, 422, { error: 'task_id is required' })
+          return
+        }
+        try {
+          await current.pauseTask(body.task_id)
+          writeJson(res, 200, { ok: true, task_id: body.task_id, status: 'paused' })
+        } catch (error) {
+          console.error('[dsh-pod] route handler failed:', error)
+          writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
+      // 任务级恢复（Paused→ready→重新协商派发，可能换 agent）。
+      kind: 'exact',
+      path: '/api/dsh-pod/task/resume',
+      handler: async (req, res) => {
+        if (!isLoopback(req)) {
+          writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        const current = service()
+        if (current === undefined) {
+          writeJson(res, 503, { error: 'pod runtime not initialized' })
+          return
+        }
+        const body = await readJsonBody(req)
+        if (typeof body?.task_id !== 'string' || body.task_id.length === 0) {
+          writeJson(res, 422, { error: 'task_id is required' })
+          return
+        }
+        try {
+          current.resumeTask(body.task_id)
+          writeJson(res, 200, { ok: true, task_id: body.task_id, status: 'ready' })
+        } catch (error) {
+          console.error('[dsh-pod] route handler failed:', error)
+          writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
+      // A2A Agent Card（发现端点）：名册即技能表；无活跃 mission 时给默认技能面。
+      kind: 'exact',
+      path: '/.well-known/agent-card',
+      handler: async (_req, res) => {
+        const current = service()
+        const roster =
+          current !== undefined
+            ? current.status().slots.map((s) => ({ id: s.id, role: s.role, capabilities: s.capabilities, vendor: s.vendor, model: s.model }))
+            : []
+        const slots = roster.length > 0 ? roster : A2A_DEFAULT_SLOTS.map((s) => ({ ...s, model: '' }))
+        writeJson(res, 200, buildAgentCard({ baseUrl: A2A_BASE_URL, slots }))
+      },
+    },
+    {
+      // A2A sendMessage（非流式）：消息 → mission 受理，返回 A2A Task 快照。
+      kind: 'exact',
+      path: '/a2a/sendMessage',
+      handler: async (req, res) => {
+        await handleA2aSend(req, res, service, { stream: false })
+      },
+    },
+    {
+      // A2A sendMessageStream（流式）：任务快照 + status/artifact 增量直至终态。
+      kind: 'exact',
+      path: '/a2a/sendMessageStream',
+      handler: async (req, res) => {
+        await handleA2aSend(req, res, service, { stream: true })
+      },
+    },
+    {
+      // A2A JSON-RPC 分发（协议官方形态）：method = message/send | message/stream。
+      kind: 'exact',
+      path: '/a2a',
+      handler: async (req, res) => {
+        const current = service()
+        if (current === undefined) {
+          writeJson(res, 503, { error: 'pod runtime not initialized' })
+          return
+        }
+        if (!isLoopback(req)) {
+          writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        const body = await readJsonBody(req)
+        const method = typeof body?.method === 'string' ? body.method : ''
+        if (method !== 'message/send' && method !== 'message/stream') {
+          writeJson(res, 400, { jsonrpc: '2.0', id: body?.id ?? null, error: { code: -32601, message: `method not found: ${method}` } })
+          return
+        }
+        await handleA2aSend(req, res, service, { stream: method === 'message/stream', jsonRpcId: body?.id ?? null })
       },
     },
   ]

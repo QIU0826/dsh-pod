@@ -167,6 +167,8 @@ curl -X POST -H "content-type: application/json" -d '{"text":"批准 A-1 合并"
 | 多机 Satellite（方案书 594 行，CR-30） | ✅ 已实现 | `src/workers/remote-backend.ts`（RemoteBackend，protocol.family='remote'）+ `src/workers/satellite-server.ts`（卫星端点 /detect /start /events /kill /health + StubBackend）+ `scripts/satellite-worker.mjs`；[docs/satellite.md](docs/satellite.md)（多机真机部署仍属部署关注） |
 | 外部协作通道（Berd-H / AgentScope-J，CR-31） | ⚠️ 库已备，**服务面未接线** | `src/core/channel.ts`（parseInstruction + handleChannelCommand + sanitizeOutboundSignal；审批不绕过门、凭据不出会话）+ `src/core/channel-im.ts`（Slack / 飞书 vendor adapter：HMAC 验签 + 时间窗防重放 + 飞书明文模式 verification token 鉴权 + 事件 id 重放去重 + 挑战握手 + 出站净化，16 例单测）。**尚未接入任何 HTTP 端点/服务装配**（`scripts/channel-http-server.mjs` 未引用它）——接线属后续计划 |
 | MCP Gateway（AgentScope-J） | ⚠️ 库已备，**服务面未接线** | `src/core/mcp-gateway.ts`——Pod 作为 MCP **客户端**聚合多个下游 server（与「Pod 暴露为 server」互补）：工具名 `serverId__toolName` 命名空间隔离（serverId 非法即构造失败）、写类工具过审批门（**未接线审批钩子时 gated 工具一律拒绝**，fail-closed）、输出截断防灌爆上下文、调用审计；13 例单测。**尚未接入 PodService/编排层**——接线属后续计划 |
+| 任务生命周期状态机（A2A 对齐） | ✅ 已实现 | `task-machine.ts`：ready→negotiating→accepted→dispatched/running⇄paused→done/blocked/rejected/escalated。协商是真实裁决（vendor 健康探测 + 预算构成接受基础，TTL 缓存；谢绝换人 failover；全员谢绝→rejected 转人工）；任务级暂停/恢复不消费 attempts；18 例生命周期单测 |
+| A2A 对外协议面 | ✅ 已实现 | `GET /.well-known/agent-card`（名册即技能表）+ `POST /a2a/sendMessage`（消息→mission 受理，回 A2A Task 快照）+ `POST /a2a/sendMessageStream`（SSE：status/artifact 增量至终态）+ JSON-RPC `POST /a2a`（message/send / message/stream）；映射纯函数 `src/core/a2a.ts`（loopback-only，凭据不出协议面，未知事件不编造）；14 例单测 |
 
 ## 核心域层（src/core，全部纯逻辑 + 注入式副作用，可离线测试）
 

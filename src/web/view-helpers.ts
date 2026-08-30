@@ -43,10 +43,14 @@ export const TASK_TYPE_LABEL: Record<string, string> = {
 
 export const TASK_STATUS_LABEL: Record<string, string> = {
   ready: '待办',
+  negotiating: '协商中',
+  accepted: '已接受',
   dispatched: '执行中',
   running: '执行中',
+  paused: '已暂停',
   blocked: '受阻',
   done: '完成',
+  rejected: '已拒绝',
   escalated: '转人工',
 }
 

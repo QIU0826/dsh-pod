@@ -260,6 +260,7 @@ export const CONSOLE_CSS = `
 .dsh-task-card:hover { border-color: #30303f; transform: translateY(-1px); }
 .dsh-task-card.blocked { border-left: 3px solid var(--error); }
 .dsh-task-card.escalated { border-left: 3px solid var(--warning); }
+.dsh-task-card.paused { border-left: 3px solid #64748b; opacity: 0.85; }
 .dsh-task-card.done { opacity: .92; }
 .dsh-task-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .dsh-task-id { font-family: var(--mono); font-size: 12px; color: var(--ink-3); }

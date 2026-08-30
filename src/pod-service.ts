@@ -25,7 +25,7 @@ import type { PodStore } from './core/store.js'
 import { ClaudeHeadlessBackend } from './workers/claude-headless.js'
 import { CodexHeadlessBackend, codexBinaryCandidates } from './workers/codex-headless.js'
 import { ArkBackend } from './workers/ark-headless.js'
-import { repairPath } from './workers/preflight.js'
+import { envCredentialPresent, repairPath } from './workers/preflight.js'
 import { CronScheduler, type CronJob } from './core/cron.js'
 import type { ChannelTarget } from './core/channel.js'
 import type { ApprovalRequest, ApprovalRule, AgentSlot, Handoff, LedgerEntry, MemoryRecord, MemoryRelation, Mission, PodEvent, Task, Vendor, WorkerBackend } from './core/types.js'
@@ -492,6 +492,16 @@ export class PodService {
     this.requireOrchestrator().resume()
   }
 
+  /** 任务级暂停（任务生命周期 InProgress→Paused）：终止在途进程但不消费 attempts。 */
+  async pauseTask(taskId: string): Promise<void> {
+    await this.requireOrchestrator().pauseTask(taskId)
+  }
+
+  /** 任务级恢复（Paused→ready→重新协商派发，可能换 agent）。 */
+  resumeTask(taskId: string): void {
+    this.requireOrchestrator().resumeTask(taskId)
+  }
+
   /** 转人工接管 + 恢复驱动（3.4 节）：人工裁决 escalated 任务后重新驱动 DAG。 */
   humanResolveAndResume(
     taskId: string,
@@ -552,6 +562,9 @@ export class PodService {
         return parts.join('\n\n') || '（无 diff 内容）'
       },
       clock: this.clock,
+      // 协商期 env 凭据兜底：`claude auth status` 对 env-token 中转（ANTHROPIC_BASE_URL
+      // + token）可能如实报未登录但实际可用——env 有该 vendor 凭据时不以「CLI 未登录」谢绝
+      credentialHint: (vendor) => envCredentialPresent(vendor),
       // P1 规划层：planner 提案落盘时同步写 plan.md（DoD-2 唯一事实源，跨重启可回溯）
       onPlanExpanded: (missionId, plan, sourceTaskId) => {
         const mission = this.store.getMission(missionId)

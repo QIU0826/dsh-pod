@@ -105,6 +105,28 @@ function buildThread(events: PodEvent[], userMessages: Array<{ id: string; ts: n
       case 'task_started':
         items.push({ k: 'sys', ts: e.ts, key: e.id, noise: 2, text: `${e.task_id} 开始执行` })
         break
+      case 'task_negotiation': {
+        // 协商三态（任务生命周期 Negotiating）：要约 → 接受 / 谢绝（谢绝后换人再协商）
+        const who = shortSlotId(typeof (p.to_slot ?? p.by_slot) === 'string' ? String(p.to_slot ?? p.by_slot) : undefined)
+        const phase = typeof p.phase === 'string' ? p.phase : ''
+        if (phase === 'offer') {
+          items.push({ k: 'relay', ts: e.ts, key: e.id, from: '编排', to: who, noise: 1, note: `要约 ${e.task_id ?? ''}（能力匹配 · 预算 ${String((p.terms as { est_usd?: number } | undefined)?.est_usd ?? '?')}）` })
+        } else if (phase === 'accepted') {
+          items.push({ k: 'sys', ts: e.ts, key: e.id, tone: 'ok', noise: 1, text: `🤝 ${who} 接受 ${e.task_id ?? ''}` })
+        } else {
+          items.push({ k: 'sys', ts: e.ts, key: e.id, tone: 'warn', noise: 1, text: `🚫 ${who} 谢绝 ${e.task_id ?? ''}（${String(p.reason ?? '')}）→ 换人协商` })
+        }
+        break
+      }
+      case 'task_rejected':
+        items.push({ k: 'sys', ts: e.ts, key: e.id, tone: 'warn', noise: 1, text: `⛔ ${e.task_id} 终局拒绝（全员谢绝：${String(p.reason ?? '')}）` })
+        break
+      case 'task_paused':
+        items.push({ k: 'sys', ts: e.ts, key: e.id, tone: 'warn', noise: 1, text: `⏸ ${e.task_id} 已暂停（在途进程已终止，不计故障）` })
+        break
+      case 'task_resumed':
+        items.push({ k: 'sys', ts: e.ts, key: e.id, noise: 1, text: `▶️ ${e.task_id} 已恢复，重新协商派发` })
+        break
       case 'task_done':
         items.push({ k: 'sys', ts: e.ts, key: e.id, tone: 'ok', noise: 1, text: `✓ ${e.task_id} 完成` })
         break

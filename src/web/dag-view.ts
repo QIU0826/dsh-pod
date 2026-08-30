@@ -16,7 +16,11 @@ const STROKE: Record<string, string> = {
   done: 'var(--success)',
   running: 'var(--primary)',
   dispatched: 'var(--primary)',
+  negotiating: '#8b5cf6',
+  accepted: '#8b5cf6',
+  paused: '#64748b',
   blocked: 'var(--error)',
+  rejected: 'var(--error)',
   escalated: 'var(--warning)',
 }
 
@@ -117,7 +121,7 @@ export function DagView(props: { tasks: StatusTask[] }): ReactElement {
     }),
     createElement('div', { className: 'dsh-float dsh-legend' },
       createElement('div', { style: { fontSize: 12, fontWeight: 600 } }, '图例'),
-      ['done|完成', 'running|执行中', 'blocked|受阻', 'escalated|转人工', 'ready|待办'].map((pair) => {
+      ['done|完成', 'running|执行中', 'negotiating|协商中', 'paused|已暂停', 'blocked|受阻', 'escalated|转人工', 'ready|待办'].map((pair) => {
         const parts = pair.split('|')
         const st = parts[0] ?? ''
         const label = parts[1] ?? ''

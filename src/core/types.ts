@@ -20,12 +20,23 @@ export type SlotStatus =
 /** review 是任务类型不是状态分支（D3）。 */
 export type TaskType = 'implement' | 'review' | 'plan' | 'test' | 'doc' | 'research'
 
+/**
+ * 任务生命周期状态机（A2A 对齐版）：
+ *   ready(Created) → negotiating(Negotiating) → accepted(Accepted) → dispatched/running(InProgress)
+ *   negotiating --拒绝--> （换人再协商；全员拒绝 → rejected 终态）
+ *   dispatched/running ⇄ paused(Paused)（恢复 = 重新协商派发）
+ *   running → done(Completed) | blocked(Failed·可重试) | escalated(Failed·转人工)
+ */
 export type TaskStatus =
   | 'ready'
+  | 'negotiating'
+  | 'accepted'
   | 'dispatched'
   | 'running'
+  | 'paused'
   | 'done'
   | 'blocked'
+  | 'rejected'
   | 'escalated'
 
 export type MissionStatus =
@@ -426,6 +437,13 @@ export const UNLIMITED_BUDGET_USD = 1_000_000_000
 
 /** 任务级墙钟默认上限（CR-01-6）。 */
 export const DEFAULT_MAX_WALL_CLOCK_MS = 60 * 60 * 1000
+
+/**
+ * 协商期 vendor 健康探测的缓存窗口：探测要拉起真实 CLI（claude auth status 等），
+ * 不能每次派发都付这笔延迟——同一 vendor 的健康结论在窗口内复用；
+ * worker 以 auth_expired 故障退出时缓存即刻失效（下一轮协商重探）。
+ */
+export const NEGOTIATION_HEALTH_TTL_MS = 10 * 60 * 1000
 
 /** 审批卡处理期限（CR-01-7）。 */
 export const APPROVAL_STALE_MS = 7 * 24 * 60 * 60 * 1000

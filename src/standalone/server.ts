@@ -139,7 +139,13 @@ export function createStandaloneServer(options: StandaloneOptions = {}): Standal
       serveStatic(res, pathname, staticDir)
       return
     }
-    if (!pathname.startsWith('/api/dsh-pod/')) {
+    // A2A 协议面路径（发现端点 + sendMessage/Stream + JSON-RPC）与既有 API 前缀并列放行
+    const isPodPath =
+      pathname.startsWith('/api/dsh-pod/') ||
+      pathname === '/.well-known/agent-card' ||
+      pathname === '/a2a' ||
+      pathname.startsWith('/a2a/')
+    if (!isPodPath) {
       res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' })
       res.end(JSON.stringify({ error: 'not found' }))
       return

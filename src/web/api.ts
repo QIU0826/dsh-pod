@@ -283,3 +283,13 @@ export function postResume(): Promise<{ ok: boolean; resumed: boolean }> {
 export function postResolve(taskId: string, outcome: 'done' | 'blocked', note?: string): Promise<{ ok: boolean; message?: string }> {
   return postJson('/api/dsh-pod/resolve', { task_id: taskId, outcome, note })
 }
+
+/** 任务级暂停（InProgress→Paused）：终止在途进程，不消费 attempts。 */
+export function postTaskPause(taskId: string): Promise<{ ok: boolean; task_id: string; status: string }> {
+  return postJson('/api/dsh-pod/task/pause', { task_id: taskId })
+}
+
+/** 任务级恢复（Paused→ready→重新协商派发，可能换 agent）。 */
+export function postTaskResume(taskId: string): Promise<{ ok: boolean; task_id: string; status: string }> {
+  return postJson('/api/dsh-pod/task/resume', { task_id: taskId })
+}

@@ -17,6 +17,8 @@ import {
   postDispatch,
   postLaunch,
   postPause,
+  postTaskPause,
+  postTaskResume,
   postResolve,
   postResume,
   postSteer,
@@ -349,6 +351,8 @@ export function PodPanel(): ReactElement {
                   onDispatch: () => void runAction(() => postDispatch()),
                   onRefresh: () => { void poll(); void pollMissions() },
                   onOpenContext: (taskId: string) => setCtxTaskId(taskId),
+                  onPauseTask: (taskId: string) => { void runAction(() => postTaskPause(taskId)); void poll() },
+                  onResumeTask: (taskId: string) => { void runAction(() => postTaskResume(taskId)); void poll() },
                   onAddTask: (title, type) => void runAction(async () => {
                     await fetch('/api/dsh-pod/plan', {
                       method: 'POST',
@@ -390,6 +394,18 @@ export function PodPanel(): ReactElement {
                   ? createElement('pre', { className: 'dsh-ctxspec' }, spec)
                   : createElement('span', { className: 'dsh-hint' }, '（无落盘上下文——该任务派发于上下文记录上线前，或尚未派发）')),
               createElement('div', { className: 'dsh-modal-footer', style: { display: 'flex', gap: 8 } },
+                task !== undefined && (task.status === 'negotiating' || task.status === 'accepted' || task.status === 'dispatched' || task.status === 'running')
+                  ? createElement('button', {
+                      className: 'dsh-btn ghost', type: 'button', style: { width: 'auto', flex: 1 },
+                      onClick: () => { void runAction(() => postTaskPause(ctxTaskId)); void poll() },
+                    }, '暂停该任务')
+                  : null,
+                task !== undefined && task.status === 'paused'
+                  ? createElement('button', {
+                      className: 'dsh-btn ghost', type: 'button', style: { width: 'auto', flex: 1 },
+                      onClick: () => { void runAction(() => postTaskResume(ctxTaskId)); void poll() },
+                    }, '恢复该任务')
+                  : null,
                 createElement('button', { className: 'dsh-btn ghost', type: 'button', style: { width: 'auto', flex: 1 }, onClick: () => setCtxTaskId('') }, '关闭'))))
         })()
       : null))

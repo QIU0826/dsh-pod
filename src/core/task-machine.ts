@@ -93,8 +93,10 @@ export function rateLimitBackoff(softAttempts: number, rng: () => number): numbe
   return Math.min(delay, RATE_LIMIT_BACKOFF_MAX_MS)
 }
 
-const RETRYABLE_FROM: ReadonlySet<TaskStatus> = new Set(['ready', 'blocked'])
+const OFFERABLE_FROM: ReadonlySet<TaskStatus> = new Set(['ready', 'blocked'])
+const DISPATCHABLE_FROM: ReadonlySet<TaskStatus> = new Set(['ready', 'blocked', 'accepted'])
 const FAILABLE_FROM: ReadonlySet<TaskStatus> = new Set(['dispatched', 'running'])
+const PAUSABLE_FROM: ReadonlySet<TaskStatus> = new Set(['negotiating', 'accepted', 'dispatched', 'running'])
 
 function event(missionId: string, kind: string, task: Task, payload: Record<string, unknown>, now: number): PodEvent {
   return {
@@ -139,12 +141,72 @@ export class TaskMachine {
     this.store.appendEvent(task.mission_id, event(task.mission_id, kind, task, payload, this.clock()))
   }
 
-  /** 派发（ready | 可重试的 blocked → dispatched）。429 退避期内的重试被拒绝。 */
+  /**
+   * 协商要约（Created → Negotiating）：把任务 offer 给槽位。
+   * 接受与否由编排层依据真实决策基础（能力匹配 + vendor 健康 + 预算）裁决后回调 accept/reject。
+   */
+  offer(taskId: string, slotId: string, terms: Record<string, unknown>): void {
+    const task = this.getTask(taskId)
+    const slot = this.getSlot(slotId)
+    if (!OFFERABLE_FROM.has(task.status)) {
+      throw new InvalidTransitionError(task.status, 'negotiating', 'only ready or retryable blocked tasks can enter negotiation')
+    }
+    if (task.status === 'blocked' && !this.shouldRetry(task, this.clock())) {
+      throw new InvalidTransitionError('blocked', 'negotiating', this.retryBlockReason(task))
+    }
+    if (slot.mission_id !== task.mission_id) {
+      throw new InvalidTransitionError(task.status, 'negotiating', 'slot belongs to another mission')
+    }
+    this.store.updateTask(this.missionId, taskId, {
+      status: 'negotiating',
+      owner_slot_id: slotId,
+      fault: undefined,
+      last_error: undefined,
+    })
+    this.emit(this.getTask(taskId), 'task_negotiation', { phase: 'offer', to_slot: slotId, terms })
+  }
+
+  /** 接受（Negotiating → Accepted）：agent 决策基础全过，落接受事件。 */
+  accept(taskId: string, basis: Record<string, unknown>): void {
+    const task = this.getTask(taskId)
+    if (task.status !== 'negotiating') {
+      throw new InvalidTransitionError(task.status, 'accepted', 'only a negotiating task can be accepted')
+    }
+    this.store.updateTask(this.missionId, taskId, { status: 'accepted' })
+    this.emit(this.getTask(taskId), 'task_negotiation', { phase: 'accepted', by_slot: task.owner_slot_id, basis })
+  }
+
+  /**
+   * 拒绝并换人（Negotiating → ready，清 owner）：该槽位谢绝要约，任务回到待派，
+   * 由编排层把该槽位排除后重新路由协商（failover）。
+   */
+  rejectBySlot(taskId: string, reason: string): void {
+    const task = this.getTask(taskId)
+    if (task.status !== 'negotiating') {
+      throw new InvalidTransitionError(task.status, 'ready', 'only a negotiating task can be rejected by slot')
+    }
+    const bySlot = task.owner_slot_id
+    this.store.updateTask(this.missionId, taskId, { status: 'ready', owner_slot_id: undefined })
+    this.emit(this.getTask(taskId), 'task_negotiation', { phase: 'rejected', by_slot: bySlot, reason })
+  }
+
+  /** 终局拒绝（Negotiating → rejected）：全部可派槽位都谢绝（能力/凭据缺口），转人工或重规划。 */
+  rejectTerminal(taskId: string, reason: string): void {
+    const task = this.getTask(taskId)
+    if (task.status !== 'negotiating') {
+      throw new InvalidTransitionError(task.status, 'rejected', 'only a negotiating task can be terminally rejected')
+    }
+    this.store.updateTask(this.missionId, taskId, { status: 'rejected', last_error: reason })
+    this.releaseSlot(task)
+    this.emit(this.getTask(taskId), 'task_rejected', { reason, by_slot: task.owner_slot_id })
+  }
+
+  /** 派发（ready | 可重试 blocked | accepted → dispatched）。429 退避期内的重试被拒绝。 */
   dispatch(taskId: string, slotId: string): void {
     const task = this.getTask(taskId)
     const slot = this.getSlot(slotId)
-    if (!RETRYABLE_FROM.has(task.status)) {
-      throw new InvalidTransitionError(task.status, 'dispatched', 'only ready or retryable blocked tasks can be dispatched')
+    if (!DISPATCHABLE_FROM.has(task.status)) {
+      throw new InvalidTransitionError(task.status, 'dispatched', 'only ready, retryable blocked, or accepted tasks can be dispatched')
     }
     if (task.status === 'blocked' && !this.shouldRetry(task, this.clock())) {
       throw new InvalidTransitionError('blocked', 'dispatched', this.retryBlockReason(task))
@@ -192,6 +254,30 @@ export class TaskMachine {
     }
     this.store.updateTask(this.missionId, taskId, { status: 'running', started_at: this.clock() })
     this.emit(this.getTask(taskId), 'task_started', {})
+  }
+
+  /**
+   * 任务级暂停（InProgress/Negotiating/Accepted → Paused）：不消费 attempts（用户主动行为，
+   * 不是故障）。在途进程由编排层先终止再迁移；恢复走 resume → ready → 重新协商派发。
+   */
+  pause(taskId: string): void {
+    const task = this.getTask(taskId)
+    if (!PAUSABLE_FROM.has(task.status)) {
+      throw new InvalidTransitionError(task.status, 'paused', 'only negotiating, accepted, dispatched, or running tasks can pause')
+    }
+    this.store.updateTask(this.missionId, taskId, { status: 'paused' })
+    this.releaseSlot(task)
+    this.emit(this.getTask(taskId), 'task_paused', { by: 'operator' })
+  }
+
+  /** 恢复（Paused → ready）：清 owner 回待派池，编排层重新协商（可能换 agent，规格上下文完整重建）。 */
+  resume(taskId: string): void {
+    const task = this.getTask(taskId)
+    if (task.status !== 'paused') {
+      throw new InvalidTransitionError(task.status, 'ready', 'only a paused task can resume')
+    }
+    this.store.updateTask(this.missionId, taskId, { status: 'ready', owner_slot_id: undefined, fault: undefined, last_error: undefined })
+    this.emit(this.getTask(taskId), 'task_resumed', { by: 'operator' })
   }
 
   /**

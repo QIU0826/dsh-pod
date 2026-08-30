@@ -1,0 +1,340 @@
+/**
+ * 任务生命周期状态机（A2A 对齐版）端到端测试：
+ *   Created(ready) → Negotiating(negotiating) → Accepted(accepted) → InProgress(dispatched/running)
+ *   ⇄ Paused(paused)；谢绝换人 failover；全员谢绝 → rejected 终态。
+ * 协商的「接受/拒绝」由 vendor 健康探测真实裁决（安装 + 凭据），不是仪式。
+ */
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { repairPath } from '../src/workers/preflight.js'
+import { JsonStore } from '../src/core/store.js'
+import { MissionOrchestrator } from '../src/core/orchestrator.js'
+import { TaskMachine } from '../src/core/task-machine.js'
+import type { LaunchInput, PlanTaskInput, WorktreeManager } from '../src/core/orchestrator.js'
+import type {
+  AgentSlot,
+  MissionReport,
+  Task,
+  Vendor,
+  WorkerBackend,
+  WorkerCompletion,
+  WorkerHandle,
+  WorkerProgressEvent,
+} from '../src/core/types.js'
+
+repairPath()
+
+/** 可配置健康结论的假后端（协商裁决的注入点）。 */
+class HealthBackend implements WorkerBackend {
+  readonly vendor: Vendor
+  readonly protocol = {
+    family: 'headless-cli' as const,
+    capabilities: { kill: true, session_persist: false, structured_output: true, usage_audit: false },
+  }
+  health: { installed: boolean; authed: boolean }
+  readonly starts: string[] = []
+  readonly kills: string[] = []
+  private readonly script: Record<string, { hang?: boolean }>
+  private calls = 0
+
+  constructor(vendor: Vendor, health: { installed: boolean; authed: boolean }, script: Record<string, { hang?: boolean }> = {}) {
+    this.vendor = vendor
+    this.health = health
+    this.script = script
+  }
+
+  async detect() {
+    return {
+      installed: this.health.installed,
+      authed: this.health.authed,
+      models: [] as string[],
+      version: 'fake-1.0.0',
+      session_tiers: ['transient'] as Array<'transient'>,
+      error: this.health.authed ? undefined : 'not logged in',
+    }
+  }
+
+  async start(
+    _slot: AgentSlot,
+    task: Task,
+    _worktree: string,
+    callbacks: { onProgress?(event: WorkerProgressEvent): void; onExit?(completion: WorkerCompletion): void } = {},
+  ): Promise<WorkerHandle> {
+    this.starts.push(task.id)
+    this.calls += 1
+    const entry = this.script[task.id]
+    const hang = this.calls === 1 && entry?.hang === true
+    if (!hang) {
+      queueMicrotask(() => {
+        callbacks.onExit?.({
+          exit: 'done',
+          report: doneReport(task.id),
+          usage: { tokens_in: 10, tokens_out: 5, source: 'measured' },
+          artifacts: [],
+        })
+      })
+    }
+    return { pid: 4000 + this.starts.length }
+  }
+
+  async kill(handle: WorkerHandle): Promise<void> {
+    this.kills.push(String(handle.pid))
+  }
+}
+
+function doneReport(taskId: string): MissionReport {
+  return {
+    task_id: taskId,
+    task_type: 'implement',
+    status: 'done',
+    summary: 'done it',
+    files_changed: ['src/x.ts'],
+    commit_sha: `${taskId}-commit`,
+    test_command: 'npm test',
+    test_result: 'pass',
+    test_evidence: '1/1 ok',
+    decisions: [],
+    blockers: [],
+    questions: [],
+    usage: { tokens_in: 10, tokens_out: 5 },
+  }
+}
+
+interface Fixture {
+  root: string
+  repo: string
+  store: JsonStore
+}
+
+async function makeFixture(): Promise<Fixture> {
+  const root = mkdtempSync(join(tmpdir(), 'pod-lifecycle-'))
+  const repo = join(root, 'repo')
+  mkdirSync(repo, { recursive: true })
+  execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+  execFileSync('git', ['config', 'user.email', 't@t'], { cwd: repo })
+  execFileSync('git', ['config', 'user.name', 't'], { cwd: repo })
+  writeFileSync(join(repo, 'README.md'), '# demo\n')
+  execFileSync('git', ['add', '-A'], { cwd: repo })
+  execFileSync('git', ['commit', '-m', 'init'], { cwd: repo })
+  const store = new JsonStore({ rootDir: root, clock: () => 1_700_000_000_000 })
+  store.open()
+  return { root, repo, store }
+}
+
+let fixture: Fixture
+
+beforeEach(async () => {
+  fixture = await makeFixture()
+})
+
+afterEach(() => {
+  rmSync(fixture.root, { recursive: true, force: true })
+})
+
+function worktreeManager(): WorktreeManager {
+  return {
+    async ensure(repoRoot: string, slotId: string) {
+      const path = join(repoRoot, '.pod-worktrees', slotId)
+      try {
+        execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: repoRoot })
+        execFileSync('git', ['worktree', 'add', path, '-b', `pod-${slotId}`], { cwd: repoRoot, stdio: 'pipe' })
+      } catch {
+        // 已存在则复用
+      }
+      return path
+    },
+  }
+}
+
+function launchInput(over: Partial<LaunchInput> = {}): LaunchInput {
+  return {
+    name: 'lifecycle',
+    goal: '验证任务生命周期',
+    cwd: '',
+    budgetUsd: 2,
+    slots: [
+      { id: 'S-1', vendor: 'codex', role: 'implementer', capabilities: ['编码'], session_tier: 'transient' },
+      { id: 'S-2', vendor: 'claude', role: 'implementer2', capabilities: ['编码'], session_tier: 'transient' },
+    ],
+    ...over,
+  }
+}
+
+const singlePlan: PlanTaskInput[] = [
+  { id: 'T-1', title: '实现', spec: '实现 add', type: 'implement', skill_tags: ['编码'] },
+]
+
+function makeOrchestrator(backends: Partial<Record<Vendor, WorkerBackend>>) {
+  return new MissionOrchestrator('M-1', {
+    store: fixture.store,
+    backends,
+    worktree: worktreeManager(),
+    clock: () => 1_700_000_000_000,
+    verify: async (task, report) => ({
+      ok: true,
+      commit_sha: report.commit_sha,
+      parent_sha: `${task.id}-parent`,
+      failures: [],
+      mismatch: false,
+    }),
+  })
+}
+
+async function waitFor(cond: () => boolean, ms = 3_000): Promise<void> {
+  const deadline = Date.now() + ms
+  while (Date.now() < deadline) {
+    if (cond()) return
+    await new Promise((r) => setTimeout(r, 15))
+  }
+}
+
+describe('TaskMachine 生命周期迁移（非法迁移 fail-closed）', () => {
+  function seed(taskOver: Partial<Task> = {}): void {
+    fixture.store.createMission({
+      id: 'M-1', name: 'm', goal: 'g', status: 'running', budget_usd: 5, spent_tokens: 0, spent_equiv_usd: 0,
+      approval_mode: 1, cwd: fixture.repo, worktree_policy: 'per-slot', orchestration_mode: 'manual', commander_healthy: true,
+      created_at: 1, updated_at: 1,
+    })
+    fixture.store.createSlot({
+      id: 'S-1', mission_id: 'M-1', vendor: 'claude', role: 'r', capabilities: ['编码'], model: '', effort: 'medium',
+      session_tier: 'transient', status: 'idle', tokens_in: 0, tokens_out: 0, ctx_usage_pct: 0, window_tokens: 100_000,
+    })
+    fixture.store.createTask({
+      id: 'T-1', mission_id: 'M-1', title: 't', spec: 's', skill_tags: [], type: 'implement', depends_on: [],
+      status: 'ready', attempts: 0, soft_attempts: 0, max_wall_clock_ms: 1000, created_at: 1, updated_at: 1,
+      ...taskOver,
+    })
+  }
+
+  it('offer → accept → dispatch 链路落协商事件', () => {
+    seed()
+    const machine = new TaskMachine(fixture.store, { missionId: 'M-1' })
+    machine.offer('T-1', 'S-1', { est_usd: 0.1 })
+    expect(fixture.store.getTask('M-1', 'T-1')?.status).toBe('negotiating')
+    machine.accept('T-1', { vendor: 'claude' })
+    expect(fixture.store.getTask('M-1', 'T-1')?.status).toBe('accepted')
+    machine.dispatch('T-1', 'S-1')
+    expect(fixture.store.getTask('M-1', 'T-1')?.status).toBe('dispatched')
+    const kinds = fixture.store.listEvents('M-1').filter((e) => e.kind === 'task_negotiation').map((e) => (e.payload as { phase?: string }).phase)
+    expect(kinds).toEqual(['offer', 'accepted'])
+  })
+
+  it('pause/resume：running ⇄ paused ⇄ ready（清 owner）；ready 不可暂停', () => {
+    seed()
+    const machine = new TaskMachine(fixture.store, { missionId: 'M-1' })
+    expect(() => machine.pause('T-1')).toThrow()
+    machine.offer('T-1', 'S-1', {})
+    machine.accept('T-1', {})
+    machine.dispatch('T-1', 'S-1')
+    machine.start('T-1')
+    machine.pause('T-1')
+    expect(fixture.store.getTask('M-1', 'T-1')?.status).toBe('paused')
+    machine.resume('T-1')
+    const resumed = fixture.store.getTask('M-1', 'T-1')
+    expect(resumed?.status).toBe('ready')
+    expect(resumed?.owner_slot_id).toBeUndefined()
+    expect(() => machine.resume('T-1')).toThrow()
+  })
+
+  it('rejectBySlot 回 ready 换人；rejectTerminal 仅协商态可达', () => {
+    seed()
+    const machine = new TaskMachine(fixture.store, { missionId: 'M-1' })
+    machine.offer('T-1', 'S-1', {})
+    machine.rejectBySlot('T-1', '凭据失效')
+    expect(fixture.store.getTask('M-1', 'T-1')?.status).toBe('ready')
+    expect(() => machine.rejectTerminal('T-1', 'x')).toThrow()
+    machine.offer('T-1', 'S-1', {})
+    machine.rejectTerminal('T-1', '全员谢绝')
+    expect(fixture.store.getTask('M-1', 'T-1')?.status).toBe('rejected')
+    expect(fixture.store.listEvents('M-1').some((e) => e.kind === 'task_rejected')).toBe(true)
+  })
+})
+
+describe('协商（Negotiating）编排行为', () => {
+  it('健康 agent：offer → accepted → 派发，协商事件成链', async () => {
+    const claude = new HealthBackend('claude', { installed: true, authed: true })
+    const orch = makeOrchestrator({ claude })
+    orch.launch(launchInput({ slots: [launchInput().slots[1]!] }))
+    orch.createTasks(singlePlan)
+    const summary = await orch.run()
+    expect(summary.status).toBe('awaiting_approval')
+    const phases = fixture.store
+      .listEvents('M-1')
+      .filter((e) => e.kind === 'task_negotiation')
+      .map((e) => (e.payload as { phase?: string }).phase)
+    expect(phases).toEqual(['offer', 'accepted'])
+    expect(claude.starts).toEqual(['T-1'])
+  })
+
+  it('凭据失效 → 该 agent 谢绝 → 换人 failover 到健康 agent', async () => {
+    const codex = new HealthBackend('codex', { installed: true, authed: false })
+    const claude = new HealthBackend('claude', { installed: true, authed: true })
+    const orch = makeOrchestrator({ codex, claude })
+    orch.launch(launchInput())
+    orch.createTasks(singlePlan)
+    const summary = await orch.run()
+    expect(summary.status).toBe('awaiting_approval')
+    const rejected = fixture.store
+      .listEvents('M-1')
+      .filter((e) => e.kind === 'task_negotiation' && (e.payload as { phase?: string }).phase === 'rejected')
+    expect(rejected).toHaveLength(1)
+    expect(String((rejected[0]!.payload as { by_slot?: string }).by_slot)).toContain('S-1')
+    expect(String((rejected[0]!.payload as { reason?: string }).reason)).toContain('codex')
+    const task = fixture.store.getTask('M-1', 'T-1')
+    expect(task?.status).toBe('done')
+    expect(String(task?.owner_slot_id)).toContain('S-2')
+    expect(codex.starts).toHaveLength(0)
+    expect(claude.starts).toEqual(['T-1'])
+  })
+
+  it('全员谢绝 → rejected 终态 + needs_human（不再烧运行）', async () => {
+    const codex = new HealthBackend('codex', { installed: true, authed: false })
+    const claude = new HealthBackend('claude', { installed: false, authed: false })
+    const orch = makeOrchestrator({ codex, claude })
+    orch.launch(launchInput())
+    orch.createTasks(singlePlan)
+    const summary = await orch.run()
+    expect(summary.status).toBe('needs_human')
+    expect(summary.escalatedTasks).toContain('T-1')
+    expect(fixture.store.getTask('M-1', 'T-1')?.status).toBe('rejected')
+    expect(codex.starts).toHaveLength(0)
+    expect(claude.starts).toHaveLength(0)
+  })
+})
+
+describe('任务级暂停/恢复（InProgress ⇄ Paused）', () => {
+  it('暂停运行中任务：杀进程、不计故障；恢复后重新协商派发到完成', async () => {
+    const claude = new HealthBackend('claude', { installed: true, authed: true }, { 'T-1': { hang: true } })
+    const orch = makeOrchestrator({ claude })
+    orch.launch(launchInput({ slots: [launchInput().slots[1]!] }))
+    orch.createTasks(singlePlan)
+    void orch.run()
+    await waitFor(() => fixture.store.getTask('M-1', 'T-1')?.status === 'running')
+    await orch.pauseTask('T-1')
+    expect(fixture.store.getTask('M-1', 'T-1')?.status).toBe('paused')
+    expect(claude.kills).toHaveLength(1)
+    // killed 退出被暂停标记吞掉：不得出现 task_blocked（用户行为不是故障）
+    await new Promise((r) => setTimeout(r, 50))
+    expect(fixture.store.listEvents('M-1').some((e) => e.kind === 'task_blocked')).toBe(false)
+    // 恢复：paused → ready → 重新协商（第二轮 start 不 hang）→ done
+    orch.resumeTask('T-1')
+    await waitFor(() => fixture.store.getTask('M-1', 'T-1')?.status === 'done')
+    expect(claude.starts).toHaveLength(2)
+    const pausedEv = fixture.store.listEvents('M-1').filter((e) => e.kind === 'task_paused')
+    const resumedEv = fixture.store.listEvents('M-1').filter((e) => e.kind === 'task_resumed')
+    expect(pausedEv).toHaveLength(1)
+    expect(resumedEv).toHaveLength(1)
+  })
+
+  it('非可暂停状态（done）暂停 → INVALID_TRANSITION 409 语义', async () => {
+    const claude = new HealthBackend('claude', { installed: true, authed: true })
+    const orch = makeOrchestrator({ claude })
+    orch.launch(launchInput({ slots: [launchInput().slots[1]!] }))
+    orch.createTasks(singlePlan)
+    await orch.run()
+    await expect(orch.pauseTask('T-1')).rejects.toThrow()
+  })
+})

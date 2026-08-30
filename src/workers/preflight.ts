@@ -172,6 +172,28 @@ export function parseClaudeAuth(stdout: string): { authed: boolean; account?: st
   }
 }
 
+/**
+ * env 凭据兜底（协商健康判定用）：`claude auth status` 对 env-token 形态
+ * （ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN/API_KEY 中转）可能如实报「未登录」，
+ * 但实际可用——env 里存在该 vendor 的凭据时，协商不得以「CLI 未登录」拒绝。
+ * 凭据值本身绝不读取，只判断键是否存在。
+ */
+export function envCredentialPresent(vendor: string, env: Record<string, string | undefined> = process.env): boolean {
+  if (vendor === 'claude') {
+    return (env.ANTHROPIC_AUTH_TOKEN ?? env.ANTHROPIC_API_KEY ?? '').length > 0
+  }
+  if (vendor === 'codex') {
+    return (env.OPENAI_API_KEY ?? '').length > 0
+  }
+  if (vendor === 'ark') {
+    return (env.ARK_API_KEY ?? env.ARK_API_TOKEN ?? '').length > 0
+  }
+  if (vendor === 'opencode') {
+    return (env.OPENCODE_API_KEY ?? '').length > 0
+  }
+  return false
+}
+
 export interface TestCommandDetection {
   found: boolean
   command?: string

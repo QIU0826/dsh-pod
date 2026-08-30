@@ -111,7 +111,8 @@ describe('plugin 宿主契约', () => {
     // ping + status/events/launch/steer/approve/deny/dispatch/resolve/rules/abort 等宿主路由
     // AS-4/EV-2：+ /assets 与 /events/stream 两条只读流路由
     // 2026-08-29：+ /pause 与 /resume（暂停/恢复从工具面接到 UI）→ 20 条
-    expect(mocks.register).toHaveBeenCalledTimes(20)
+    // 2026-08-30：+ 任务级 /task/pause /task/resume 与 A2A 面 4 条（agent-card 发现、sendMessage、sendMessageStream、JSON-RPC /a2a）→ 26 条
+    expect(mocks.register).toHaveBeenCalledTimes(26)
     expect(mocks.toolNames).toHaveLength(16) // 7 原 pod_* + 3 mem + reassign + pause/resume + cron_list + plan(P1) + commander_start
     ctx.registry.delete(plugin)
     // 等 effect disposer 异步执行（SQLite WAL 句柄释放）再清理目录

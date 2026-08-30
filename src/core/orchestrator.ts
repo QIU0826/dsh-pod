@@ -48,6 +48,7 @@ import { UNLIMITED_BUDGET_USD,
   DEFAULT_SESSION_TIERS,
   MAX_PARALLEL_TASKS,
   MAX_SLOTS,
+  NEGOTIATION_HEALTH_TTL_MS,
   SAFE_ENTITY_ID,
 } from './types.js'
 import { Watchdog, type FiredWatchdog } from './watchdog.js'
@@ -127,6 +128,12 @@ export interface OrchestratorDeps {
    */
   diffProvider?: (task: Task) => Promise<string>
   /**
+   * 协商期 env 凭据兜底（组装层注入，core 不读 process.env）：
+   * `claude auth status` 对 env-token 形态（ANTHROPIC_BASE_URL+token 中转）可能报未登录
+   * 但实际可用——hint(vendor)=true 时不以「CLI 未登录」拒绝要约。
+   */
+  credentialHint?: (vendor: Vendor) => boolean
+  /**
    * 规划提案落盘回调（P1 规划层，DoD-2 plan.md 唯一事实源的接线点）：
    * planner 任务完成且提案通过代码裁决后调用；pod-service 借此写 plan.md。
    * 回调抛错只记日志不阻断（plan.md 是回溯面，不是执行面）。
@@ -182,6 +189,11 @@ export class MissionOrchestrator {
   private readonly experiments: ExperimentsLike
   private readonly handles = new Map<string, WorkerHandle>()
   private readonly queuedSteer = new Map<string, string[]>()
+  /** 协商健康缓存（vendor → 结论 + 时刻）：探测拉起真实 CLI，TTL 内复用；auth_expired 即失效。 */
+  private readonly vendorHealth = new Map<Vendor, { at: number; ok: boolean; reason?: string; detail?: string }>()
+  /** 用户暂停标记：被终止 worker 的 killed 退出不算故障（任务已迁 paused）。 */
+  private readonly pauseMarkers = new Set<string>()
+  private readonly credentialHint: ((vendor: Vendor) => boolean) | undefined
   private readonly wakeLatch: WakeLatch = { fired: false }
   private stopRequested = false
   /** 本次 stopRequested 的语义（summarize 据此区分 paused/budget_exceeded/aborted）。 */
@@ -200,6 +212,7 @@ export class MissionOrchestrator {
     this.clock = deps.clock ?? (() => Date.now())
     this.maxParallel = deps.maxParallel ?? MAX_PARALLEL_TASKS
     this.diffProvider = deps.diffProvider
+    this.credentialHint = deps.credentialHint
     this.onPlanExpanded = deps.onPlanExpanded
     this.experiments = deps.experiments ?? { isEnabled: () => false }
     this.approvals = new ApprovalEngine(this.store, { clock: this.clock })
@@ -520,96 +533,14 @@ export class MissionOrchestrator {
       )
       availableSlots = availableSlots.filter((s) => !targetOwners.has(s.id))
     }
-    const routed = routeTask(task, {
-      slots: availableSlots,
-      tasks: this.store.listTasks(this.missionId),
-      // Ledger→路由权重（2.7 节 v0.2 起生效）：槽位历史成功率（完成任务占比），无数据中性不劣化
-      slotSuccess: this.slotSuccessRates(),
-    })
-    if (routed.slotId === null) {
-      // 无人可派（能力缺口 / 审查者唯一）→ 转人工，不消费 attempts
-      this.taskMachine.escalate(task.id)
-      this.store.appendEvent(this.missionId, {
-        id: `ev-no-slot-${task.id}`,
-        mission_id: this.missionId,
-        ts: this.clock(),
-        kind: 'task_escalated',
-        task_id: task.id,
-        payload: { reason: `no routable slot: ${routed.reason}` },
-      })
-      this.maybeAutoReplan(task.id)
-      this.signalCompletion()
-      return false
-    }
-    const slot = this.store.getSlot(routed.slotId)!
-    const backend = this.backends[slot.vendor]
-    if (backend === undefined) {
-      throw new PodError(`no backend registered for vendor ${slot.vendor}`, 'BACKEND_MISSING', { vendor: slot.vendor })
-    }
-
-    // 派发前预算短路（AgentScope-F / DC-4）：剩余预算 < 任务预估成本 → 不派发 + 告警事件
-    const remainingUsd = mission.budget_usd - mission.spent_equiv_usd
-    const estimate = this.ledger.estimateTaskCostUsd(this.missionId, task.type, slot.model)
-    if (remainingUsd < estimate) {
-      this.store.appendEvent(this.missionId, {
-        id: `ev-budget-short-${task.id}-${this.clock()}`,
-        mission_id: this.missionId,
-        ts: this.clock(),
-        kind: 'budget_short_circuit',
-        task_id: task.id,
-        slot_id: slot.id,
-        payload: {
-          task_type: task.type,
-          estimate_usd: Number(estimate.toFixed(4)),
-          remaining_usd: Number(remainingUsd.toFixed(4)),
-          budget_usd: mission.budget_usd,
-          spent_equiv_usd: Number(mission.spent_equiv_usd.toFixed(4)),
-        },
-      })
-      return false
-    }
-
-    // 模式 2（交接确认，灰度）：跨 agent 派活前弹卡（pod_dispatch 入口，2.6 节）。
-    // task 维持 ready；approved 卡授权本次派发，pending 卡阻塞等待人工放行，denied 卡转人工。
-    if (mission.approval_mode === 2) {
-      const dispatchCards = this.store.listApprovals(this.missionId).filter((a) => a.kind === 'dispatch' && a.task_id === task.id)
-      const approved = dispatchCards.some((a) => a.status === 'approved')
-      const pending = dispatchCards.some((a) => a.status === 'pending')
-      const denied = dispatchCards.some((a) => a.status === 'denied')
-      if (denied && !approved) {
-        this.taskMachine.escalate(task.id)
-        this.store.appendEvent(this.missionId, {
-          id: `ev-dispatch-denied-${task.id}`,
-          mission_id: this.missionId,
-          ts: this.clock(),
-          kind: 'task_escalated',
-          task_id: task.id,
-          payload: { reason: 'dispatch gate denied by operator' },
-        })
-        this.signalCompletion()
-        return false
-      }
-      if (!approved && !pending) {
-        const card = this.approvals.requestDispatch(this.missionId, {
-          slot_id: slot.id,
-          worktree_path: slot.worktree_path ?? '',
-          task_id: task.id,
-          summary: `放行派发 ${task.id}（${task.title}）给 ${slot.id}？跨 agent 交接前确认。`,
-        })
-        this.store.appendEvent(this.missionId, {
-          id: `ev-dispatch-gate-${task.id}-${this.clock()}`,
-          mission_id: this.missionId,
-          ts: this.clock(),
-          kind: 'dispatch_awaiting_approval',
-          task_id: task.id,
-          slot_id: slot.id,
-          payload: { approval_id: card.id },
-        })
-        return false
-      }
-      if (pending) return false
-      // approved → 落入下方正常派发
-    }
+    // ── 协商阶段（任务生命周期：Created→Negotiating→Accepted/Rejected）─────────
+    // 要约-接受/拒绝是真实裁决而非仪式：路由命中后，该 agent 的健康（CLI 安装 +
+    // 凭据有效）与剩余预算构成接受基础；谢绝的槽位被排除，换人再协商（failover），
+    // 全员谢绝 → rejected 终态转人工/重规划。凭据失效在派发前拦截，不再烧一轮运行。
+    // 预算短路与模式 2 派发门都在 offer 之前——被门拦下时任务保持 ready（可再驱动）。
+    const negotiated = await this.routeAndNegotiate(task, mission, availableSlots)
+    if (negotiated === null) return false
+    const { slot, backend } = negotiated
 
     // worktree 隔离（3.7 节：默认每员工一个）
     let worktreePath = slot.worktree_path
@@ -709,6 +640,228 @@ export class MissionOrchestrator {
     })
     this.handles.set(task.id, handle)
     return true
+  }
+
+  /**
+   * 协商主循环（Negotiating 阶段）：路由 → 预算短路 → 模式 2 派发门 → 发要约 →
+   * 健康探测 → 接受 / 谢绝换人。返回 null 表示任务已被终局处置
+   * （escalated / rejected / 被门拦下等待），调用方不得继续派发。
+   * 前置门都在 offer 之前：被拦下时任务保持 ready，重驱入口可再次进入。
+   */
+  private async routeAndNegotiate(
+    task: Task,
+    mission: Mission,
+    availableSlots: AgentSlot[],
+  ): Promise<{ slot: AgentSlot; backend: WorkerBackend } | null> {
+    const excluded = new Set<string>()
+    while (true) {
+      const routed = routeTask(task, {
+        slots: availableSlots.filter((s) => !excluded.has(s.id)),
+        tasks: this.store.listTasks(this.missionId),
+        // Ledger→路由权重（2.7 节 v0.2 起生效）：槽位历史成功率（完成任务占比），无数据中性不劣化
+        slotSuccess: this.slotSuccessRates(),
+      })
+      if (routed.slotId === null) {
+        if (excluded.size === 0) {
+          // 无人可派（能力缺口 / 审查者唯一）→ 转人工，不消费 attempts
+          this.taskMachine.escalate(task.id)
+          this.store.appendEvent(this.missionId, {
+            id: `ev-no-slot-${task.id}`,
+            mission_id: this.missionId,
+            ts: this.clock(),
+            kind: 'task_escalated',
+            task_id: task.id,
+            payload: { reason: `no routable slot: ${routed.reason}` },
+          })
+        } else {
+          // 换尽可派槽位仍无人接受 → 终局拒绝（rejected 终态，转人工/重规划）
+          this.taskMachine.rejectTerminal(task.id, `所有可派槽位谢绝要约（${excluded.size} 个）`)
+        }
+        this.maybeAutoReplan(task.id)
+        this.signalCompletion()
+        return null
+      }
+      const candidate = this.store.getSlot(routed.slotId)!
+      const candidateBackend = this.backends[candidate.vendor]
+      if (candidateBackend === undefined) {
+        // 无后端注册是配置错误：如实落事件并换人（不 throw 炸驱动循环）
+        excluded.add(candidate.id)
+        this.store.appendEvent(this.missionId, {
+          id: `ev-no-backend-${task.id}-${candidate.id}`,
+          mission_id: this.missionId,
+          ts: this.clock(),
+          kind: 'task_negotiation',
+          task_id: task.id,
+          slot_id: candidate.id,
+          payload: { phase: 'rejected', by_slot: candidate.id, reason: `no backend registered for vendor ${candidate.vendor}` },
+        })
+        continue
+      }
+
+      // 派发前预算短路（AgentScope-F / DC-4）：预算是 mission 级硬闸，不换人重试
+      const remainingUsd = mission.budget_usd - mission.spent_equiv_usd
+      const estimate = this.ledger.estimateTaskCostUsd(this.missionId, task.type, candidate.model)
+      if (remainingUsd < estimate) {
+        this.store.appendEvent(this.missionId, {
+          id: `ev-budget-short-${task.id}-${this.clock()}`,
+          mission_id: this.missionId,
+          ts: this.clock(),
+          kind: 'budget_short_circuit',
+          task_id: task.id,
+          slot_id: candidate.id,
+          payload: {
+            task_type: task.type,
+            estimate_usd: Number(estimate.toFixed(4)),
+            remaining_usd: Number(remainingUsd.toFixed(4)),
+            budget_usd: mission.budget_usd,
+            spent_equiv_usd: Number(mission.spent_equiv_usd.toFixed(4)),
+          },
+        })
+        return null
+      }
+
+      // 模式 2（交接确认，灰度）：跨 agent 派活前弹卡（pod_dispatch 入口，2.6 节）。
+      // task 维持 ready；approved 卡授权本次派发，pending 卡阻塞等待人工放行，denied 卡转人工。
+      if (mission.approval_mode === 2) {
+        const dispatchCards = this.store.listApprovals(this.missionId).filter((a) => a.kind === 'dispatch' && a.task_id === task.id)
+        const approved = dispatchCards.some((a) => a.status === 'approved')
+        const pending = dispatchCards.some((a) => a.status === 'pending')
+        const denied = dispatchCards.some((a) => a.status === 'denied')
+        if (denied && !approved) {
+          this.taskMachine.escalate(task.id)
+          this.store.appendEvent(this.missionId, {
+            id: `ev-dispatch-denied-${task.id}`,
+            mission_id: this.missionId,
+            ts: this.clock(),
+            kind: 'task_escalated',
+            task_id: task.id,
+            payload: { reason: 'dispatch gate denied by operator' },
+          })
+          this.signalCompletion()
+          return null
+        }
+        if (!approved && !pending) {
+          const card = this.approvals.requestDispatch(this.missionId, {
+            slot_id: candidate.id,
+            worktree_path: candidate.worktree_path ?? '',
+            task_id: task.id,
+            summary: `放行派发 ${task.id}（${task.title}）给 ${candidate.id}？跨 agent 交接前确认。`,
+          })
+          this.store.appendEvent(this.missionId, {
+            id: `ev-dispatch-gate-${task.id}-${this.clock()}`,
+            mission_id: this.missionId,
+            ts: this.clock(),
+            kind: 'dispatch_awaiting_approval',
+            task_id: task.id,
+            slot_id: candidate.id,
+            payload: { approval_id: card.id },
+          })
+          return null
+        }
+        if (pending) return null
+        // approved → 继续协商（要约 → 接受 → 派发）
+      }
+
+      // —— 发出要约（→ negotiating）——
+      this.taskMachine.offer(task.id, candidate.id, {
+        type: task.type,
+        title: task.title,
+        spec_chars: task.spec.length,
+        est_usd: Number(estimate.toFixed(4)),
+        remaining_usd: Number(remainingUsd.toFixed(4)),
+      })
+      const health = await this.probeVendorHealth(candidate, candidateBackend)
+      if (health.ok) {
+        this.taskMachine.accept(task.id, { vendor: candidate.vendor, probe: health.detail ?? '' })
+        return { slot: candidate, backend: candidateBackend }
+      }
+      excluded.add(candidate.id)
+      const nextRouted = routeTask(task, {
+        slots: availableSlots.filter((s) => !excluded.has(s.id)),
+        tasks: this.store.listTasks(this.missionId),
+        slotSuccess: this.slotSuccessRates(),
+      })
+      if (nextRouted.slotId === null) {
+        this.taskMachine.rejectTerminal(task.id, `${candidate.id} 谢绝（${health.reason}）且无其他可派槽位`)
+        this.maybeAutoReplan(task.id)
+        this.signalCompletion()
+        return null
+      }
+      // 有下家：回 ready 换人再协商（拒绝事件已留痕：谁、为什么）
+      this.taskMachine.rejectBySlot(task.id, health.reason ?? 'agent declined')
+    }
+  }
+
+  /**
+   * 协商健康探测（TTL 缓存）：vendor CLI 安装 + 凭据有效。探测拉起真实 CLI
+   * （claude auth status 等），结论在 NEGOTIATION_HEALTH_TTL_MS 内复用；
+   * worker 以 auth_expired 故障退出时缓存被即刻失效（下一轮协商重探）。
+   * env 凭据兜底（credentialHint）：`claude auth status` 对 env-token 中转形态
+   * 可能如实报未登录但实际可用——hint 命中时不以「CLI 未登录」谢绝。
+   */
+  private async probeVendorHealth(slot: AgentSlot, backend: WorkerBackend): Promise<{ ok: boolean; reason?: string; detail?: string }> {
+    const cached = this.vendorHealth.get(slot.vendor)
+    if (cached !== undefined && this.clock() - cached.at < NEGOTIATION_HEALTH_TTL_MS) {
+      return { ok: cached.ok, reason: cached.reason, detail: cached.detail }
+    }
+    let verdict: { ok: boolean; reason?: string; detail?: string }
+    try {
+      const detected = await backend.detect()
+      const hint = this.credentialHint?.(slot.vendor) ?? false
+      if (!detected.installed) {
+        verdict = { ok: false, reason: `${slot.vendor} CLI 未安装` }
+      } else if (!detected.authed && !hint) {
+        verdict = {
+          ok: false,
+          reason: `${slot.vendor} 凭据失效（未登录/未授权）${detected.error ? `：${detected.error.slice(0, 160)}` : ''}`,
+        }
+      } else {
+        verdict = { ok: true, detail: `${detected.version ?? ''}${hint && !detected.authed ? '（env 凭据兜底）' : ''}`.trim() }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      verdict = { ok: false, reason: `${slot.vendor} 健康探测异常：${message.slice(0, 160)}` }
+    }
+    this.vendorHealth.set(slot.vendor, { at: this.clock(), ...verdict })
+    return verdict
+  }
+
+  /**
+   * 任务级暂停（InProgress/Negotiating/Accepted → Paused）：先终止在途进程再迁移；
+   * killed 退出被 pauseMarkers 吞掉——用户主动行为不是故障，不消费 attempts。
+   */
+  async pauseTask(taskId: string): Promise<void> {
+    const task = this.store.getTask(this.missionId, taskId)
+    if (task === undefined) throw new NotFoundError('task', taskId)
+    if (task.status === 'negotiating' || task.status === 'accepted') {
+      this.taskMachine.pause(taskId)
+      this.signalCompletion()
+      return
+    }
+    if (task.status === 'dispatched' || task.status === 'running') {
+      this.pauseMarkers.add(taskId)
+      this.watchdog.disarm(`task-idle:${taskId}`)
+      this.watchdog.disarm(`task-wall-clock:${taskId}`)
+      await this.killTask(taskId)
+      try {
+        this.taskMachine.pause(taskId)
+      } catch {
+        // 状态已漂移（恰在暂停瞬间完成）：完成路径已裁决，留任务终态
+      }
+      this.signalCompletion()
+      return
+    }
+    throw new PodError(
+      `任务 ${taskId} 当前状态 ${task.status} 不可暂停（可暂停：协商中/已接受/执行中）`,
+      'INVALID_TRANSITION',
+      { taskId, status: task.status },
+    )
+  }
+
+  /** 任务级恢复（Paused → ready → 重新协商派发）：可能换 agent，规格上下文完整重建。 */
+  resumeTask(taskId: string): void {
+    this.taskMachine.resume(taskId)
+    this.ensureDriving()
   }
 
   private handleProgress(slot: AgentSlot, task: Task, event: WorkerProgressEvent): void {
@@ -859,11 +1012,17 @@ export class MissionOrchestrator {
       case 'failed': {
         const fault: FaultKind =
           completion.fault ?? classifyFault({ exit: 'failed', exitCode: completion.exit_code }) ?? 'crash'
+        // 凭据实测失效 → 该 vendor 的协商健康缓存立即作废（下一轮协商重探，不再误派）
+        if (fault === 'auth_expired' && slot !== undefined) this.vendorHealth.delete(slot.vendor)
         const detail = completion.error_detail !== undefined ? `: ${completion.error_detail}` : ''
         this.taskMachine.fail(taskId, { kind: fault, message: `worker failed (exit ${completion.exit_code ?? '?'})${detail}` })
         break
       }
       case 'killed':
+        if (this.pauseMarkers.delete(taskId)) {
+          // 用户暂停：killed 不是故障——任务已/将迁移 paused，跳过 fail（不消费 attempts）
+          break
+        }
         this.taskMachine.fail(taskId, { kind: 'crash', message: 'worker process killed' })
         break
     }
@@ -982,6 +1141,12 @@ export class MissionOrchestrator {
   recoverFromRestart(): { orphanedTasks: string[] } {
     const orphaned: string[] = []
     for (const task of this.store.listTasks(this.missionId)) {
+      // 协商/已接受但无进程在途：安全回落 ready（重启后重新协商，可能换 agent）
+      if (task.status === 'negotiating' || task.status === 'accepted') {
+        this.store.updateTask(this.missionId, task.id, { status: 'ready' })
+        orphaned.push(task.id)
+        continue
+      }
       if (task.status !== 'dispatched' && task.status !== 'running') continue
       try {
         this.taskMachine.fail(task.id, { kind: 'crash', message: 'host restart: worker process lost' })
@@ -1422,7 +1587,10 @@ export class MissionOrchestrator {
   private summarize(): RunSummary {
     const tasks = this.store.listTasks(this.missionId)
     const done = tasks.filter((t) => t.status === 'done').map((t) => t.id)
-    const escalated = tasks.filter((t) => t.status === 'escalated').map((t) => t.id)
+    // 转人工集合：escalated（故障转人工）+ rejected（全员谢绝要约，能力/凭据缺口）
+    const escalated = tasks
+      .filter((t) => t.status === 'escalated' || t.status === 'rejected')
+      .map((t) => t.id)
     const mission = this.requireMission()
     // 中止/暂停的如实上报：此前 abort 后掉进 needs_human（guard 抛错被吞），语义误导（审计 M5）
     if (mission.status === 'aborted') {

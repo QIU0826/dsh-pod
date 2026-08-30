@@ -64,8 +64,9 @@ MissionOrchestrator（编排器，每会话一个实例）
    ├─ ②派发（驱动循环）
    │    driveLoop：每轮填满 maxParallel（默认 2，可调 ≤8）
    │    readyTasks（依赖就绪 + 重试期已到）→ routeTask 按 能力标签 + Ledger 历史
-   │    成功率 打分选槽 → dispatchTask：规格增强（审查者只拿 diff+规格最小上下文；
-   │    排队 steer 指令必带）→ backend.start()（流式进度实时落事件）
+   │    成功率打分选槽 → 协商要约（§2.5 任务生命周期：健康/预算真实裁决，谢绝换人）
+   │    → dispatchTask：规格增强（审查者只拿 diff+规格最小上下文；排队 steer 指令必带）
+   │    → backend.start()（流式进度实时落事件）
    │
    ├─ ③质量门（完成裁决，LLM 提议、代码裁决）
    │    implement/test 的 done 报告必须通过 Verifier：
@@ -93,6 +94,45 @@ MissionOrchestrator（编排器，每会话一个实例）
         → SSE + HTTP 轮询（id 精确游标，同毫秒不丢）→ 对话流渲染
 ```
 
+### 2.5 任务生命周期状态机（A2A 对齐）
+
+```
+ ● 创建任务
+ ▼
+ ready ──开始协商──▶ negotiating ──接受──▶ accepted ──派发──▶ dispatched → running
+                       │                                            │
+                       │拒绝（换人再协商）                            │暂停（杀进程，不计故障）
+                       ▼                                            ▼
+                    （回 ready）                                  paused ──恢复──▶ ready
+                       │
+                       │全员谢绝
+                       ▼
+                    rejected（终态，转人工/重规划）
+ running ──▶ done（Completed） / blocked（Failed·可重试） / escalated（Failed·转人工）
+```
+
+**协商是真实裁决，不是仪式。** 任务 offer 给 agent 后，接受/拒绝由代码依据
+agent 的实际状况判定：
+
+- **接受基础** = vendor 健康（CLI 已安装 + 凭据有效，`backend.detect()`，结论
+  TTL 10 分钟缓存，`auth_expired` 故障即刻失效重探）+ 剩余预算 ≥ 任务预估成本；
+- **谢绝换人（failover）**：凭据失效/未安装的 agent 谢绝要约（事件留痕：谁、
+  为什么），编排器把该槽位排除后重新路由协商——**死凭据在派发前拦截，不再烧
+  一轮运行后才发现**；
+- **全员谢绝** → `rejected` 终态 → 转人工/重规划（与 escalated 同列 needs_human）；
+- **env 凭据兜底**：`claude auth status` 对 env-token 中转形态（ANTHROPIC_BASE_URL
+  + token）可能如实报「未登录」但实际可用——环境里存在该 vendor 凭据时不得
+  以「CLI 未登录」谢绝（`credentialHint` 注入，core 不读 process.env）。
+
+**任务级暂停/恢复**：`POST /api/dsh-pod/task/pause|resume`。暂停先终止在途
+进程再迁移（用户行为不是故障，不消费 attempts、killed 退出被吞掉）；恢复 =
+`paused → ready` 重新走协商（可能换 agent，规格上下文由 Context Builder 完整重建）。
+看板卡片与上下文抽屉都有暂停/恢复入口；对话流有 🤝 协商行与 ⏸/▶️ 暂停恢复行。
+
+状态机全部迁移走 `task-machine.ts` 显式入口（offer/accept/rejectBySlot/
+rejectTerminal/pause/resume/dispatch/start/report/fail/escalate），非法迁移抛
+`InvalidTransitionError`——LLM 提议、代码裁决的同一纪律。
+
 ## 3. 协作方式（agent 之间不直接对话）
 
 agent 之间**不点对点通信**——所有协作经由编排器以「规格注入 + 事件审计」进行：
@@ -115,6 +155,37 @@ CLI 进程（stream-json 逐行）
   → SSE /api/dsh-pod/events/stream（id 精确游标 replay+增量）＋ /events 轮询兜底
   → 前端按（agent × 任务）聚合为单一气泡增量追加（打字光标，完成即止）
 ```
+
+### 4.5 A2A 对外协议面（wire 协议）
+
+Pod 以 A2A（Agent-to-Agent）风格对外暴露能力，外部 agent / 程序可以像调用一个
+agent 一样驱动整个座舱：
+
+```
+外部 Client                    dsh-pod（A2A Server）
+   │ ①发现  GET /.well-known/agent-card
+   │ ◀──── Agent Card（名册即技能表，loopback NoAuth）
+   │
+   │ ②受理  POST /a2a/sendMessage
+   │        { message: { parts: [{kind:'text', text: 目标}] },
+   │          configuration: { cwd, parallel?, budget_usd?, slots? } }
+   │ ◀──── A2A Task 快照（id=mission，state=submitted/working）
+   │
+   │ ③流式  POST /a2a/sendMessageStream（同体）
+   │ ◀──── SSE：首帧 Task 快照 → status-update / artifact-update 增量 → 终态收口
+   │        （🤝 协商、📦 派发、流式文本 ⚒ 工具、✅ 完成、input-required 待审批）
+   │
+   └─ 也可走 JSON-RPC 2.0：POST /a2a { method: 'message/send' | 'message/stream' }
+```
+
+- **任务粒度映射**：A2A Task = mission（一次 sendMessage = 一个目标）；座舱内部
+  的单个 agent 任务（T-1/T-2…）作为 artifact 增量流出——外部看到的是「一个
+  多 agent 作为一个 agent」；
+- **状态映射**（`src/core/a2a.ts`，纯函数）：planning/running→working；
+  awaiting_approval/paused→input-required；done→completed；denied→rejected；
+  aborted→canceled；预算短路→failed(final)；
+- **纪律**：loopback-only（与既有 HTTP 面同源信任边界）；凭据/内部路径不出
+  协议面（securitySchemes 显式 NoAuth）；未知事件不映射不编造（fail-closed）。
 
 ## 5. 目录导览
 
