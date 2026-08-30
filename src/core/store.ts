@@ -90,6 +90,12 @@ export interface PodStore {
   deleteRule(id: string): void
   appendEvent(missionId: string, event: PodEvent): void
   listEvents(missionId: string): PodEvent[]
+  /**
+   * 丢弃满足条件的事件，返回被丢弃条数。
+   * 用途：抑制高频重复事件（如任务重试时 task_context 的重复落盘）——
+   * 事件流是遥测而非状态真相源，同一语义的旧副本留着只会挤占上限与 payload。
+   */
+  dropEvents(missionId: string, predicate: (event: PodEvent) => boolean): number
   /** 需要 mission 存在时的便捷写入：追加事件并写盘（单事件一写）。 */
   flush(): void
   close(): void
@@ -423,6 +429,18 @@ export class JsonStore implements PodStore {
 
   listEvents(missionId: string): PodEvent[] {
     return this.requireData().events[missionId] ?? []
+  }
+
+  dropEvents(missionId: string, predicate: (event: PodEvent) => boolean): number {
+    const data = this.requireData()
+    const events = data.events[missionId] ?? []
+    const kept = events.filter((e) => !predicate(e))
+    const dropped = events.length - kept.length
+    if (dropped > 0) {
+      data.events[missionId] = kept
+      this.persist()
+    }
+    return dropped
   }
 
   flush(): void {

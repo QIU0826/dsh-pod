@@ -340,6 +340,16 @@ export class SqliteStore implements PodStore {
     return this.listJson<PodEvent>('events', 'mission_id = ?', [missionId])
   }
 
+  dropEvents(missionId: string, predicate: (event: PodEvent) => boolean): number {
+    const all = this.listJson<PodEvent>('events', 'mission_id = ?', [missionId])
+    const doomed = all.filter(predicate).map((e) => e.id)
+    if (doomed.length === 0) return 0
+    const db = this.requireDb()
+    const placeholders = doomed.map(() => '?').join(',')
+    db.prepare(`DELETE FROM events WHERE mission_id = ? AND id IN (${placeholders})`).run(missionId, ...doomed)
+    return doomed.length
+  }
+
   flush(): void {
     // better-sqlite3 同步写 + 每操作即时提交（WAL），flush 为语义占位
   }

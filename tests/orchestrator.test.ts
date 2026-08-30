@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ConcurrencyLimitError } from '../src/core/errors.js'
 import { JsonStore } from '../src/core/store.js'
-import { MissionOrchestrator } from '../src/core/orchestrator.js'
+import { MissionOrchestrator, MAX_REVIEW_DIFF_CHARS, MAX_REVIEW_SPEC_CHARS } from '../src/core/orchestrator.js'
 import { repairPath } from '../src/workers/preflight.js'
 import type { LaunchInput, PlanTaskInput, WorktreeManager } from '../src/core/orchestrator.js'
 
@@ -1189,5 +1189,173 @@ describe('P2 对话式问题通道（task_question 事件）', () => {
     expect((q[0]!.payload as { questions: string[] }).questions).toContain('用 SQLite 还是 LevelDB？')
     expect(q[0]!.task_id).toBe('T-1')
     void summary
+  })
+})
+
+describe('P0 token 开销：审查上下文分级上限 + task_context 去重', () => {
+  it('被审 spec 与 diff 都按上限截断（此前无上限，单次派发可达 12 万+ 字符）', async () => {
+    const fx = await makeFixture()
+    const longSpec = 'x'.repeat(20_000)
+    const backend = new FakeBackend('ark', {
+      'T-1': { completion: { exit: 'done', report: doneReport('T-1'), usage: { tokens_in: 10, tokens_out: 5, source: 'measured' }, artifacts: [] } },
+      'T-2': { completion: { exit: 'done', report: doneReport('T-2', { task_type: 'review' }), usage: { tokens_in: 10, tokens_out: 5, source: 'measured' }, artifacts: [] } },
+    })
+    const orch = new MissionOrchestrator('M-1', {
+      store: fx.store,
+      backends: { ark: backend },
+      worktree: { ensure: async () => fx.repo },
+      verify: async (task, report) => ({ ok: true, failures: [], commit_sha: report.commit_sha, parent_sha: task.id + '-p', mismatch: false }),
+      diffProvider: async () => 'd'.repeat(100_000),
+    })
+    orch.launch({
+      name: 'r', goal: 'g', cwd: fx.repo, budgetUsd: 5,
+      slots: [
+        { id: 'S-1', vendor: 'ark', role: 'coder', capabilities: [] },
+        { id: 'S-2', vendor: 'ark', role: 'reviewer', capabilities: ['审查'] },
+      ],
+    })
+    orch.createTasks([
+      { id: 'T-1', title: '实现', spec: longSpec, type: 'implement', skill_tags: [] },
+      { id: 'T-2', title: '审查', spec: '审查 T-1', type: 'review', skill_tags: ['审查'], depends_on: ['T-1'] },
+    ])
+    await orch.run()
+    const reviewStart = backend.started.find((s) => s.task.id === 'T-2')!
+    const reviewSpec = reviewStart.task.spec
+    // 20K 的被审 spec → 2K；100K 的 diff → 40K；其余都是常量文案
+    expect(reviewSpec.length).toBeLessThan(MAX_REVIEW_DIFF_CHARS + MAX_REVIEW_SPEC_CHARS + 1_500)
+    expect(reviewSpec).toContain('截断')
+    // 关键回归：不得把 20K 的原始 spec 整段塞进审查上下文
+    expect(reviewSpec).not.toContain(longSpec)
+    fx.store.close()
+    rmSync(fx.root, { recursive: true, force: true })
+  })
+
+  it('产物摘要只注入非空项（此前给无摘要任务产出「T-1: 」空行）', async () => {
+    const fx = await makeFixture()
+    const backend = new FakeBackend('ark', {
+      'T-1': { completion: { exit: 'done', report: doneReport('T-1', { summary: '实现要点：加了缓存层' }), usage: { tokens_in: 10, tokens_out: 5, source: 'measured' }, artifacts: [] } },
+      'T-2': { completion: { exit: 'done', report: doneReport('T-2', { task_type: 'review' }), usage: { tokens_in: 10, tokens_out: 5, source: 'measured' }, artifacts: [] } },
+    })
+    const orch = new MissionOrchestrator('M-1', {
+      store: fx.store,
+      backends: { ark: backend },
+      worktree: { ensure: async () => fx.repo },
+      verify: async (task, report) => ({ ok: true, failures: [], commit_sha: report.commit_sha, parent_sha: task.id + '-p', mismatch: false }),
+    })
+    orch.launch({
+      name: 'r', goal: 'g', cwd: fx.repo, budgetUsd: 5,
+      slots: [
+        { id: 'S-1', vendor: 'ark', role: 'coder', capabilities: [] },
+        { id: 'S-2', vendor: 'ark', role: 'reviewer', capabilities: ['审查'] },
+      ],
+    })
+    orch.createTasks([
+      { id: 'T-1', title: '实现', spec: '实现缓存', type: 'implement', skill_tags: [] },
+      { id: 'T-2', title: '审查', spec: '审查 T-1', type: 'review', skill_tags: ['审查'], depends_on: ['T-1'] },
+    ])
+    await orch.run()
+    const reviewSpec = backend.started.find((s) => s.task.id === 'T-2')!.task.spec
+    expect(reviewSpec).toContain('被审产物摘要')
+    expect(reviewSpec).toContain('加了缓存层')
+    // 回归：摘要段里不得出现「T-1: 」这样的空值行
+    expect(reviewSpec).not.toMatch(/被审产物摘要[\s\S]*T-1:\s*$/m)
+    fx.store.close()
+    rmSync(fx.root, { recursive: true, force: true })
+  })
+
+  it('同一任务的 task_context 只保留最新一份（重试不再重复落盘 8KB）', async () => {
+    const fx = await makeFixture()
+    const backend = new FakeBackend('ark', {
+      'T-1': {
+        completion: failedCompletion(),
+        next: { exit: 'done', report: doneReport('T-1'), usage: { tokens_in: 10, tokens_out: 5, source: 'measured' }, artifacts: [] },
+      },
+      'T-2': { completion: { exit: 'done', report: doneReport('T-2', { task_type: 'review' }), usage: { tokens_in: 10, tokens_out: 5, source: 'measured' }, artifacts: [] } },
+    })
+    const orch = new MissionOrchestrator('M-1', {
+      store: fx.store,
+      backends: { ark: backend },
+      worktree: { ensure: async () => fx.repo },
+      verify: async (task, report) => ({ ok: true, failures: [], commit_sha: report.commit_sha, parent_sha: task.id + '-p', mismatch: false }),
+    })
+    orch.launch({
+      name: 'r', goal: 'g', cwd: fx.repo, budgetUsd: 5,
+      slots: [
+        { id: 'S-1', vendor: 'ark', role: 'coder', capabilities: [] },
+        { id: 'S-2', vendor: 'ark', role: 'reviewer', capabilities: ['审查'] },
+      ],
+    })
+    orch.createTasks([
+      { id: 'T-1', title: '实现', spec: 's'.repeat(12_000), type: 'implement', skill_tags: [] },
+      { id: 'T-2', title: '审查', spec: '审查 T-1', type: 'review', skill_tags: ['审查'], depends_on: ['T-1'] },
+    ])
+    await orch.run()
+    // 前提：T-1 确实派发了两次（失败 + 重派），否则这条测试是空转
+    expect(backend.started.filter((s) => s.task.id === 'T-1').length).toBe(2)
+    const ctx = fx.store.listEvents('M-1').filter((e) => e.kind === 'task_context' && e.task_id === 'T-1')
+    expect(ctx.length).toBe(1)
+    fx.store.close()
+    rmSync(fx.root, { recursive: true, force: true })
+  })
+})
+
+describe('P0 会话档位：会话句柄写回 slot（档位 B 复用）', () => {
+  function twoTasks(): Array<{ id: string; title: string; spec: string; type: 'implement'; skill_tags: string[] }> {
+    return [
+      { id: 'T-1', title: '实现 A', spec: 'a', type: 'implement', skill_tags: [] },
+      { id: 'T-2', title: '实现 B', spec: 'b', type: 'implement', skill_tags: [] },
+    ]
+  }
+
+  async function runWithTier(tier: 'per-mission' | 'transient'): Promise<{
+    started: Array<{ slot: AgentSlot; task: Task; worktree: string }>
+    slotRef: string | undefined
+    cleanup: () => void
+  }> {
+    const fx = await makeFixture()
+    const backend = new FakeBackend('ark', {
+      'T-1': { completion: { exit: 'done', report: doneReport('T-1'), usage: { tokens_in: 10, tokens_out: 5, source: 'measured' }, artifacts: [] } },
+      'T-2': { completion: { exit: 'done', report: doneReport('T-2'), usage: { tokens_in: 10, tokens_out: 5, source: 'measured' }, artifacts: [] } },
+    })
+    const orch = new MissionOrchestrator('M-1', {
+      store: fx.store,
+      backends: { ark: backend },
+      worktree: { ensure: async () => fx.repo },
+      verify: async (task, report) => ({ ok: true, failures: [], commit_sha: report.commit_sha, parent_sha: task.id + '-p', mismatch: false }),
+    })
+    orch.launch({
+      name: 'r', goal: 'g', cwd: fx.repo, budgetUsd: 5, parallel: 1,
+      slots: [{ id: 'S-1', vendor: 'ark', role: 'coder', capabilities: [], session_tier: tier }],
+    })
+    orch.createTasks(twoTasks())
+    await orch.run()
+    return {
+      started: backend.started,
+      // 槽位 id 带 mission 前缀（launch 时合成为 M-1-S-1）
+      slotRef: fx.store.getSlot('M-1-S-1')!.session_ref,
+      cleanup: () => {
+        fx.store.close()
+        rmSync(fx.root, { recursive: true, force: true })
+      },
+    }
+  }
+
+  it('per-mission：第二次派发带着第一次的 session_ref（此前恒 undefined）', async () => {
+    const r = await runWithTier('per-mission')
+    // 前提：两个任务都派给了同一个槽位，否则这条测试是空转
+    expect(r.started.length).toBe(2)
+    expect(r.started.every((s) => s.slot.id === 'M-1-S-1')).toBe(true)
+    // 回归：第二次派发必须读到第一次写回的句柄，否则 workers 层会再起一个新会话
+    expect(r.started[1]!.slot.session_ref).toBe('ark-session-T-1')
+    // 每次派发后刷新为本次句柄
+    expect(r.slotRef).toBe('ark-session-T-2')
+    r.cleanup()
+  })
+
+  it('transient 不写回（语义就是每任务新进程，无跨任务上下文）', async () => {
+    const r = await runWithTier('transient')
+    expect(r.started.length).toBe(2)
+    expect(r.slotRef).toBeUndefined()
+    r.cleanup()
   })
 })

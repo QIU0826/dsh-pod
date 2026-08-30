@@ -141,11 +141,29 @@ export interface OrchestratorDeps {
   onPlanExpanded?: (missionId: string, plan: PlanTaskInput[], sourceTaskId: string) => void
 }
 
-/** 注入审查提示词的 diff 长度上限（超限截断并标注，防窗口爆炸）。 */
-export const MAX_REVIEW_DIFF_CHARS = 120_000
+/**
+ * 注入审查提示词的 diff 长度上限（超限截断并标注，防窗口爆炸）。
+ *
+ * 120_000 → 40_000：12 万字符 ≈ 30–40K tokens，一次 review 派发就吃掉大半个上下文窗口，
+ * 且任务重试会按次数重复付费（attempts 上限 3 = 最多 3 倍）。
+ * 4 万字符足以覆盖一次可审查的改动量级；超限部分改为「指针 + 按需索取」，
+ * 由审查者用 need_clarify 点名要文件（安全约束 CR-03 保持不变：审查者仍无仓库命令权限）。
+ */
+export const MAX_REVIEW_DIFF_CHARS = 40_000
+
+/** 单个被审任务注入的原始规格长度上限（任务书开头即目标，截断通常不丢关键信息）。 */
+export const MAX_REVIEW_SPEC_CHARS = 2_000
+
+/** 单个被审任务注入的产物摘要长度上限。 */
+export const MAX_REVIEW_SUMMARY_CHARS = 1_500
 
 /** 并行执行上限的硬顶（v0.2 并行强化，防 fan-out 失控；仍受 MAX_SLOTS 约束）。 */
 export const MAX_PARALLEL_CEILING = 8
+
+/** 字符串截断并标注省略（审查注入的通用收口，避免各处裸 slice 忘记给提示）。 */
+function clip(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…（截断，共 ${text.length} 字符）` : text
+}
 
 /** slot/task id 白名单（P1）：定义已移至 types.ts（orchestrator/planner 共享），此处 re-export 兼容旧引用。 */
 export { SAFE_ENTITY_ID } from './types.js'
@@ -557,11 +575,14 @@ export class MissionOrchestrator {
       const diffRanges = targets
         .map((t) => `${t.id}（${t.parent_sha ?? '?'}..${t.commit_sha ?? '?'}）`)
         .join('、')
-      spec += `\n\n## 审查输入（最小上下文原则）\n审查对象：${diffRanges}\n仅审查该 diff + 规格 + 测试输出，刻意排除实现者推理叙事。\n规格：${targets.map((t) => `${t.id}: ${t.spec}`).join('；')}`
-      // DoD-19 最小上下文：非写码任务（research/doc/plan）无 diff，注入依赖任务的 report 摘要
-      const summaries = targets.map((t) => t.result_summary).filter((s): s is string => s !== undefined && s.length > 0)
-      if (summaries.length > 0) {
-        spec += `\n\n## 被审产物摘要（实现者 report.summary，宿主机注入）\n${targets.map((t) => `${t.id}: ${t.result_summary ?? ''}`).join('\n')}`
+      // 规格按任务逐个截断：此前无条件注入 N 份完整 spec（无上限），
+      // 一个 16 任务的 DAG 能把规格段堆到 12 万字符以上——这是单次派发最贵的一处。
+      spec += `\n\n## 审查输入（最小上下文原则）\n审查对象：${diffRanges}\n仅审查该 diff + 规格 + 测试输出，刻意排除实现者推理叙事。\n规格：${targets.map((t) => `${t.id}: ${clip(t.spec, MAX_REVIEW_SPEC_CHARS)}`).join('；')}`
+      // DoD-19 最小上下文：非写码任务（research/doc/plan）无 diff，注入依赖任务的 report 摘要。
+      // 只注入非空摘要：此前用 `?? ''` 兜底，会给无摘要的任务产出「T-1: 」这样的空行。
+      const withSummary = targets.filter((t): t is Task & { result_summary: string } => typeof t.result_summary === 'string' && t.result_summary.length > 0)
+      if (withSummary.length > 0) {
+        spec += `\n\n## 被审产物摘要（实现者 report.summary，宿主机注入）\n${withSummary.map((t) => `${t.id}: ${clip(t.result_summary, MAX_REVIEW_SUMMARY_CHARS)}`).join('\n')}`
       }
       if (this.diffProvider !== undefined) {
         const diffText = await this.diffProvider(task)
@@ -597,7 +618,13 @@ export class MissionOrchestrator {
 
     const enriched: Task = { ...task, spec }
     // Context Builder 落盘：把「实际发给该 agent 的完整上下文」存为事件——
-    // 前端上下文查看器的唯一事实源（base 规格 + 审查注入 + steer 注入，按段落可辨）
+    // 前端上下文查看器的唯一事实源（base 规格 + 审查注入 + steer 注入，按段落可辨）。
+    // 同一任务只保留最新一份：重试会重新派发，旧副本内容几乎相同（各 8KB），
+    // 留着只会挤占 MAX_EVENTS_PER_MISSION 上限并撑大 /status 的 events 载荷。
+    this.store.dropEvents(
+      this.missionId,
+      (e) => e.kind === 'task_context' && e.task_id === task.id,
+    )
     this.store.appendEvent(this.missionId, {
       id: `ev-ctx-${task.id}-${this.clock()}`,
       mission_id: this.missionId,
@@ -639,6 +666,15 @@ export class MissionOrchestrator {
       },
     })
     this.handles.set(task.id, handle)
+    // 档位 B/C 的会话复用：workers 层靠 slot.session_ref 判断「续会话还是起新会话」
+    // （claude: --resume <id>；codex: resume <threadId>）。
+    // 此前 core 侧从不写回，slot.session_ref 恒为 undefined → 每次派单都被判成
+    // 「起新会话」，声称的 per-mission 档位形同虚设：既重复付上下文重建的 token，
+    // 也丢了跨任务的连续性（agent 不记得自己刚做过什么）。
+    // transient 档位不写回（语义就是每任务新进程，无跨任务上下文）。
+    if (slot.session_tier !== 'transient' && handle.session_ref !== undefined && handle.session_ref.length > 0) {
+      this.store.updateSlot(slot.id, { session_ref: handle.session_ref })
+    }
     return true
   }
 
