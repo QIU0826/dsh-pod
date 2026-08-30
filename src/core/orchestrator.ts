@@ -790,6 +790,15 @@ export class MissionOrchestrator {
           this.taskMachine.fail(taskId, { kind: 'silent_failure', message: 'process exited 0 but produced no MISSION_REPORT' })
           break
         }
+        // task_id 宽限归一（真实 LLM 实证）：报告把任务 id 填成所属槽位 id（或其短形）
+        // → 视为等价改写；其他不匹配仍严格拒绝
+        if (completion.report.task_id !== task.id && task.owner_slot_id !== undefined) {
+          const owner = task.owner_slot_id
+          const ownerShort = owner.includes('-S-') ? owner.slice(owner.indexOf('-S-') + 1) : owner
+          if (completion.report.task_id === owner || completion.report.task_id === ownerShort) {
+            completion.report.task_id = task.id
+          }
+        }
         if (task.type === 'plan') {
           // 规划任务（P1）：提案先经代码裁决，再报完成——顺序很关键：report() 会把任务
           // 迁到 done，之后再拒绝就无法走 fail/重试路径了
@@ -994,6 +1003,7 @@ export class MissionOrchestrator {
     const id = `P-${(this.planSeq += 1)}`
     const spec = buildPlannerSpec({
       goal,
+      taskId: id,
       roster: this.store.listSlots(this.missionId).map((s) => ({ id: s.id, role: s.role, capabilities: s.capabilities })),
       replan:
         replan !== undefined

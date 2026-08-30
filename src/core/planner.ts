@@ -68,6 +68,8 @@ export interface PlannerSpecOptions {
   goal: string
   roster: PlannerRosterEntry[]
   replan?: PlannerReplanContext
+  /** 本规划任务的 id（写入报告 task_id，防与槽位 id 混淆）。 */
+  taskId?: string
 }
 
 /**
@@ -120,7 +122,7 @@ export function buildPlannerSpec(opts: PlannerSpecOptions): string {
     ']',
     '"assumptions": ["…"]',
     '```',
-    'task_id 填本规划任务自身的 id；task_type 填 plan；不 commit、files_changed 填 []。',
+    `task_id 填 "${opts.taskId ?? '本规划任务自身的 id'}"（注意：这是任务 id，不是你的槽位 id）；task_type 填 plan；不 commit、files_changed 填 []。`,
   )
   return lines.join('\n')
 }
