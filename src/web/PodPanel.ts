@@ -278,6 +278,11 @@ export function PodPanel(): ReactElement {
         navItem('settings', '设置', 'settings')),
       createElement('div', { className: 'dsh-main-col' },
         error !== null ? createElement('div', { className: 'dsh-note error', role: 'alert' }, error) : null,
+        status?.demo === true
+          ? createElement('div', { className: 'dsh-note demo', title: 'standalone --demo 启动' },
+              createElement('strong', null, '演示模式'),
+              createElement('span', null, '—— agent 是脚本演员（固定剧本，不执行你的真实目标，也不花一分钱）。要真跑请不带 --demo 重启并用已装好的 claude/codex CLI。'))
+          : null,
         createElement('header', { className: 'dsh-topbar' },
           createElement('div', { className: 'dsh-topbar-left' },
             createElement('div', { className: 'dsh-topbar-title' },

@@ -11,3 +11,4 @@ reports/
 !.env.example
 demo-data/
 .workbuddy/
+_real_e2e.log

@@ -240,6 +240,8 @@ export interface ClaudeStartOptions {
 
 export interface SpawnedClaude {
   child: ChildProcess
+  /** stderr 尾随（最后 ~12 行，失败归因的数据源；审计实证：API 401 曾被静默丢弃）。 */
+  stderrTail: string[]
   /** 逐行产出（stream-json 事件行 + 混入的 stderr 文本行）。 */
   onLine(line: string): void
   /** 进程退出（code/signal/timedOut；spawnFailed = 二进制启动失败，如 ENOENT）。 */
@@ -386,8 +388,10 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
     })
     // onLine 通过属性访问器路由进闭包：collect() 的赋值与 stdout/stderr 事件读同一个 handler。
     let lineHandler: (line: string) => void = () => {}
+    const stderrTail: string[] = []
     const spawned = {
       child,
+      stderrTail,
       writeStdin(text: string) {
         const stdin = child.stdin
         if (stdin === null) return
@@ -408,8 +412,17 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
           }
         }
         child.stdout?.on('data', consume)
-        // stderr 同流解析：钩子/提示行可容错跳过，错误行供分类（绝不静默丢弃）
-        child.stderr?.on('data', consume)
+        // stderr：除同流解析外，单独保留尾随（CLI 的 API 报错/鉴权失败走这里——
+        // 审计实证：401 时 collect 只看得到 exit 1，根因被静默丢弃）
+        child.stderr?.on('data', (chunk: Buffer) => {
+          for (const line of chunk.toString('utf8').split('\n')) {
+            const t = line.trim()
+            if (t.length === 0) continue
+            stderrTail.push(t)
+          }
+          if (stderrTail.length > 12) stderrTail.splice(0, stderrTail.length - 12)
+          consume(chunk)
+        })
         const timer = setTimeout(() => {
           // 树杀：shell 包装下 child.kill() 只杀到 cmd.exe，CLI 孙进程会继续烧 token
           void killTree(child.pid)
@@ -457,6 +470,10 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
     }
     const exit = await spawned.exited
     const resultEvent = lines.map(parseStreamJsonLine).reverse().find((e) => e?.type === 'result')
+    // 失败且无结构化结果 → 附 stderr 尾随（根因直达 UI，如「401 无效 token」）
+    const stderrDetail = spawned.stderrTail.length > 0 && resultEvent === undefined
+      ? spawned.stderrTail.join(' | ').slice(0, 400)
+      : undefined
     const usage = resultEvent === undefined ? { tokens_in: 0, tokens_out: 0, source: 'measured' as const } : (extractUsage(resultEvent) ?? { tokens_in: 0, tokens_out: 0, source: 'measured' as const })
     const errorInfo = resultEvent === undefined ? { isError: false } : resultErrorInfo(resultEvent)
     // spawn 失败显式归为 failed(crash)：不标则 code=null 走不到任何故障分支，会被误判 done
@@ -475,6 +492,7 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
         artifacts: report?.diff_path !== undefined ? [report.diff_path] : [],
         exit_code: exit.code ?? undefined,
         signal: exit.signal ?? undefined,
+        ...(stderrDetail !== undefined && exitKind !== 'done' ? { error_detail: stderrDetail } : {}),
       },
     }
   }

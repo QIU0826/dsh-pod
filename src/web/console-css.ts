@@ -445,4 +445,8 @@ export const CONSOLE_CSS = `
 /* ── 通告条 ───────────────────────────────── */
 .dsh-note { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 10px 20px 0; padding: 8px 12px; border-radius: 10px; flex: none; }
 .dsh-note.error { background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.3); color: #fca5a5; }
+.dsh-note.demo { background: rgba(245,158,11,.08); border: 1px solid rgba(245,158,11,.3); color: #fbbf24; }
+.dsh-note.demo strong { color: #fbbf24; font-weight: 600; margin-right: 2px; }
+.dsh-note.demo { background: rgba(245,158,11,.08); border: 1px solid rgba(245,158,11,.3); color: #fbbf24; }
+.dsh-note.demo strong { color: #fbbf24; font-weight: 600; margin-right: 2px; }
 `

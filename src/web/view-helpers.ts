@@ -82,7 +82,7 @@ export function rosterToSlots(roster: Array<{ vendor: string; role: string; capa
     vendor: m.vendor,
     role: m.role,
     capabilities: m.capabilities,
-    model: m.vendor === 'claude' ? 'deepseek-v4-pro' : '',
+    model: '', // 真实模式走各 CLI 默认模型（避免强制指定不存在的模型）
     avatar: m.avatar,
   }))
 }

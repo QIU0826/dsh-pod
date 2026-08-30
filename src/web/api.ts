@@ -70,6 +70,8 @@ export interface StatusResponse {
     by_stage?: Record<string, { tokens: number; equiv_usd: number; entries: number }>
   }
   runStatus?: string
+  /** 演示模式（--demo）：agent 为脚本演员，不执行真实任务。 */
+  demo?: boolean
   message: string
 }
 

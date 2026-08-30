@@ -117,6 +117,7 @@ export function createStandaloneServer(options: StandaloneOptions = {}): Standal
     store: runtime.store,
     memory: runtime.memory,
     dataDir: runtime.dataDir,
+    demo: options.demo === true,
     backends: options.demo === true
       ? { claude: new DemoBackend('claude'), codex: new DemoBackend('codex'), opencode: new DemoBackend('opencode') }
       : {

@@ -251,6 +251,7 @@ describe('ClaudeHeadlessBackend.start（FakeSpawner 集成）', () => {
         captured.push(args)
         return {
           child: { pid: 999 } as never,
+          stderrTail: [],
           onLine() {},
           writeStdin: (text: string) => {
             stdinText = text
@@ -291,6 +292,7 @@ describe('ClaudeHeadlessBackend.start（FakeSpawner 集成）', () => {
         void args
         return {
           child: { pid: 999 } as never,
+          stderrTail: [],
           onLine() {},
           writeStdin() {},
           exited: Promise.resolve({ code: 0, signal: null, timedOut: false }),
@@ -315,6 +317,7 @@ describe('ClaudeHeadlessBackend.start（FakeSpawner 集成）', () => {
         let sink: (line: string) => void = () => {}
         const spawned = {
           child: { pid: 999 } as never,
+          stderrTail: [],
           onLine: (line: string) => {
             sink(line)
           },
@@ -365,6 +368,7 @@ describe('spawn 失败路径（P0：error 监听防宿主崩溃 + 不误判 done
       clock: () => 1_700_000_000_000,
       spawner: () => ({
         child: { pid: 999 } as never,
+        stderrTail: [],
         onLine() {},
         writeStdin() {},
         exited: Promise.resolve({ code: null, signal: null, timedOut: false, spawnFailed: true }),

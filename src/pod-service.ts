@@ -81,6 +81,11 @@ export interface PodServiceOptions {
   clock?: () => number
   /** CR-01-10 桌面通知送达回调（宿主注入；缺省仅日志）。 */
   notify?: (n: { kind: string; mission_id: string; title: string; detail: string }) => void
+  /**
+   * 演示模式（standalone --demo）：backends 为脚本化 DemoBackend——agent 不执行
+   * 真实任务，只按固定剧本走管线。UI 必须显著标注，避免误以为 agent 在真干活。
+   */
+  demo?: boolean
 }
 
 /** commander 会话启动器（插件层注入：ctx.agents.create + agentCtx 作用域注册，CR-05-2）。 */
@@ -106,7 +111,10 @@ export class PodService {
   private readonly cronJobsFile: string
   private cronMtimeMs = -1
 
+  private readonly demo: boolean
+
   constructor(options: PodServiceOptions) {
+    this.demo = options.demo ?? false
     this.store = options.store
     this.clock = options.clock ?? (() => Date.now())
     this.dataDir = options.dataDir ?? join(homedir(), '.dsh', 'pod')
@@ -555,17 +563,23 @@ export class PodService {
     return this.orchestrator
   }
 
+  /** 演示模式（--demo）：agent 为脚本演员，UI 据此展示显著标识。 */
+  isDemo(): boolean {
+    return this.demo
+  }
+
   status(): {
     mission?: Mission
     tasks: Task[]
     slots: AgentSlot[]
     pendingApprovals: ApprovalRequest[]
     runStatus?: string
+    demo?: boolean
     /** Berd-E 灰度开关（Canvas UI 据此显隐拓扑动画/自由画布/第三栏，默认关、fail-closed）。 */
     experiments: { topology_animation: boolean; canvas_third_column: boolean }
   } {
     const active = this.store.getActiveMission()
-    if (active === undefined) return { tasks: [], slots: [], pendingApprovals: [], experiments: { topology_animation: this.experiments.isEnabled('topology-animation'), canvas_third_column: this.experiments.isEnabled('canvas-third-column') } }
+    if (active === undefined) return { tasks: [], slots: [], pendingApprovals: [], demo: this.demo, experiments: { topology_animation: this.experiments.isEnabled('topology-animation'), canvas_third_column: this.experiments.isEnabled('canvas-third-column') } }
     const orch = this.requireOrchestrator()
     const snapshot = orch.status()
     return {
@@ -573,6 +587,7 @@ export class PodService {
       tasks: snapshot.tasks,
       slots: snapshot.slots,
       pendingApprovals: snapshot.pendingApprovals,
+      demo: this.demo,
       // 驱动在途判定：此前看 this.running（resolve 后仍非 undefined，永远显示 running）
       runStatus: orch.driveActive() ? 'running' : 'idle',
       experiments: { topology_animation: this.experiments.isEnabled('topology-animation'), canvas_third_column: this.experiments.isEnabled('canvas-third-column') },

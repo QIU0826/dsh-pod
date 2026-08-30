@@ -830,7 +830,8 @@ export class MissionOrchestrator {
       case 'failed': {
         const fault: FaultKind =
           completion.fault ?? classifyFault({ exit: 'failed', exitCode: completion.exit_code }) ?? 'crash'
-        this.taskMachine.fail(taskId, { kind: fault, message: `worker failed (exit ${completion.exit_code ?? '?'})` })
+        const detail = completion.error_detail !== undefined ? `: ${completion.error_detail}` : ''
+        this.taskMachine.fail(taskId, { kind: fault, message: `worker failed (exit ${completion.exit_code ?? '?'})${detail}` })
         break
       }
       case 'killed':
@@ -893,8 +894,20 @@ export class MissionOrchestrator {
     // 停摆兜底（存储级，不依赖内存 watchdog 状态——实证：驱动循环存在静默挂起的
     // 运行态）：active 任务超过 STALL_TIMEOUT_MS 无任何落盘进展 → 故障化（idle_timeout）
     // 并确保重驱。任何停摆最多一个巡检周期 + 超时窗口后自愈。
+    // 真实后端的流式进度不更新 task.updated_at——「进展」必须把该任务最新事件 ts
+    // 算进去，否则长任务的流式输出期间会被误杀。
+    let lastEventTsByTask: Map<string, number> | undefined
     for (const task of this.activeTasks()) {
-      if (this.clock() - task.updated_at < STALL_TIMEOUT_MS) continue
+      if (lastEventTsByTask === undefined) {
+        lastEventTsByTask = new Map()
+        for (const e of this.store.listEvents(this.missionId)) {
+          if (e.task_id === undefined) continue
+          const prev = lastEventTsByTask.get(e.task_id)
+          if (prev === undefined || e.ts > prev) lastEventTsByTask.set(e.task_id, e.ts)
+        }
+      }
+      const lastProgress = Math.max(task.updated_at, lastEventTsByTask.get(task.id) ?? 0)
+      if (this.clock() - lastProgress < STALL_TIMEOUT_MS) continue
       try {
         this.killTask(task.id)
       } catch { /* 句柄可能已死 */ }

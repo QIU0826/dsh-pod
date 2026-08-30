@@ -359,6 +359,8 @@ export interface WorkerCompletion {
   artifacts: string[]
   exit_code?: number
   signal?: string
+  /** 失败时的底层报错尾随（如 CLI stderr 的 API 401 文本），供 UI 直达根因。 */
+  error_detail?: string
 }
 
 export interface WorkerBackend {
