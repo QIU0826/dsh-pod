@@ -7,7 +7,6 @@ import { JsonStore } from '../src/core/store.js'
 import { PodService } from '../src/pod-service.js'
 import { DemoBackend } from '../src/workers/demo-backend.js'
 import { repairPath } from '../src/workers/preflight.js'
-import type { Task } from '../src/core/types.js'
 
 repairPath()
 
@@ -48,15 +47,11 @@ describe('停摆兜底：active 任务超时无进展 → 故障化重派', () =
     })
     // 等默认链完成（无 planner：默认实现+审查两任务）
     await new Promise((r) => setTimeout(r, 8000))
+    // 时间推进 11 分钟：launch 产生的事件也全部变陈旧（新语义：事件进展同样有时效）
+    clockNow += 11 * 60_000
     const active = store.listTasks(mission.id).filter((t) => t.status === 'dispatched' || t.status === 'running')
-    if (active.length === 0) {
-      // 已全部完成（快机器）：直接伪造一个挂起任务验证兜底
-      const t0 = store.listTasks(mission.id)[0]! as Task
-      store.updateTask(mission.id, t0.id, { status: 'running', updated_at: clockNow - 10 * 60_000 })
-    } else {
-      const t = active[0]!
-      store.updateTask(mission.id, t.id, { updated_at: clockNow - 10 * 60_000 })
-    }
+    const target = active[0] ?? store.listTasks(mission.id)[0]!
+    store.updateTask(mission.id, target.id, { status: 'running', updated_at: clockNow - 10 * 60_000 })
     const stalled = store.listTasks(mission.id).find((x) => (x.status === 'running' || x.status === 'dispatched') && x.updated_at < clockNow - 3 * 60_000)
     expect(stalled).toBeDefined()
     service.maintenanceTick()

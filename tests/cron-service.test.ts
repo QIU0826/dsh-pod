@@ -4,11 +4,21 @@
  * 默认关（无 cron.json = 无 job，Berd-H 显式启用纪律）；节流防抖与 watchdog 同拍。
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { execFileSync } from 'node:child_process'
 import { JsonStore } from '../src/core/store.js'
 import { PodService } from '../src/pod-service.js'
+
+
+  /** cwd git 预检要求真实仓库：测试用临时 git 仓库（单 EMPTY_COMMIT，零内容）。 */
+  function initRepo(dir: string): string {
+    mkdirSync(dir, { recursive: true })
+    execFileSync('git', ['-C', dir, 'init', '-q'], { stdio: 'ignore' })
+    execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '--allow-empty', '-qm', 'init'], { stdio: 'ignore' })
+    return dir
+  }
 
 describe('PodService × CronScheduler 接线（CR-34）', () => {
   let root: string
@@ -16,6 +26,7 @@ describe('PodService × CronScheduler 接线（CR-34）', () => {
   let service: PodService
   let clockNow: number
   let cronFile: string
+  let repo: string
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'pod-cron-'))
@@ -23,6 +34,7 @@ describe('PodService × CronScheduler 接线（CR-34）', () => {
     store = new JsonStore({ rootDir: root, clock: () => clockNow })
     store.open()
     service = new PodService({ store, backends: {}, clock: () => clockNow, dataDir: root })
+    repo = initRepo(join(root, 'repo'))
     cronFile = join(root, 'cron.json')
   })
 
@@ -80,7 +92,7 @@ describe('PodService × CronScheduler 接线（CR-34）', () => {
   })
 
   it('launch 命令经 ChannelTarget 真实创建 mission（复用 pod_launch 面）', async () => {
-    writeCron([{ id: 'cron-launch', intervalMs: 1, enabled: true, command: { kind: 'launch', name: 'cron-m', goal: '定时巡检', cwd: 'C:\\repo', slots: [] } }])
+    writeCron([{ id: 'cron-launch', intervalMs: 1, enabled: true, command: { kind: 'launch', name: 'cron-m', goal: '定时巡检', cwd: repo, slots: [] } }])
     service.maintenanceTick()
     await new Promise((r) => setTimeout(r, 30))
     const missions = store.listMissions()

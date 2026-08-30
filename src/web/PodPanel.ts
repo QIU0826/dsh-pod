@@ -277,7 +277,12 @@ export function PodPanel(): ReactElement {
         createElement('span', { className: 'dsh-rail-spacer' }),
         navItem('settings', '设置', 'settings')),
       createElement('div', { className: 'dsh-main-col' },
-        error !== null ? createElement('div', { className: 'dsh-note error', role: 'alert' }, error) : null,
+        error !== null
+          ? createElement('div', { className: 'dsh-note error', role: 'alert' }, error)
+          : status?.last_error !== undefined && status.last_error.length > 0
+            ? createElement('div', { className: 'dsh-note error', role: 'alert', title: '最近一次会话崩溃的原因' },
+                '上次会话启动失败：', status.last_error)
+            : null,
         status?.demo === true
           ? createElement('div', { className: 'dsh-note demo', title: 'standalone --demo 启动' },
               createElement('strong', null, '演示模式'),

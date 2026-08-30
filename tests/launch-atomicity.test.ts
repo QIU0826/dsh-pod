@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { JsonStore } from '../src/core/store.js'
@@ -40,18 +40,15 @@ describe('发射故障原子性（planning 僵尸修复）', () => {
     { id: 'S-2', vendor: 'claude' as const, role: 'implementer', capabilities: ['编码'], model: 'm' },
   ]
 
-  it('run 崩溃（cwd 非 git 仓库 → worktree 失败）→ mission 转 aborted，不阻塞下一次 launch', async () => {
-    const bad = service.launch({
-      name: '坏目录', goal: 'g', cwd: join(root, 'not-a-repo'), budgetUsd: 1_000_000_000, slots: roster,
-    })
-    // run 是异步崩溃：等它落终态
-    await new Promise((resolve) => setTimeout(resolve, 1500))
-    const after = store.getMission(bad.id)!
-    expect(['aborted', 'needs_human', 'escalated']).toContain(after.status)
-    // 单活跃锁已释放：可以再次发射（这次用合法参数也会因同一坏目录失败，但必须是「新的失败」而非 409 僵尸锁）
-    const events = store.listEvents(bad.id).map((e) => e.kind)
-    expect(events).toContain('mission_run_error')
-  }, 15_000)
+  it('cwd 非 git 仓库 → 发射前同步拒绝（CWD_NOT_GIT_REPO），零残留不阻塞后续', () => {
+    // 审计修复：此前 mission 创建后 run 异步崩溃 → aborted 僵尸；现在发射前预检直接拒绝
+    const notRepo = join(root, 'exists-but-not-repo')
+    mkdirSync(notRepo, { recursive: true })
+    expect(() => service.launch({
+      name: '坏目录', goal: 'g', cwd: notRepo, budgetUsd: 1_000_000_000, slots: roster,
+    })).toThrow(/不是 git 仓库/)
+    expect(store.listMissions()).toHaveLength(0) // 零残留：连 planning 碎片都没有
+  })
 
   it('maintenanceTick 自愈：无编排器归属的 planning 僵尸 → aborted + 释放单活跃锁', () => {
     const now = Date.now()

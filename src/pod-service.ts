@@ -232,9 +232,28 @@ export class PodService {
   }
 
   /** 启动 mission：创建编排器（含真实 worktree/diff/verifier）并后台驱动。 */
+  /** 最近一次 run 崩溃（mission 已落终态，但用户必须看到原因——事件流已过滤掉终态会话）。 */
+  private lastRunError: { missionId: string; message: string; ts: number } | undefined
+
   launch(input: Omit<LaunchInput, 'slots'> & { slots: LaunchInput['slots']; plan?: PlanTaskInput[] }): Mission {
     // DoD-15：后端版本锁定（Berd-A）——mismatch 拒绝 launch；首次运行自动 pin
     this.enforceBackendLock()
+    // cwd 预检（用户实证：选了非 git 目录 → run 异步崩溃，UI 只见「卡住」）：
+    // 同步给出明确 422，而不是让 mission 创建后 3 秒静默死掉
+    if (!existsSync(input.cwd)) {
+      throw new PodError(`目标目录不存在: ${input.cwd}`, 'CWD_NOT_FOUND')
+    }
+    try {
+      const inside = execFileSync('git', ['-C', input.cwd, 'rev-parse', '--is-inside-work-tree'], {
+        encoding: 'utf8', timeout: 10_000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim()
+      if (inside !== 'true') throw new Error('not inside work tree')
+    } catch {
+      throw new PodError(
+        `目标目录不是 git 仓库: ${input.cwd}（在该目录执行 git init，或选择已有的 git 仓库）`,
+        'CWD_NOT_GIT_REPO',
+      )
+    }
     const missionId = `M-${this.clock()}-${Math.floor(Math.random() * 1e6)}`
     const orchestrator = this.makeOrchestrator(missionId)
     const mission = orchestrator.launch(input)
@@ -273,6 +292,7 @@ export class PodService {
     this.running = orchestrator.run().catch((error) => {
       const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
       console.error('[dsh-pod] mission run crashed:', message)
+      this.lastRunError = { missionId, message, ts: this.clock() }
       this.store.appendEvent(missionId, {
         id: `ev-run-error-${this.clock()}`,
         mission_id: missionId,
@@ -575,11 +595,18 @@ export class PodService {
     pendingApprovals: ApprovalRequest[]
     runStatus?: string
     demo?: boolean
+    /** 无活跃会话时，最近一次 run 崩溃的原因（5 分钟内；终态会话事件已从流中过滤）。 */
+    last_error?: string
     /** Berd-E 灰度开关（Canvas UI 据此显隐拓扑动画/自由画布/第三栏，默认关、fail-closed）。 */
     experiments: { topology_animation: boolean; canvas_third_column: boolean }
   } {
     const active = this.store.getActiveMission()
-    if (active === undefined) return { tasks: [], slots: [], pendingApprovals: [], demo: this.demo, experiments: { topology_animation: this.experiments.isEnabled('topology-animation'), canvas_third_column: this.experiments.isEnabled('canvas-third-column') } }
+    if (active === undefined) {
+      const fresh = this.lastRunError !== undefined && this.clock() - this.lastRunError.ts < 5 * 60_000
+        ? this.lastRunError
+        : undefined
+      return { tasks: [], slots: [], pendingApprovals: [], demo: this.demo, last_error: fresh?.message, experiments: { topology_animation: this.experiments.isEnabled('topology-animation'), canvas_third_column: this.experiments.isEnabled('canvas-third-column') } }
+    }
     const orch = this.requireOrchestrator()
     const snapshot = orch.status()
     return {

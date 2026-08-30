@@ -51,6 +51,18 @@ export function streamJsonToProgress(
   event: StreamJsonEvent,
   ts: number,
 ): WorkerProgressEvent | undefined {
+  // system/api_retry 透传（审计实证：token 失效时 CLI 重试 2-3 分钟，期间零事件
+  // → 停摆兜底误杀 + 用户只见神秘 exit 1）。system 进度既可观测又计入停摆判定。
+  if (event.type === 'system') {
+    const systemEvent = event as { subtype?: string; attempt?: number; max_retries?: number; error?: string; status?: string }
+    if (systemEvent.subtype === 'api_retry') {
+      return {
+        slot_id: slotId, task_id: taskId, ts, kind: 'system',
+        text: `API 重试 ${systemEvent.attempt ?? '?'}/${systemEvent.max_retries ?? '?'}（${systemEvent.error ?? '未知错误'}）`,
+      }
+    }
+    return undefined
+  }
   if (event.type !== 'assistant') return undefined
   const message = event.message as
     | { content?: Array<{ type: string; text?: string; name?: string; input?: unknown }> }
@@ -469,8 +481,10 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
       }
     }
     const exit = await spawned.exited
-    const resultEvent = lines.map(parseStreamJsonLine).reverse().find((e) => e?.type === 'result')
-    // 失败且无结构化结果 → 附 stderr 尾随（根因直达 UI，如「401 无效 token」）
+    const parsedLines = lines.map(parseStreamJsonLine)
+    const resultEvent = parsedLines.reverse().find((e) => e?.type === 'result')
+    // 失败根因（审计实证：API 401 曾只见 exit 1）：优先 stdout 的 api_retry 尾记录，
+    // 其次 stderr 尾随；成功时不附
     const stderrDetail = spawned.stderrTail.length > 0 && resultEvent === undefined
       ? spawned.stderrTail.join(' | ').slice(0, 400)
       : undefined
@@ -482,6 +496,18 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
     const report = extractReport(text)
     const exitKind: WorkerCompletion['exit'] =
       exit.spawnFailed ? 'failed' : errorInfo.isError && fault === null ? 'failed' : fault === 'rate_limited' ? 'rate_limited' : exit.timedOut ? 'timeout' : fault !== null ? 'failed' : 'done'
+    // stdout 的最后一条 api_retry/错误类 system 事件 = 真实根因（401 等）
+    const lastRetry = parsedLines.reverse().find((e) => e?.type === 'system' && (e as { subtype?: string }).subtype === 'api_retry') as
+      | { attempt?: number; max_retries?: number; error?: string }
+      | undefined
+    let errorDetail: string | undefined
+    if (exitKind !== 'done') {
+      if (lastRetry !== undefined) {
+        errorDetail = `API 重试 ${lastRetry.attempt ?? '?'}/${lastRetry.max_retries ?? '?'} 次后失败：${lastRetry.error ?? '未知错误'}（检查 ANTHROPIC_BASE_URL/AUTH_TOKEN 凭据）`
+      } else if (stderrDetail !== undefined) {
+        errorDetail = stderrDetail
+      }
+    }
     return {
       sessionRef: typeof resultEvent?.session_id === 'string' ? resultEvent.session_id : undefined,
       completion: {
@@ -492,7 +518,7 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
         artifacts: report?.diff_path !== undefined ? [report.diff_path] : [],
         exit_code: exit.code ?? undefined,
         signal: exit.signal ?? undefined,
-        ...(stderrDetail !== undefined && exitKind !== 'done' ? { error_detail: stderrDetail } : {}),
+        ...(errorDetail !== undefined ? { error_detail: errorDetail } : {}),
       },
     }
   }

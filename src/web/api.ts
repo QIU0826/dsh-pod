@@ -72,6 +72,8 @@ export interface StatusResponse {
   runStatus?: string
   /** 演示模式（--demo）：agent 为脚本演员，不执行真实任务。 */
   demo?: boolean
+  /** 无活跃会话时，最近一次会话崩溃的原因（终态会话事件已从流中过滤，靠此字段直达用户）。 */
+  last_error?: string
   message: string
 }
 

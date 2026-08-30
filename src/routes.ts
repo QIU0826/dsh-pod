@@ -157,6 +157,7 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
           })),
           ledger: current.ledgerTail(),
           demo: current.isDemo(),
+          last_error: snapshot.last_error,
           experiments: snapshot.experiments,
           message: snapshot.mission?.status ?? 'no active mission',
         })

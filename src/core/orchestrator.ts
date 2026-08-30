@@ -159,8 +159,10 @@ interface WakeLatch {
   resolve?: () => void
 }
 
-/** 停摆兜底窗口：active 任务无落盘进展超过此时长 → 故障化重派。 */
-const STALL_TIMEOUT_MS = 3 * 60_000
+/** 停摆兜底窗口：active 任务无落盘进展超过此时长 → 故障化重派。
+ * 10min：真实 LLM 长思考 + CLI 内部 API 重试期可能 3-5min 无 assistant 事件，
+ * api_retry 已透传为事件计入进展，此窗口只兜「真死」。 */
+const STALL_TIMEOUT_MS = 10 * 60_000
 
 export class MissionOrchestrator {
   private readonly store: PodStore
@@ -900,8 +902,10 @@ export class MissionOrchestrator {
     for (const task of this.activeTasks()) {
       if (lastEventTsByTask === undefined) {
         lastEventTsByTask = new Map()
+        // 时钟偏斜容错：后端混用真实时钟时事件 ts 可能远超服务时钟——明显「来自未来」
+        // 的事件不能当作进展（否则守卫被永久跳过），直接忽略
         for (const e of this.store.listEvents(this.missionId)) {
-          if (e.task_id === undefined) continue
+          if (e.task_id === undefined || e.ts > this.clock() + 60_000) continue
           const prev = lastEventTsByTask.get(e.task_id)
           if (prev === undefined || e.ts > prev) lastEventTsByTask.set(e.task_id, e.ts)
         }

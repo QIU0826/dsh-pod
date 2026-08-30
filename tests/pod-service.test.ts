@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { execFileSync } from 'node:child_process'
 import { JsonStore } from '../src/core/store.js'
 import { PodService, defaultPlan, EVENT_TAIL_LIMIT } from '../src/pod-service.js'
 
@@ -9,10 +10,20 @@ import { PodService, defaultPlan, EVENT_TAIL_LIMIT } from '../src/pod-service.js
  * PodService 宿主侧闭环测试：commander 自动创建接线 + maintenanceTick 透传 + 默认任务链。
  * 空 backends + 无任务 plan → run() 立即收敛，不触达真实 CLI（无 API 消耗）。
  */
+
+  /** cwd git 预检要求真实仓库：测试用临时 git 仓库（单 EMPTY_COMMIT，零内容）。 */
+  function initRepo(dir: string): string {
+    mkdirSync(dir, { recursive: true })
+    execFileSync('git', ['-C', dir, 'init', '-q'], { stdio: 'ignore' })
+    execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '--allow-empty', '-qm', 'init'], { stdio: 'ignore' })
+    return dir
+  }
+
 describe('PodService 宿主闭环（CR-05-6）', () => {
   let root: string
   let store: JsonStore
   let service: PodService
+  let repo: string
   let clockNow: number
 
   beforeEach(() => {
@@ -20,6 +31,7 @@ describe('PodService 宿主闭环（CR-05-6）', () => {
     clockNow = 1_700_000_000_000
     store = new JsonStore({ rootDir: root, clock: () => clockNow })
     store.open()
+    repo = initRepo(join(root, 'repo'))
     service = new PodService({ store, backends: {}, clock: () => clockNow, dataDir: root })
   })
 
@@ -30,9 +42,9 @@ describe('PodService 宿主闭环（CR-05-6）', () => {
   it('launch 自动调用 commander 启动器（mission 独立会话承载编排）', async () => {
     const launcher = vi.fn(async () => ({ sessionId: 'pod-mission-1' }))
     service.setCommanderLauncher(launcher)
-    service.launch({ name: 'm', goal: '实现 X', cwd: 'C:\\repo', budgetUsd: 2, slots: [] })
+    service.launch({ name: 'm', goal: '实现 X', cwd: repo, budgetUsd: 2, slots: [] })
     await new Promise((resolve) => setTimeout(resolve, 50))
-    expect(launcher).toHaveBeenCalledWith('实现 X', 'C:\\repo')
+    expect(launcher).toHaveBeenCalledWith('实现 X', repo)
   })
 
   it('commander 创建失败 → 落事件不阻断 mission（编排可降级）', async () => {
@@ -40,7 +52,7 @@ describe('PodService 宿主闭环（CR-05-6）', () => {
       throw new Error('AGENT_FACTORY_UNAVAILABLE')
     })
     service.setCommanderLauncher(launcher)
-    service.launch({ name: 'm', goal: 'g', cwd: 'C:\\repo', budgetUsd: 2, slots: [] })
+    service.launch({ name: 'm', goal: 'g', cwd: repo, budgetUsd: 2, slots: [] })
     await new Promise((resolve) => setTimeout(resolve, 50))
     const events = store.listEvents(store.listMissions()[0]!.id).map((e) => e.kind)
     expect(events).toContain('commander_creation_error')
@@ -51,7 +63,7 @@ describe('PodService 宿主闭环（CR-05-6）', () => {
   })
 
   it('未注入 commander 启动器时 launch 不抛（可选接线）', async () => {
-    const mission = service.launch({ name: 'm', goal: 'g', cwd: 'C:\\repo', budgetUsd: 2, slots: [] })
+    const mission = service.launch({ name: 'm', goal: 'g', cwd: repo, budgetUsd: 2, slots: [] })
     expect(mission.status).toBe('planning')
     await new Promise((resolve) => setTimeout(resolve, 50))
     // 自动默认链存在但无人可派（slots 空）→ 转人工；mission 状态保持 running
@@ -59,7 +71,7 @@ describe('PodService 宿主闭环（CR-05-6）', () => {
   })
 
   it('launch 缺省 plan → 自动生成「实现 + 独立 review」默认链（CR-06-5 质量门默认开）', async () => {
-    const mission = service.launch({ name: 'm', goal: '实现 multiply 函数', cwd: 'C:\\repo', budgetUsd: 2, slots: [] })
+    const mission = service.launch({ name: 'm', goal: '实现 multiply 函数', cwd: repo, budgetUsd: 2, slots: [] })
     const tasks = store.listTasks(mission.id)
     expect(tasks.map((t) => t.type)).toEqual(['implement', 'review'])
     expect(tasks[1]!.depends_on).toEqual(['T-1'])
@@ -74,7 +86,7 @@ describe('PodService 宿主闭环（CR-05-6）', () => {
   })
 
   it('DoD-2：launch 将 plan 落盘为 plan.md（mission 数据目录，唯一事实源）', () => {
-    const mission = service.launch({ name: 'm', goal: '实现 multiply 函数', cwd: 'C:\\repo', budgetUsd: 2, slots: [] })
+    const mission = service.launch({ name: 'm', goal: '实现 multiply 函数', cwd: repo, budgetUsd: 2, slots: [] })
     const planPath = join(root, 'missions', mission.id, 'plan.md')
     expect(existsSync(planPath)).toBe(true)
     const content = readFileSync(planPath, 'utf8')
@@ -114,13 +126,15 @@ describe('eventsAfter id 游标（SSE 路径：同毫秒事件不丢，审计 P1
   let root: string
   let store: JsonStore
   let service: PodService
+  let repo: string
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'pod-events-after-'))
+    repo = initRepo(join(root, 'repo'))
     store = new JsonStore({ rootDir: root, clock: () => 1_700_000_000_000 })
     store.open()
     service = new PodService({ store, backends: {}, clock: () => 1_700_000_000_000, dataDir: root })
-    service.launch({ name: 'm', goal: 'g', cwd: 'C:\repo', budgetUsd: 2, slots: [] })
+    service.launch({ name: 'm', goal: 'g', cwd: repo, budgetUsd: 2, slots: [] })
   })
 
   afterEach(() => {
@@ -147,15 +161,17 @@ describe('eventsTail 分页游标（HTTP 轮询路径：超限不丢、同毫秒
   let root: string
   let store: JsonStore
   let service: PodService
+  let repo: string
   let clockNow: number
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'pod-events-tail-'))
+    repo = initRepo(join(root, 'repo'))
     clockNow = 1_700_000_000_000
     store = new JsonStore({ rootDir: root, clock: () => clockNow })
     store.open()
     service = new PodService({ store, backends: {}, clock: () => clockNow, dataDir: root })
-    service.launch({ name: 'm', goal: 'g', cwd: 'C:\\repo', budgetUsd: 2, slots: [] })
+    service.launch({ name: 'm', goal: 'g', cwd: repo, budgetUsd: 2, slots: [] })
   })
 
   afterEach(() => {
