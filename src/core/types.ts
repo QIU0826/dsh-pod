@@ -114,11 +114,18 @@ export interface AgentSlot {
   model: string
   effort: 'low' | 'medium' | 'high'
   session_ref?: string
+  /**
+   * 当前会话开始时的累计 token 基线（档位 C 重置会话时更新为此刻的累计值）。
+   * 占用率按「基线之后的增量」算：会话重建后实际占用归零，但累计消耗不能清零
+   * （那是成本事实，UI 与账本都在用）——少了这个基线，重置后下一次算占用率
+   * 会立刻反弹回高位，导致每次派发都触发重置。
+   */
+  session_base_tokens?: number
   session_tier: SessionTier
   status: SlotStatus
   tokens_in: number
   tokens_out: number
-  /** 上下文占用估算（tokens_in+out / 窗口大小，档位 C 判定用）。 */
+  /** 当前会话的上下文占用估算（扣除会话基线后的增量 / 窗口大小，档位 C 判定用）。 */
   ctx_usage_pct: number
   window_tokens: number
   worktree_path?: string

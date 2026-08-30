@@ -21,7 +21,7 @@ import type {
   WorkerHandle,
   WorkerProgressEvent,
 } from '../src/core/types.js'
-import { APPROVAL_STALE_MS } from '../src/core/types.js'
+import { APPROVAL_STALE_MS, CTX_RESET_THRESHOLD_PCT } from '../src/core/types.js'
 
 /**
  * FakeBackend：脚本化回放——start 记录调用并按任务 id 脚本产出进度与完成信号。
@@ -1357,5 +1357,54 @@ describe('P0 会话档位：会话句柄写回 slot（档位 B 复用）', () =>
     expect(r.started.length).toBe(2)
     expect(r.slotRef).toBeUndefined()
     r.cleanup()
+  })
+
+  it('占用达阈值 → 重建会话 + 注入摘要 + 记基线，且不会每次派发都重置', async () => {
+    const fx = await makeFixture()
+    const backend = new FakeBackend('ark', {
+      'T-1': { completion: { exit: 'done', report: doneReport('T-1'), usage: { tokens_in: 60, tokens_out: 20, source: 'measured' }, artifacts: [] } },
+      'T-2': { completion: { exit: 'done', report: doneReport('T-2'), usage: { tokens_in: 5, tokens_out: 5, source: 'measured' }, artifacts: [] } },
+      'T-3': { completion: { exit: 'done', report: doneReport('T-3'), usage: { tokens_in: 5, tokens_out: 5, source: 'measured' }, artifacts: [] } },
+    })
+    const orch = new MissionOrchestrator('M-1', {
+      store: fx.store,
+      backends: { ark: backend },
+      worktree: { ensure: async () => fx.repo },
+      verify: async (task, report) => ({ ok: true, failures: [], commit_sha: report.commit_sha, parent_sha: task.id + '-p', mismatch: false }),
+    })
+    orch.launch({
+      name: 'r', goal: 'g', cwd: fx.repo, budgetUsd: 5, parallel: 1,
+      // 窗口 100 token：T-1 消耗 80 → 占用 80%，跨过 70% 阈值
+      slots: [{ id: 'S-1', vendor: 'ark', role: 'coder', capabilities: [], session_tier: 'per-mission', window_tokens: 100 }],
+    })
+    orch.createTasks([
+      { id: 'T-1', title: '实现 A', spec: 'a', type: 'implement', skill_tags: [] },
+      { id: 'T-2', title: '实现 B', spec: 'b', type: 'implement', skill_tags: [] },
+      { id: 'T-3', title: '实现 C', spec: 'c', type: 'implement', skill_tags: [] },
+    ])
+    await orch.run()
+
+    // 只重置一次：T-2 派发时触发；T-3 派发时占用已按基线归零 → 不再触发
+    // （没有基线的話，累计 90/100 = 90% 会让它每次派发都重置）
+    const resets = fx.store.listEvents('M-1').filter((e) => e.kind === 'session_reset')
+    expect(resets.length).toBe(1)
+    expect((resets[0]!.payload as { ctx_usage_pct: number }).ctx_usage_pct).toBe(80)
+
+    // 重置摘要注入 T-2 的上下文（含已完成的 T-1 事实），T-3 不再收到
+    const specOf = (id: string): string => backend.started.find((s) => s.task.id === id)!.task.spec
+    expect(specOf('T-2')).toContain('会话重置摘要')
+    expect(specOf('T-2')).toContain('T-1')
+    expect(specOf('T-3')).not.toContain('会话重置摘要')
+
+    // 会话句柄被清空 → workers 层下次起新会话而非 --resume
+    expect(backend.started[1]!.slot.session_ref).toBeUndefined()
+    // T-3 带着 T-2 重建后的新句柄（证明重置只发生一次）
+    expect(backend.started[2]!.slot.session_ref).toBe('ark-session-T-2')
+
+    const slot = fx.store.getSlot('M-1-S-1')!
+    expect(slot.session_base_tokens).toBe(80)
+    expect(slot.ctx_usage_pct).toBeLessThan(CTX_RESET_THRESHOLD_PCT)
+    fx.store.close()
+    rmSync(fx.root, { recursive: true, force: true })
   })
 })

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { JsonStore } from '../src/core/store.js'
 import { routeTask } from '../src/core/dispatcher.js'
-import { buildResetSummary, estimateCtxUsage, needsAutoReset, tierDefaults } from '../src/core/session-tiers.js'
+import { buildResetSummary, estimateCtxUsage, needsAutoReset, sessionCtxUsage, tierDefaults } from '../src/core/session-tiers.js'
 import type { AgentSlot, Task } from '../src/core/types.js'
 import { CTX_RESET_THRESHOLD_PCT } from '../src/core/types.js'
 
@@ -131,10 +131,26 @@ describe('会话档位（3.2 节三档制 / O7）', () => {
     expect(estimateCtxUsage(0, 0, 200_000)).toBe(0)
   })
 
-  it('auto-reset 档 + 70% 阈值 → 需要重置（档位 C）', () => {
+  it('当前会话占用按基线做差（重置后归零，不再反弹回高位）', () => {
+    // 累计 160K token / 窗口 200K → 累计占比 80%
+    expect(sessionCtxUsage(makeSlot('S-1', { tokens_in: 100_000, tokens_out: 60_000, window_tokens: 200_000 }))).toBe(80)
+    // 在累计 150K 处重置过会话 → 当前会话只消耗 10K → 5%。
+    // 少了这个基线，重置后占用率会立刻弹回 80%，变成每次派发都触发重置。
+    expect(
+      sessionCtxUsage(
+        makeSlot('S-1', { tokens_in: 100_000, tokens_out: 60_000, window_tokens: 200_000, session_base_tokens: 150_000 }),
+      ),
+    ).toBe(5)
+  })
+
+  it('复用会话的槽位达阈值即需重置（不依赖用户设置 auto-reset 档）', () => {
+    // 原实现要求 session_tier === 'auto-reset'，但该档位在前端 / routes / pod-tools
+    // 都没有设置入口 → 判定恒为假，刹车从未真正装过。改为凡复用会话即生效。
+    expect(needsAutoReset(makeSlot('S-1', { session_tier: 'per-mission', ctx_usage_pct: 70 }))).toBe(true)
+    expect(needsAutoReset(makeSlot('S-1', { session_tier: 'per-mission', ctx_usage_pct: 69.9 }))).toBe(false)
     expect(needsAutoReset(makeSlot('S-1', { session_tier: 'auto-reset', ctx_usage_pct: 70 }))).toBe(true)
-    expect(needsAutoReset(makeSlot('S-1', { session_tier: 'auto-reset', ctx_usage_pct: 69.9 }))).toBe(false)
-    expect(needsAutoReset(makeSlot('S-1', { session_tier: 'per-mission', ctx_usage_pct: 95 }))).toBe(false)
+    // transient 每次都是新进程，无累积可言，永不触发
+    expect(needsAutoReset(makeSlot('S-1', { session_tier: 'transient', ctx_usage_pct: 95 }))).toBe(false)
   })
 
   it('阈值常量即方案书数值', () => {

@@ -24,7 +24,7 @@ import { buildHandoff } from './handoff.js'
 import { Ledger } from './ledger.js'
 import { MissionMachine } from './mission.js'
 import { PLAN_TASK_SKILL, REPLAN_LIMIT, buildPlannerSpec, extractPlanProposal, hasPlannerSlot, validatePlanProposal } from './planner.js'
-import { estimateCtxUsage } from './session-tiers.js'
+import { buildResetSummary, needsAutoReset, sessionCtxUsage } from './session-tiers.js'
 import type { PodStore } from './store.js'
 import { classifyFault, TaskMachine, type TaskVerifyFn } from './task-machine.js'
 import type {
@@ -44,6 +44,7 @@ import type {
   WorkerProgressEvent,
 } from './types.js'
 import { UNLIMITED_BUDGET_USD,
+  CTX_RESET_THRESHOLD_PCT,
   DEFAULT_MAX_WALL_CLOCK_MS,
   DEFAULT_SESSION_TIERS,
   MAX_PARALLEL_TASKS,
@@ -558,7 +559,9 @@ export class MissionOrchestrator {
     // 预算短路与模式 2 派发门都在 offer 之前——被门拦下时任务保持 ready（可再驱动）。
     const negotiated = await this.routeAndNegotiate(task, mission, availableSlots)
     if (negotiated === null) return false
-    const { slot, backend } = negotiated
+    const backend = negotiated.backend
+    // let 而非 const：档位 C 触发重置时整体换掉 slot（清 session_ref / 更新基线 / 占用归零）
+    let slot = negotiated.slot
 
     // worktree 隔离（3.7 节：默认每员工一个）
     let worktreePath = slot.worktree_path
@@ -567,9 +570,32 @@ export class MissionOrchestrator {
       this.store.updateSlot(slot.id, { worktree_path: worktreePath })
     }
 
+    let spec = task.spec
+    // 档位 C（运行时自适应）：复用会话的槽位在上下文占用达阈值时销毁会话重建，
+    // 并注入结构化摘要续接——没有这一步，B 档的会话复用会一路累积到撑爆窗口，
+    // 而这道「刹车」此前从未接线（判据要求 auto-reset 档位，而该档位无设置入口）。
+    if (needsAutoReset(slot)) {
+      const usage = slot.ctx_usage_pct
+      const base = slot.tokens_in + slot.tokens_out
+      spec += `\n\n## 会话重置摘要（上下文占用 ${usage.toFixed(0)}% 达阈值，已重建会话）\n${buildResetSummary(this.store, this.missionId, slot.id)}`
+      this.store.updateSlot(slot.id, {
+        session_ref: undefined,
+        session_base_tokens: base,
+        ctx_usage_pct: 0,
+      })
+      slot = { ...slot, session_ref: undefined, session_base_tokens: base, ctx_usage_pct: 0 }
+      this.store.appendEvent(this.missionId, {
+        id: `ev-session-reset-${slot.id}-${this.clock()}`,
+        mission_id: this.missionId,
+        ts: this.clock(),
+        kind: 'session_reset',
+        task_id: task.id,
+        slot_id: slot.id,
+        payload: { ctx_usage_pct: usage, threshold: CTX_RESET_THRESHOLD_PCT, base_tokens: base },
+      })
+    }
     // review 最小上下文（2.5 节）：只给 diff 指针 + 规格，无实现者叙事；
     // 有 diffProvider 时把 diff 内容直接注入（审查者无需仓库命令权限，CR-03）
-    let spec = task.spec
     if (task.type === 'review') {
       const targets = task.depends_on.map((id) => this.store.getTask(this.missionId, id)).filter((t): t is Task => t !== undefined)
       const diffRanges = targets
@@ -986,7 +1012,9 @@ export class MissionOrchestrator {
       this.store.updateSlot(slot.id, {
         tokens_in: tokensIn,
         tokens_out: tokensOut,
-        ctx_usage_pct: estimateCtxUsage(tokensIn, tokensOut, slot.window_tokens),
+        // 按「当前会话」算占用（扣除会话基线），而非累计消耗占比：
+        // 档位 C 重置后会话归零，累计消耗却继续涨，用累计值会永远顶在阈值上。
+        ctx_usage_pct: sessionCtxUsage({ ...slot, tokens_in: tokensIn, tokens_out: tokensOut }),
       })
     }
 

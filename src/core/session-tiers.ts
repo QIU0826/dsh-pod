@@ -36,9 +36,32 @@ export function estimateCtxUsage(tokensIn: number, tokensOut: number, windowToke
   return Math.min(Math.max(pct, 0), 100)
 }
 
-/** 档位 C 判定：auto-reset 且占用达阈值。 */
-export function needsAutoReset(slot: AgentSlot): boolean {
-  return slot.session_tier === 'auto-reset' && slot.ctx_usage_pct >= CTX_RESET_THRESHOLD_PCT
+/**
+ * 当前会话的上下文占用估算（扣除会话基线后的增量 / 窗口大小，封顶 100%）。
+ *
+ * 与 `estimateCtxUsage` 的区别：后者算的是**累计** token 占比，而会话重建后
+ * 上下文实际归零——累计消耗是成本事实不能清零，所以靠 `session_base_tokens` 做差。
+ * 少了这一步，档位 C 重置后下一次算占用率会立刻反弹回高位，变成每次派发都重置。
+ */
+export function sessionCtxUsage(
+  slot: Pick<AgentSlot, 'tokens_in' | 'tokens_out' | 'window_tokens' | 'session_base_tokens'>,
+): number {
+  const base = slot.session_base_tokens ?? 0
+  const sessionTokens = Math.max(0, slot.tokens_in + slot.tokens_out - base)
+  // 复用 estimateCtxUsage 的封顶与除零处理：增量作为 in，out 传 0
+  return estimateCtxUsage(sessionTokens, 0, slot.window_tokens)
+}
+
+/**
+ * 档位 C 判定：会话被复用（非 transient）且当前会话占用达阈值。
+ *
+ * 2026-08-30 行为变更：原实现要求 `session_tier === 'auto-reset'`，但这个档位在
+ * 前端 / routes / pod-tools 都没有设置入口 → 判定恒为假，刹车从未真正装过。
+ * 改为「凡复用会话的槽位达阈值即重置」：占用率是运行时事实，不该依赖用户
+ * 预先选对一个连入口都不存在的配置项。transient 每次都是新进程，无累积可言。
+ */
+export function needsAutoReset(slot: Pick<AgentSlot, 'session_tier' | 'ctx_usage_pct'>): boolean {
+  return slot.session_tier !== 'transient' && slot.ctx_usage_pct >= CTX_RESET_THRESHOLD_PCT
 }
 
 /**
