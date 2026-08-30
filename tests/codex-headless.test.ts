@@ -187,7 +187,8 @@ describe('CodexHeadlessBackend（FakeSpawner 集成）', () => {
           pid: 777,
           kill: () => {},
           writeStdin() {},
-          exited: Promise.resolve({ code: 0, signal: null, timedOut: false }),
+          stderrTail: [],
+        exited: Promise.resolve({ code: 0, signal: null, timedOut: false }),
         }
         Object.defineProperty(spawned, 'onLine', {
           set(fn: (line: string) => void) {
@@ -239,7 +240,8 @@ describe('CodexHeadlessBackend（FakeSpawner 集成）', () => {
           writeStdin: (text: string) => {
             stdinText = text
           },
-          exited: Promise.resolve({ code: 0, signal: null, timedOut: false }),
+          stderrTail: [],
+        exited: Promise.resolve({ code: 0, signal: null, timedOut: false }),
         }
       },
     })
@@ -256,6 +258,7 @@ describe('CodexHeadlessBackend（FakeSpawner 集成）', () => {
         kill: () => {},
         onLine() {},
         writeStdin() {},
+        stderrTail: [],
         exited: Promise.resolve({ code: 0, signal: null, timedOut: false }),
       }),
     })

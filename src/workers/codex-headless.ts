@@ -99,6 +99,8 @@ export function codexBinaryCandidates(platform: NodeJS.Platform = process.platfo
 
 export interface SpawnedCodex {
   pid?: number
+  /** stderr 尾随（失败归因：codex 的 API 报错行混在 stdout/stderr 两路）。 */
+  stderrTail: string[]
   onLine(line: string): void
   exited: Promise<{ code: number | null; signal: string | null; timedOut: boolean; spawnFailed?: boolean }>
   /** prompt 经 stdin 注入（短固定 argv，无引号/长度风险——Windows 专项）。 */
@@ -204,8 +206,10 @@ export class CodexHeadlessBackend implements WorkerBackend {
     })
     // onLine 通过属性访问器路由进闭包：collect() 的赋值与 stdout/stderr 事件读同一个 handler。
     let lineHandler: (line: string) => void = () => {}
+    const stderrTail: string[] = []
     const spawned = {
       pid: child.pid,
+      stderrTail,
       writeStdin(text: string) {
         const stdin = child.stdin
         if (stdin === null) return
@@ -226,7 +230,15 @@ export class CodexHeadlessBackend implements WorkerBackend {
           }
         }
         child.stdout?.on('data', consume)
-        child.stderr?.on('data', consume)
+        // stderr：同流解析之外保留尾随（codex 的 API/鉴权错误行走这里）
+        child.stderr?.on('data', (chunk: Buffer) => {
+          for (const line of chunk.toString('utf8').split('\n')) {
+            const t = line.trim()
+            if (t.length > 0) stderrTail.push(t)
+          }
+          if (stderrTail.length > 12) stderrTail.splice(0, stderrTail.length - 12)
+          consume(chunk)
+        })
         let timedOut = false
         const timer = setTimeout(() => {
           timedOut = true
@@ -285,16 +297,28 @@ export class CodexHeadlessBackend implements WorkerBackend {
     // spawn 失败显式 failed(crash)：code=null 否则不落入任何故障分支，会被误判 done
     const fault = exit.spawnFailed ? 'crash' : exit.timedOut ? null : exit.code !== null && exit.code !== 0 ? 'crash' : null
     const report = extractCodexReport(lastAgentText)
+    const exitKind = exit.spawnFailed ? 'failed' : exit.timedOut ? 'timeout' : fault === 'crash' ? 'failed' : 'done'
+    // 失败根因（审计实证：codex API_KEY_GROUP_RESOLUTION_FAILED 只见 exit 1）：
+    // lastAgentText 里的 ERROR JSON 行优先，其次 stderr 尾随
+    let errorDetail: string | undefined
+    if (exitKind === 'failed') {
+      const errLine = lastAgentText.split('\n').reverse().find((l) => l.includes('ERROR') || l.includes('error'))
+      errorDetail = (errLine !== undefined ? errLine : spawned.stderrTail.join(' | ')).slice(0, 400)
+      if (errorDetail.length > 0 && /API_KEY|AUTH|401|403|resolution/i.test(errorDetail)) {
+        errorDetail += '（检查 codex 登录/API 凭据：codex login 或 OPENAI_API_KEY 配置）'
+      }
+    }
     return {
       threadId,
       completion: {
-        exit: exit.spawnFailed ? 'failed' : exit.timedOut ? 'timeout' : fault === 'crash' ? 'failed' : 'done',
+        exit: exitKind,
         fault: fault ?? undefined,
         report,
         usage,
         artifacts: [],
         exit_code: exit.code ?? undefined,
         signal: exit.signal ?? undefined,
+        ...(errorDetail !== undefined && errorDetail.length > 0 ? { error_detail: errorDetail } : {}),
       },
     }
   }
