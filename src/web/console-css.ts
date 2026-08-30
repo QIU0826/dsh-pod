@@ -403,6 +403,14 @@ export const CONSOLE_CSS = `
 /* ── 流式输出 / 传信行 / 侧面板拖拽 ───────── */
 .dsh-caret { display: inline-block; width: 2px; height: 1em; margin-left: 3px; vertical-align: -2px; background: var(--primary); animation: dsh-caret-blink 0.9s steps(1) infinite; }
 @keyframes dsh-caret-blink { 0%, 55% { opacity: 1; } 56%, 100% { opacity: 0; } }
+.dsh-toolline {
+  align-self: flex-start; display: flex; align-items: center; gap: 8px; max-width: 60%;
+  font-family: var(--mono); font-size: 11px; color: var(--ink-3);
+  background: var(--surface-1); border: 1px solid var(--line); border-radius: 8px;
+  padding: 3px 10px;
+}
+.dsh-toolline .who { color: var(--primary); flex: none; }
+.dsh-toolline .note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dsh-relay {
   align-self: flex-start; display: flex; align-items: center; gap: 7px; max-width: 86%;
   font-size: 11.5px; color: var(--ink-2); background: var(--surface-1);

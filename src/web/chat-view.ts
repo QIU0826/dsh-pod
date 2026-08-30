@@ -20,6 +20,7 @@ type ThreadItem =
   | { k: 'agent'; ts: number; lastTs: number; slot: string; task: string; text: string; key: string }
   | { k: 'sys'; ts: number; text: string; tone?: 'sys' | 'warn' | 'ok'; key: string; noise: 1 | 2 }
   | { k: 'relay'; ts: number; from: string; to: string; note: string; key: string; noise: 1 | 2 }
+  | { k: 'tool'; ts: number; slot: string; tool: string; count: number; key: string }
   | { k: 'question'; ts: number; ev: PodEvent; key: string }
 
 /** 事件 → 对话流条目。worker_progress 按 (slot, task) 聚合 = 流式增量拼接。 */
@@ -31,6 +32,26 @@ function buildThread(events: PodEvent[], userMessages: Array<{ id: string; ts: n
     const p = e.payload as Record<string, unknown>
     switch (e.kind) {
       case 'worker_progress': {
+        if (p.kind === 'tool_call') {
+          // 工具调用活动行（真实 agent 工作的心跳；同 agent 连续调用合并计数）
+          const slot = e.slot_id ?? ''
+          const tool = typeof p.tool === 'string' && p.tool.length > 0 ? p.tool : '工具'
+          const lastItem = items[items.length - 1]
+          if (lastItem !== undefined && lastItem.k === 'tool' && lastItem.slot === slot) {
+            lastItem.count += 1
+            lastItem.tool = tool
+            lastItem.ts = e.ts
+          } else {
+            items.push({ k: 'tool', ts: e.ts, slot, tool, count: 1, key: e.id })
+          }
+          break
+        }
+        if (p.kind === 'system') {
+          const text = typeof p.text === 'string' ? p.text.trim() : ''
+          if (text.length === 0) break
+          items.push({ k: 'sys', ts: e.ts, key: e.id, tone: 'warn', noise: 1, text })
+          break
+        }
         if (p.kind !== 'text') break
         const text = typeof p.text === 'string' ? p.text : ''
         if (text.trim().length === 0) break
@@ -268,6 +289,12 @@ export function ChatView(props: ChatViewProps): ReactElement {
         className: it.tone === 'warn' ? 'dsh-sysline warn' : it.tone === 'ok' ? 'dsh-sysline ok' : 'dsh-sysline',
         key: it.key,
       }, it.text))
+    } else if (it.k === 'tool') {
+      threadChildren.push(createElement('div', { className: 'dsh-toolline', key: it.key },
+        createElement('span', { className: 'who' }, `⚒ ${shortSlotId(it.slot)}`),
+        createElement('span', { className: 'note' },
+          it.count > 1 ? `${it.tool} ×${it.count}` : it.tool),
+        createElement('span', { className: 'dsh-dot on', style: { marginLeft: 'auto' } })))
     } else if (it.k === 'relay') {
       threadChildren.push(createElement('div', { className: 'dsh-relay', key: it.key, title: it.note },
         createElement('span', { className: 'who' }, it.from),
