@@ -281,6 +281,10 @@ export const CONSOLE_CSS = `
 .dsh-task-field .v { font-size: 12px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dsh-agent-rail { width: 280px; flex: none; border-left: 1px solid var(--line); background: var(--surface-1); overflow-y: auto; padding: 16px; }
 .dsh-agent-slot { padding: 12px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 10px; }
+/* 槽位可点选（= 换人目标）：悬浮反馈 + 选中态，让「换给谁」看得见 */
+.dsh-agent-slot.clickable { cursor: pointer; transition: border-color .12s, background .12s; }
+.dsh-agent-slot.clickable:hover { background: var(--surface-3); }
+.dsh-agent-slot.selected { border-color: var(--primary); background: var(--surface-3); }
 .dsh-agent-slot-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .dsh-agent-avatar { width: 34px; height: 34px; border-radius: 999px; background: var(--surface-3); color: var(--primary); display: flex; align-items: center; justify-content: center; flex: none; }
 .dsh-agent-name { font-size: 13px; font-weight: 600; }

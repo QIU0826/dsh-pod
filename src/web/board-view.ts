@@ -29,9 +29,30 @@ export interface BoardViewProps {
   /** 任务级暂停 / 恢复（任务生命周期 InProgress⇄Paused）。 */
   onPauseTask: (taskId: string) => void
   onResumeTask: (taskId: string) => void
+  /** 任务换人：kill 旧进程 + 交接四件套 + 事件审计，任务置 ready 重派。 */
+  onReassign: (taskId: string) => void
+  /** 当前选中的槽位 id（换人目标）；null = 未选。 */
+  reassignTarget: string | null
+  /** 目标槽位的短标签（用于按钮提示文案）。 */
+  reassignTargetLabel: string
+  /**
+   * 选中槽位。此前看板的槽位卡片是纯 div、不可点，用户要换人得先切到对话视图
+   * 选槽位再切回来——这条路径没有任何提示，等于换人功能不可达。
+   */
+  onSelectSlot: (slotId: string) => void
 }
 
-function TaskCard(props: { task: StatusTask; onOpen: (id: string) => void; onPauseTask: (id: string) => void; onResumeTask: (id: string) => void }): ReactElement {
+function TaskCard(props: {
+  task: StatusTask
+  onOpen: (id: string) => void
+  onPauseTask: (id: string) => void
+  onResumeTask: (id: string) => void
+  /** 换人（v0.2 工具面早就有，UI 一直没入口）：目标 = 当前选中的槽位。 */
+  onReassign: (taskId: string) => void
+  /** 当前选中的槽位 id（null = 没选，此时换人按钮给出指引而非直接禁用无解释）。 */
+  reassignTarget: string | null
+  reassignTargetLabel: string
+}): ReactElement {
   const { task } = props
   const cls = task.status === 'blocked' ? 'dsh-task-card blocked' : task.status === 'escalated' || task.status === 'rejected' ? 'dsh-task-card escalated' : task.status === 'done' ? 'dsh-task-card done' : task.status === 'paused' ? 'dsh-task-card paused' : 'dsh-task-card'
   const typeCls = `dsh-type-badge ${task.type}`
@@ -52,6 +73,24 @@ function TaskCard(props: { task: StatusTask; onOpen: (id: string) => void; onPau
               onClick: (e: { stopPropagation: () => void }) => { e.stopPropagation(); props.onResumeTask(task.id) },
             }, Icon('play', 12))
           : null,
+        (() => {
+          const terminal = task.status === 'done' || task.status === 'rejected'
+          const target = props.reassignTarget
+          const sameOwner = target !== null && target === task.owner
+          const canReassign = !terminal && target !== null && !sameOwner
+          if (terminal) return null
+          return createElement('button', {
+            className: 'dsh-btn sm icon', type: 'button', 'aria-label': '换人',
+            disabled: !canReassign,
+            // 禁用时也要说清为什么——不给解释的禁用按钮是最常见的 UX 陷阱
+            title: canReassign
+              ? `把任务转给 ${props.reassignTargetLabel}（kill 在途进程 + 交接四件套 + 事件审计）`
+              : sameOwner
+                ? '该任务已由这个槽位负责'
+                : '先在下方代理槽位里选中一个目标，再点此换人',
+            onClick: (e: { stopPropagation: () => void }) => { e.stopPropagation(); props.onReassign(task.id) },
+          }, Icon('users', 12))
+        })(),
         createElement('span', { className: typeCls }, TASK_TYPE_LABEL[task.type] ?? task.type))),
     createElement('h3', { className: 'dsh-task-title' }, task.title),
     createElement('div', { className: 'dsh-task-meta' },
@@ -76,7 +115,7 @@ function TaskCard(props: { task: StatusTask; onOpen: (id: string) => void; onPau
 }
 
 export function BoardView(props: BoardViewProps): ReactElement {
-  const { missionLive, tasks, slots, onDispatch, onRefresh, onAddTask, onOpenContext, onPauseTask, onResumeTask } = props
+  const { missionLive, tasks, slots, onDispatch, onRefresh, onAddTask, onOpenContext, onPauseTask, onResumeTask, onReassign, reassignTarget, reassignTargetLabel, onSelectSlot } = props
   const [query, setQuery] = useState('')
   const [adding, setAdding] = useState(false)
   const [addTitle, setAddTitle] = useState('')
@@ -107,7 +146,10 @@ export function BoardView(props: BoardViewProps): ReactElement {
               ? createElement('button', { className: 'dsh-btn sm icon', type: 'button', 'aria-label': '添加任务', onClick: () => setAdding(true) }, Icon('plus', 13))
               : null),
           createElement('div', { className: 'dsh-kcol-cards' },
-            filtered.filter((t) => col.statuses.includes(t.status)).map((t) => createElement(TaskCard, { key: t.id, task: t, onOpen: onOpenContext, onPauseTask, onResumeTask }))))),
+            filtered.filter((t) => col.statuses.includes(t.status)).map((t) => createElement(TaskCard, {
+              key: t.id, task: t, onOpen: onOpenContext, onPauseTask, onResumeTask,
+              onReassign, reassignTarget, reassignTargetLabel,
+            }))))),
       createElement('aside', { className: 'dsh-agent-rail', 'aria-label': '智能体槽位' },
         createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 } },
           createElement('span', { style: { fontSize: 13.5, fontWeight: 600 } }, 'Agent 槽位'),
@@ -116,7 +158,22 @@ export function BoardView(props: BoardViewProps): ReactElement {
           ? createElement('div', { className: 'dsh-hint' }, '（无名册）')
           : slots.map((s) => {
               const busy = s.status === 'working' || s.status === 'running' || s.status === 'dispatched'
-              return createElement('div', { className: 'dsh-agent-slot', key: s.id },
+              const selected = s.id === reassignTarget
+              // 可点选 = 换人目标。用 div + role=button（卡片内含结构化内容，
+              // 用 <button> 包裹 div 不合 HTML 内容模型）
+              return createElement('div', {
+                className: `dsh-agent-slot clickable${selected ? ' selected' : ''}`,
+                key: s.id,
+                role: 'button',
+                tabIndex: 0,
+                'aria-pressed': selected,
+                'aria-label': `槽位 ${shortSlotId(s.id)}`,
+                title: selected ? '已选为换人目标（点任务卡的换人按钮即可转派）' : '点击选为换人目标',
+                onClick: () => onSelectSlot(s.id),
+                onKeyDown: (e: { key: string; preventDefault: () => void }) => {
+                  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectSlot(s.id) }
+                },
+              },
                 createElement('div', { className: 'dsh-agent-slot-head' },
                   createElement('span', { className: 'dsh-agent-avatar' }, Avatar(s.avatar, s.status, 24, false)),
                   createElement('div', { style: { flex: 1, minWidth: 0 } },

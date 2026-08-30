@@ -996,6 +996,51 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
       },
     },
     {
+      // 任务换人：pod_reassign 工具面（v0.2）早就有，HTTP 与 UI 一直没入口。
+      // kill 旧进程 + 交接四件套落盘 + 事件审计，任务置 ready 由 dispatchNext 重派。
+      kind: 'exact',
+      path: '/api/dsh-pod/reassign',
+      handler: async (req, res) => {
+        if (!isLoopback(req)) {
+          writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        const current = service()
+        if (current === undefined) {
+          writeJson(res, 503, { error: 'pod runtime not initialized' })
+          return
+        }
+        if (req.method !== 'POST') {
+          writeJson(res, 405, { error: 'method not allowed' })
+          return
+        }
+        const body = await readJsonBody(req)
+        const taskId = typeof body?.task_id === 'string' ? body.task_id.trim() : ''
+        const toSlotId = typeof body?.to_slot_id === 'string' ? body.to_slot_id.trim() : ''
+        const reason = typeof body?.reason === 'string' ? body.reason.trim() : ''
+        if (taskId.length === 0) {
+          writeJson(res, 422, { error: 'task_id is required' })
+          return
+        }
+        if (toSlotId.length === 0) {
+          writeJson(res, 422, { error: 'to_slot_id is required' })
+          return
+        }
+        if (reason.length === 0) {
+          // 换人原因进交接 intent 与事件审计，不允许空——否则事后无法回溯为什么换
+          writeJson(res, 422, { error: 'reason is required（换人原因进入交接与审计）' })
+          return
+        }
+        try {
+          const handoff = await current.reassign(taskId, toSlotId, reason)
+          writeJson(res, 200, { ok: true, handoff_id: handoff.id, task_id: taskId, to_slot_id: toSlotId })
+        } catch (error) {
+          console.error('[dsh-pod] route handler failed:', error)
+          writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
       // A2A Agent Card（发现端点）：名册即技能表；无活跃 mission 时给默认技能面。
       kind: 'exact',
       path: '/.well-known/agent-card',

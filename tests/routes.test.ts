@@ -36,6 +36,7 @@ function fakeService(over: Partial<PodService> = {}) {
     isDemo: () => false,
     pauseMission: () => undefined,
     resumeMission: () => undefined,
+    reassign: async () => ({ id: 'H-1' }),
     launch: (input: unknown) => ({
       id: 'M-1',
       status: 'planning' as const,
@@ -512,6 +513,69 @@ describe('POST /api/dsh-pod/pause 与 /resume（暂停/恢复接线到 UI）', (
     const route = routes.find((r) => r.path === '/api/dsh-pod/pause')!
     const { res, written } = captureResponse()
     await route.handler(request('/api/dsh-pod/pause'), res)
+    expect(written[0]!.status).toBe(409)
+    expect(String((written[0]!.body as { error: string }).error)).toContain('INVALID_TRANSITION')
+  })
+})
+
+describe('POST /api/dsh-pod/reassign（任务换人接 HTTP）', () => {
+  const PATH = '/api/dsh-pod/reassign'
+
+  /** 带 JSON body 的入站请求（readJsonBody 走 asyncIterator）。 */
+  function request(body: unknown, method = 'POST', remoteAddress = '127.0.0.1'): IncomingMessage {
+    return {
+      url: PATH,
+      method,
+      socket: { remoteAddress },
+      [Symbol.asyncIterator]() {
+        const chunks = [Buffer.from(JSON.stringify(body))]
+        let index = 0
+        return {
+          next: () =>
+            index < chunks.length
+              ? Promise.resolve({ done: false, value: chunks[index++] })
+              : Promise.resolve({ done: true, value: undefined }),
+        }
+      },
+    } as unknown as IncomingMessage
+  }
+
+  const routeOf = (over: Partial<PodService> = {}) =>
+    makePodRoutes(() => fakeService(over)).find((r) => r.path === PATH)!
+
+  it('三参齐全 → 200 且把原因透传给 service.reassign', async () => {
+    const spy = vi.fn(async (_task: string, _slot: string, _reason: string) => ({ id: 'H-9' }))
+    const route = routeOf({ reassign: spy as unknown as PodService['reassign'] })
+    const { res, written } = captureResponse()
+    await route.handler(request({ task_id: 'T-1', to_slot_id: 'S-2', reason: '不听话' }), res)
+    expect(written[0]!.status).toBe(200)
+    expect(spy).toHaveBeenCalledWith('T-1', 'S-2', '不听话')
+    expect((written[0]!.body as { handoff_id: string }).handoff_id).toBe('H-9')
+  })
+
+  it('缺 task_id / to_slot_id / reason → 422（原因进审计，不允许空）', async () => {
+    for (const body of [{ to_slot_id: 'S-2', reason: 'x' }, { task_id: 'T-1', reason: 'x' }, { task_id: 'T-1', to_slot_id: 'S-2' }]) {
+      const { res, written } = captureResponse()
+      await routeOf().handler(request(body), res)
+      expect(written[0]!.status).toBe(422)
+    }
+  })
+
+  it('非 POST → 405；非 loopback → 403', async () => {
+    const m = captureResponse()
+    await routeOf().handler(request({ task_id: 'T-1' }, 'GET'), m.res)
+    expect(m.written[0]!.status).toBe(405)
+    const r = captureResponse()
+    await routeOf().handler(request({ task_id: 'T-1' }, 'POST', '10.0.0.5'), r.res)
+    expect(r.written[0]!.status).toBe(403)
+  })
+
+  it('换人失败（目标槽位不可用 / 非法状态）→ 409，不静默成功', async () => {
+    const route = routeOf({
+      reassign: (async () => { throw new Error('INVALID_TRANSITION: done -> reassigned') }) as unknown as PodService['reassign'],
+    })
+    const { res, written } = captureResponse()
+    await route.handler(request({ task_id: 'T-1', to_slot_id: 'S-2', reason: 'x' }), res)
     expect(written[0]!.status).toBe(409)
     expect(String((written[0]!.body as { error: string }).error)).toContain('INVALID_TRANSITION')
   })

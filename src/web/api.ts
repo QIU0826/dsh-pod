@@ -264,6 +264,14 @@ export function postDispatch(): Promise<{ dispatched: boolean }> {
   return postJson('/api/dsh-pod/dispatch', {})
 }
 
+/**
+ * 任务换人：kill 旧进程 + 交接四件套落盘 + 事件审计，任务置 ready 由调度重派。
+ * reason 必填（进交接 intent 与事件审计），后端拒绝空值。
+ */
+export function postReassign(taskId: string, toSlotId: string, reason: string): Promise<{ ok: boolean; handoff_id: string }> {
+  return postJson('/api/dsh-pod/reassign', { task_id: taskId, to_slot_id: toSlotId, reason })
+}
+
 /** 终止当前 mission。 */
 export function postAbort(reason: string): Promise<{ ok: boolean }> {
   return postJson('/api/dsh-pod/abort', { reason })

@@ -17,6 +17,7 @@ import {
   postDispatch,
   postLaunch,
   postPause,
+  postReassign,
   postTaskPause,
   postTaskResume,
   postResolve,
@@ -28,7 +29,7 @@ import {
   type StatusResponse,
 } from './api.js'
 import { openEventStream } from './event-stream.js'
-import { fmtTokens } from './view-helpers.js'
+import { fmtTokens, shortSlotId } from './view-helpers.js'
 import { CONSOLE_CSS } from './console-css.js'
 import { loadSettings, saveSettings, type ConsoleSettings } from './console-settings.js'
 import { Icon, type IconName } from './icons.js'
@@ -353,6 +354,26 @@ export function PodPanel(): ReactElement {
                   onOpenContext: (taskId: string) => setCtxTaskId(taskId),
                   onPauseTask: (taskId: string) => { void runAction(() => postTaskPause(taskId)); void poll() },
                   onResumeTask: (taskId: string) => { void runAction(() => postTaskResume(taskId)); void poll() },
+                  // 换人：目标 = 已选中的槽位；原因必填（进交接 intent 与事件审计）
+                  onReassign: (taskId: string) => {
+                    if (selectedSlot.length === 0) return
+                    // 换人是破坏性操作（kill 在途进程 + 交接四件套），确认信息要说清
+                    // 转给谁（带 vendor/role，避免只看到槽位短 id 就误点）
+                    const target = slots.find((s) => s.id === selectedSlot)
+                    const who = target !== undefined
+                      ? `${shortSlotId(selectedSlot)}（${target.vendor} · ${target.role}）`
+                      : shortSlotId(selectedSlot)
+                    const reason = window.prompt(
+                      `把任务 ${taskId} 转给 ${who}。\n\n这会终止该任务当前的在途进程，交接四件套落盘后重新协商派发。\n\n换人原因（进入交接 intent 与事件审计，必填）：`,
+                      '',
+                    )
+                    if (reason === null || reason.trim().length === 0) return
+                    void runAction(() => postReassign(taskId, selectedSlot, reason.trim()))
+                    void poll()
+                  },
+                  reassignTarget: selectedSlot.length > 0 ? selectedSlot : null,
+                  reassignTargetLabel: selectedSlot.length > 0 ? shortSlotId(selectedSlot) : '',
+                  onSelectSlot: setSelectedSlot,
                   onAddTask: (title, type) => void runAction(async () => {
                     await fetch('/api/dsh-pod/plan', {
                       method: 'POST',

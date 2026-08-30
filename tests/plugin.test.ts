@@ -108,11 +108,22 @@ describe('plugin 宿主契约', () => {
     }
     await ctx.plugin(plugin)
     expect(mocks.section).not.toHaveBeenCalled()
-    // ping + status/events/launch/steer/approve/deny/dispatch/resolve/rules/abort 等宿主路由
-    // AS-4/EV-2：+ /assets 与 /events/stream 两条只读流路由
-    // 2026-08-29：+ /pause 与 /resume（暂停/恢复从工具面接到 UI）→ 20 条
-    // 2026-08-30：+ 任务级 /task/pause /task/resume 与 A2A 面 4 条（agent-card 发现、sendMessage、sendMessageStream、JSON-RPC /a2a）→ 26 条
-    expect(mocks.register).toHaveBeenCalledTimes(26)
+    // 断言关键路由都在，而不是数总数——总数断言每新增一条路由就要改一次
+    // （2026-08-29 加 /pause /resume 挂一次，2026-08-30 加 /reassign 又挂一次），
+    // 脆弱且失败时不告诉你缺了哪条。改成存在性断言后，新增路由不会误伤，
+    // 删了关键路由则会明确指出是哪条。
+    const registered = mocks.register.mock.calls.map((call) => String((call[0] as { path: unknown }).path))
+    const required = [
+      '/api/dsh-pod/status', '/api/dsh-pod/events', '/api/dsh-pod/events/stream',
+      '/api/dsh-pod/launch', '/api/dsh-pod/steer', '/api/dsh-pod/approve', '/api/dsh-pod/deny',
+      '/api/dsh-pod/dispatch', '/api/dsh-pod/resolve', '/api/dsh-pod/rules', '/api/dsh-pod/abort',
+      '/api/dsh-pod/pause', '/api/dsh-pod/resume',
+      '/api/dsh-pod/task/pause', '/api/dsh-pod/task/resume', '/api/dsh-pod/reassign',
+      '/api/dsh-pod/assets', '/api/dsh-pod/missions', '/api/dsh-pod/missions/detail',
+      '/api/dsh-pod/plan', '/api/dsh-pod/fs/browse', '/api/dsh-pod/approvals/detail',
+      '/a2a', '/a2a/sendMessage', '/a2a/sendMessageStream', '/.well-known/agent-card',
+    ]
+    for (const path of required) expect(registered, `缺少路由 ${path}`).toContain(path)
     expect(mocks.toolNames).toHaveLength(16) // 7 原 pod_* + 3 mem + reassign + pause/resume + cron_list + plan(P1) + commander_start
     ctx.registry.delete(plugin)
     // 等 effect disposer 异步执行（SQLite WAL 句柄释放）再清理目录
