@@ -109,7 +109,7 @@ export interface AgentSlot {
   vendor: Vendor
   role: string
   capabilities: string[]
-  /** 毕加索风格动物形象 id（P2：用户点选，白名单 AGENT_AVATARS，仅 UI 展示用）。 */
+  /** Q 版娘化 / 毕加索动物形象 id（P2：用户点选，白名单 AGENT_AVATARS，仅 UI 展示用）。 */
   avatar?: string
   model: string
   effort: 'low' | 'medium' | 'high'
@@ -430,7 +430,12 @@ export const MAX_TASK_ATTEMPTS = 3
 export const SAFE_ENTITY_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
 /** Agent 形象白名单（P2 点选词表；前端 avatars.ts 同源清单）。 */
-export const AGENT_AVATARS = ['cat', 'fox', 'owl', 'bear', 'rabbit', 'wolf', 'frog', 'deer'] as const
+export const AGENT_AVATARS = [
+  // 经典毕加索动物
+  'cat', 'fox', 'owl', 'bear', 'rabbit', 'wolf', 'frog', 'deer',
+  // Q 版娘化形象
+  'claude', 'gpt', 'codex', 'opencode', 'ark', 'dsh',
+] as const
 
 /** 不限预算的落地值（0/缺省经 launch 归一为此值；事实无限——双闸永不触发，UI 显示「不限」）。 */
 export const UNLIMITED_BUDGET_USD = 1_000_000_000

@@ -385,19 +385,135 @@ export const CONSOLE_CSS = `
 
 /* ── Agent 形象（毕加索动物）与状态动作 ────── */
 .dsh-av { display: block; transform-origin: 50% 60%; }
-.dsh-av.idle { animation: dsh-av-breathe 3.4s ease-in-out infinite; }
-.dsh-av.work { animation: dsh-av-work 0.85s ease-in-out infinite; }
-.dsh-av.lean { animation: dsh-av-lean 1.8s ease-in-out infinite alternate; }
-.dsh-av.look { animation: dsh-av-look 1.5s ease-in-out infinite; }
-.dsh-av.shake { animation: dsh-av-shake 0.45s linear infinite; }
-.dsh-av.sleep { animation: dsh-av-sleep 3s ease-in-out infinite alternate; }
+.dsh-av-chibi { position: relative; }
+/* 经典动物走整体 transform；Q 版娘化走内部分层 transform，避免叠加 */
+.dsh-av:not(.dsh-av-chibi).idle { animation: dsh-av-breathe 3.4s ease-in-out infinite; }
+.dsh-av:not(.dsh-av-chibi).work { animation: dsh-av-work 0.85s ease-in-out infinite; }
+.dsh-av:not(.dsh-av-chibi).lean { animation: dsh-av-lean 1.8s ease-in-out infinite alternate; }
+.dsh-av:not(.dsh-av-chibi).look { animation: dsh-av-look 1.5s ease-in-out infinite; }
+.dsh-av:not(.dsh-av-chibi).shake { animation: dsh-av-shake 0.45s linear infinite; }
+.dsh-av:not(.dsh-av-chibi).sleep { animation: dsh-av-sleep 3s ease-in-out infinite alternate; }
 @keyframes dsh-av-breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.06); } }
 @keyframes dsh-av-work { 0%,100% { transform: translateY(0) rotate(-5deg); } 50% { transform: translateY(-3px) rotate(6deg); } }
 @keyframes dsh-av-lean { from { transform: rotate(0deg); } to { transform: rotate(-8deg) translateY(1px); } }
 @keyframes dsh-av-look { 0%,100% { transform: translateX(-2.5px); } 50% { transform: translateX(2.5px); } }
 @keyframes dsh-av-shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-2.5px); } 75% { transform: translateX(2.5px); } }
 @keyframes dsh-av-sleep { from { transform: rotate(0) translateY(0); } to { transform: rotate(15deg) translateY(2px); } }
-@media (prefers-reduced-motion: reduce) { .dsh-av, .dsh-view, .dsh-msg, .dsh-msg-user-wrap, .dsh-modal, .dsh-rail-item.active, .dsh-caret { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; } }
+
+/* ── Q 版娘化形象：按部位驱动的状态动画 ────── */
+.dsh-av-chibi .chi-tail,
+.dsh-av-chibi .chi-leg-l,
+.dsh-av-chibi .chi-leg-r,
+.dsh-av-chibi .chi-body,
+.dsh-av-chibi .chi-head,
+.dsh-av-chibi .chi-hair,
+.dsh-av-chibi .chi-hair-f,
+.dsh-av-chibi .chi-face,
+.dsh-av-chibi .chi-arm-l,
+.dsh-av-chibi .chi-arm-r,
+.dsh-av-chibi .chi-prop,
+.dsh-av-chibi .chi-star { transform-box: fill-box; transform-origin: center; }
+
+/* idle：呼吸，全身轻微起伏，头发/手臂自然摆动 */
+.dsh-av-chibi.idle .chi-body { animation: chi-body-idle 3.2s ease-in-out infinite; }
+.dsh-av-chibi.idle .chi-head { animation: chi-head-idle 3.2s ease-in-out infinite; }
+.dsh-av-chibi.idle .chi-hair { animation: chi-hair-idle 3.2s ease-in-out infinite; }
+.dsh-av-chibi.idle .chi-hair-f { animation: chi-hair-f-idle 3.2s ease-in-out infinite; }
+.dsh-av-chibi.idle .chi-arm-l { animation: chi-arm-l-idle 3.2s ease-in-out infinite; }
+.dsh-av-chibi.idle .chi-arm-r { animation: chi-arm-r-idle 3.2s ease-in-out infinite; }
+.dsh-av-chibi.idle .chi-tail { animation: chi-tail-idle 3.2s ease-in-out infinite; }
+.dsh-av-chibi.idle .chi-star { animation: chi-star-idle 2.4s ease-in-out infinite; }
+@keyframes chi-body-idle { 0%,100% { transform: scale(1, 1) translateY(0); } 50% { transform: scale(1.03, 0.98) translateY(0.5px); } }
+@keyframes chi-head-idle { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-1px); } }
+@keyframes chi-hair-idle { 0%,100% { transform: rotate(-1.5deg); } 50% { transform: rotate(1.5deg); } }
+@keyframes chi-hair-f-idle { 0%,100% { transform: translateY(0); } 50% { transform: translateY(0.5px); } }
+@keyframes chi-arm-l-idle { 0%,100% { transform: rotate(-1deg); } 50% { transform: rotate(1.5deg); } }
+@keyframes chi-arm-r-idle { 0%,100% { transform: rotate(1deg); } 50% { transform: rotate(-1.5deg); } }
+@keyframes chi-tail-idle { 0%,100% { transform: rotate(0); } 50% { transform: rotate(2deg); } }
+@keyframes chi-star-idle { 0%,100% { opacity: .55; transform: scale(.9); } 50% { opacity: 1; transform: scale(1.05); } }
+
+/* work：快速敲击，双臂交替，身体跟随 */
+.dsh-av-chibi.work .chi-body { animation: chi-body-work 0.7s ease-in-out infinite; }
+.dsh-av-chibi.work .chi-head { animation: chi-head-work 0.7s ease-in-out infinite; }
+.dsh-av-chibi.work .chi-hair { animation: chi-hair-work 0.7s ease-in-out infinite; }
+.dsh-av-chibi.work .chi-arm-l { animation: chi-arm-l-work 0.35s ease-in-out infinite; }
+.dsh-av-chibi.work .chi-arm-r { animation: chi-arm-r-work 0.35s ease-in-out infinite; }
+.dsh-av-chibi.work .chi-tail { animation: chi-tail-work 0.7s ease-in-out infinite; }
+.dsh-av-chibi.work .chi-prop { animation: chi-prop-work 0.35s steps(2) infinite; }
+@keyframes chi-body-work { 0%,100% { transform: translateY(0) scale(1, 1); } 50% { transform: translateY(1.5px) scale(1.02, 0.98); } }
+@keyframes chi-head-work { 0%,100% { transform: rotate(-2deg); } 50% { transform: rotate(2deg); } }
+@keyframes chi-hair-work { 0%,100% { transform: rotate(-3deg); } 50% { transform: rotate(3deg); } }
+@keyframes chi-arm-l-work { 0%,100% { transform: translateY(0); } 50% { transform: translateY(3px); } }
+@keyframes chi-arm-r-work { 0%,100% { transform: translateY(3px); } 50% { transform: translateY(0); } }
+@keyframes chi-tail-work { 0%,100% { transform: rotate(-2deg); } 50% { transform: rotate(2deg); } }
+@keyframes chi-prop-work { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
+
+/* lean：前倾待命，身体倾斜，头发向后飘 */
+.dsh-av-chibi.lean .chi-body { animation: chi-body-lean 1.8s ease-in-out infinite alternate; }
+.dsh-av-chibi.lean .chi-head { animation: chi-head-lean 1.8s ease-in-out infinite alternate; }
+.dsh-av-chibi.lean .chi-hair { animation: chi-hair-lean 1.8s ease-in-out infinite alternate; }
+.dsh-av-chibi.lean .chi-arm-l { animation: chi-arm-l-lean 1.8s ease-in-out infinite alternate; }
+.dsh-av-chibi.lean .chi-arm-r { animation: chi-arm-r-lean 1.8s ease-in-out infinite alternate; }
+@keyframes chi-body-lean { 0% { transform: rotate(0) translate(0, 0); } 100% { transform: rotate(-7deg) translate(2px, 1px); } }
+@keyframes chi-head-lean { 0% { transform: rotate(0) translate(0, 0); } 100% { transform: rotate(4deg) translate(1px, -1px); } }
+@keyframes chi-hair-lean { 0% { transform: rotate(0); } 100% { transform: rotate(8deg); } }
+@keyframes chi-arm-l-lean { 0% { transform: rotate(0); } 100% { transform: rotate(-6deg); } }
+@keyframes chi-arm-r-lean { 0% { transform: rotate(0); } 100% { transform: rotate(-4deg); } }
+
+/* look：左右张望，头部带动，头发滞后摆动 */
+.dsh-av-chibi.look .chi-head { animation: chi-head-look 1.4s ease-in-out infinite; }
+.dsh-av-chibi.look .chi-hair { animation: chi-hair-look 1.4s ease-in-out infinite; }
+.dsh-av-chibi.look .chi-hair-f { animation: chi-hair-f-look 1.4s ease-in-out infinite; }
+.dsh-av-chibi.look .chi-body { animation: chi-body-look 1.4s ease-in-out infinite; }
+.dsh-av-chibi.look .chi-arm-l { animation: chi-arm-l-look 1.4s ease-in-out infinite; }
+.dsh-av-chibi.look .chi-arm-r { animation: chi-arm-r-look 1.4s ease-in-out infinite; }
+@keyframes chi-head-look { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-3px); } 75% { transform: translateX(3px); } }
+@keyframes chi-hair-look { 0%,100% { transform: rotate(0); } 25% { transform: rotate(-4deg); } 75% { transform: rotate(4deg); } }
+@keyframes chi-hair-f-look { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-1px); } 75% { transform: translateX(1px); } }
+@keyframes chi-body-look { 0%,100% { transform: rotate(0); } 25% { transform: rotate(-1.5deg); } 75% { transform: rotate(1.5deg); } }
+@keyframes chi-arm-l-look { 0%,100% { transform: rotate(0); } 25% { transform: rotate(2deg); } 75% { transform: rotate(-2deg); } }
+@keyframes chi-arm-r-look { 0%,100% { transform: rotate(0); } 25% { transform: rotate(-2deg); } 75% { transform: rotate(2deg); } }
+
+/* shake：出错/拒绝，头部快速摇晃，头发甩动 */
+.dsh-av-chibi.shake .chi-head { animation: chi-head-shake 0.45s linear infinite; }
+.dsh-av-chibi.shake .chi-hair { animation: chi-hair-shake 0.45s linear infinite; }
+.dsh-av-chibi.shake .chi-hair-f { animation: chi-hair-f-shake 0.45s linear infinite; }
+.dsh-av-chibi.shake .chi-body { animation: chi-body-shake 0.45s linear infinite; }
+.dsh-av-chibi.shake .chi-face { animation: chi-face-shake 0.45s linear infinite; }
+@keyframes chi-head-shake { 0%,100% { transform: translateX(0) rotate(0); } 25% { transform: translateX(-3px) rotate(-3deg); } 75% { transform: translateX(3px) rotate(3deg); } }
+@keyframes chi-hair-shake { 0%,100% { transform: rotate(0); } 25% { transform: rotate(-8deg); } 75% { transform: rotate(8deg); } }
+@keyframes chi-hair-f-shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-2px); } 75% { transform: translateX(2px); } }
+@keyframes chi-body-shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-1px); } 75% { transform: translateX(1px); } }
+@keyframes chi-face-shake { 0%,100% { opacity: 1; } 50% { opacity: .7; } }
+
+/* sleep：暂停/限流，低头打盹，双臂抱胸，zzz 气泡 */
+.dsh-av-chibi.sleep .chi-head { animation: chi-head-sleep 3s ease-in-out infinite alternate; }
+.dsh-av-chibi.sleep .chi-hair { animation: chi-hair-sleep 3s ease-in-out infinite alternate; }
+.dsh-av-chibi.sleep .chi-hair-f { animation: chi-hair-f-sleep 3s ease-in-out infinite alternate; }
+.dsh-av-chibi.sleep .chi-body { animation: chi-body-sleep 3s ease-in-out infinite alternate; }
+.dsh-av-chibi.sleep .chi-arm-l { animation: chi-arm-l-sleep 3s ease-in-out infinite alternate; }
+.dsh-av-chibi.sleep .chi-arm-r { animation: chi-arm-r-sleep 3s ease-in-out infinite alternate; }
+.dsh-av-chibi.sleep .chi-face { animation: chi-face-sleep 3s ease-in-out infinite alternate; }
+@keyframes chi-head-sleep { 0% { transform: rotate(0) translateY(0); } 100% { transform: rotate(16deg) translateY(2px); } }
+@keyframes chi-hair-sleep { 0% { transform: rotate(0); } 100% { transform: rotate(-6deg); } }
+@keyframes chi-hair-f-sleep { 0% { transform: translateY(0); } 100% { transform: translateY(1px); } }
+@keyframes chi-body-sleep { 0% { transform: scale(1, 1); } 100% { transform: scale(1.02, 0.96); } }
+@keyframes chi-arm-l-sleep { 0% { transform: rotate(0); } 100% { transform: rotate(-10deg) translateY(1px); } }
+@keyframes chi-arm-r-sleep { 0% { transform: rotate(0); } 100% { transform: rotate(10deg) translateY(1px); } }
+@keyframes chi-face-sleep { 0% { opacity: 1; } 100% { opacity: .75; } }
+/* zzz 气泡：sleep 动作的视觉提示；用伪元素实现，避免污染 SVG */
+.dsh-av-chibi.sleep::after {
+  content: 'z';
+  position: absolute;
+  right: 2px;
+  top: 2px;
+  font: 700 9px/1 var(--sans);
+  color: var(--ink-3);
+  opacity: 0;
+  animation: chi-zzz 2.2s ease-in-out infinite;
+}
+@keyframes chi-zzz { 0% { opacity: 0; transform: translateY(0); } 50% { opacity: 1; } 100% { opacity: 0; transform: translateY(-10px); } }
+@media (prefers-reduced-motion: reduce) { .dsh-av, .dsh-av *, .dsh-view, .dsh-msg, .dsh-msg-user-wrap, .dsh-modal, .dsh-rail-item.active, .dsh-caret { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; } }
 /* 形象选择浮层（8 宫格） */
 .dsh-avatar-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .dsh-avatar-cell {
