@@ -252,7 +252,12 @@ export function PodPanel(): ReactElement {
     setView(target)
   }
 
-  const navItem = (key: ViewKey, label: string, icon: IconName, badge?: number): ReactElement =>
+  /**
+   * 导航项。图标下方带短标签——此前是纯图标，只能靠悬浮提示（触屏无法悬浮，
+   * 自动化脚本也会因为 textContent 为空而漏掉），新用户基本发现不了。
+   * 短标签保持 2 字以内，完整名称留给 aria-label 与 title。
+   */
+  const navItem = (key: ViewKey, label: string, short: string, icon: IconName, badge?: number): ReactElement =>
     createElement('button', {
       className: view === key ? 'dsh-rail-item active' : 'dsh-rail-item', type: 'button',
       onClick: () => {
@@ -265,6 +270,7 @@ export function PodPanel(): ReactElement {
       'aria-label': label, title: label,
     },
       Icon(icon, 19),
+      createElement('span', { className: 'dsh-rail-label' }, short),
       badge !== undefined && badge > 0 ? createElement('span', { className: 'dsh-rail-badge' }, String(badge)) : null)
 
   const budgetTokens = mission?.budget_tokens ?? null
@@ -275,12 +281,12 @@ export function PodPanel(): ReactElement {
     createElement('div', { className: 'dsh-shell' },
       createElement('nav', { className: 'dsh-rail', 'aria-label': '主导航' },
         createElement('span', { className: 'dsh-rail-brand', 'aria-hidden': 'true' }, Icon('hexagon', 26)),
-        navItem('sessions', '会话列表', 'messageSquare'),
-        navItem('chat', '对话视图', 'bot', pendingApprovals.length),
-        navItem('board', '任务看板', 'kanban'),
-        navItem('dag', 'DAG 拓扑', 'network'),
+        navItem('sessions', '会话列表', '会话', 'messageSquare'),
+        navItem('chat', '对话视图', '对话', 'bot', pendingApprovals.length),
+        navItem('board', '任务看板', '看板', 'kanban'),
+        navItem('dag', 'DAG 拓扑', 'DAG', 'network'),
         createElement('span', { className: 'dsh-rail-spacer' }),
-        navItem('settings', '设置', 'settings')),
+        navItem('settings', '设置', '设置', 'settings')),
       createElement('div', { className: 'dsh-main-col' },
         error !== null
           ? createElement('div', { className: 'dsh-note error', role: 'alert' }, error)

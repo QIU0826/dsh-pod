@@ -4,7 +4,7 @@
  * 名册 = 表格点选（供应商/角色下拉 + 能力标签多选）；密度三档；默认视图三选。
  */
 import { createElement, useEffect, useState, type ReactElement } from 'react'
-import { fetchBrowse, type BrowseResponse } from './api.js'
+import { deleteRule, fetchRules, fetchBrowse, type ApprovalRuleView, type BrowseResponse } from './api.js'
 import { Icon } from './icons.js'
 import { AVATAR_OPTIONS, Avatar, avatarLabel } from './avatars.js'
 import {
@@ -74,6 +74,71 @@ function DirectoryPicker(props: { current: string; onPick: (path: string) => voi
           disabled: data === null || data.path.length === 0,
           onClick: () => { if (data !== null && data.path.length > 0) props.onPick(data.path) },
         }, '选择此目录'))))
+}
+
+/**
+ * 审批规则管理。
+ *
+ * 存在的理由：误建的规则（含「记住规则」自动沉淀的）此前只能手工改磁盘文件——
+ * 用户一旦建错或被自动记住了不想要的规则，就会被自己建的规则持续卡住，
+ * 而界面上没有任何撤收入口。
+ */
+function RulesPanel(): ReactElement {
+  const [rules, setRules] = useState<ApprovalRuleView[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
+
+  const load = (): void => {
+    fetchRules()
+      .then((result) => { setRules(result.rules); setError(null) })
+      .catch((cause) => { setError(cause instanceof Error ? cause.message : String(cause)); setRules([]) })
+  }
+
+  useEffect(() => { load() }, [])
+
+  const remove = (id: string): void => {
+    setBusy(id)
+    deleteRule(id)
+      .then(() => load())
+      .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+      .finally(() => setBusy(null))
+  }
+
+  const DECISION: Record<string, { label: string; color: string }> = {
+    allow: { label: '放行', color: 'var(--success)' },
+    deny: { label: '拒绝', color: 'var(--error)' },
+    ask: { label: '询问', color: 'var(--warning)' },
+  }
+
+  return createElement('div', { className: 'dsh-card' },
+    createElement('div', { className: 'dsh-card-header' },
+      createElement('span', { className: 'dsh-card-title' }, '审批规则'),
+      createElement('span', { className: 'dsh-hint' }, '命中优先于模式默认策略')),
+    error !== null
+      ? createElement('div', { className: 'dsh-task-callout err' }, Icon('alertTriangle', 13), error)
+      : null,
+    rules === null
+      ? createElement('div', { className: 'dsh-hint' }, '读取中…')
+      : rules.length === 0
+        ? createElement('div', { className: 'dsh-hint' }, '（暂无规则——工具调用按当前审批模式弹卡）')
+        : createElement('div', { className: 'dsh-rule-list' },
+            rules.map((r) => {
+              const d = DECISION[r.decision]
+              return createElement('div', { className: 'dsh-rule-row', key: r.id },
+                createElement('span', { className: 'dsh-mono', style: { fontSize: 12.5 } }, r.tool),
+                r.pattern !== undefined && r.pattern.length > 0
+                  ? createElement('span', { className: 'dsh-hint dsh-mono', title: r.pattern }, r.pattern)
+                  : createElement('span', { className: 'dsh-hint' }, '全部调用'),
+                createElement('span', {
+                  style: { color: d !== undefined ? d.color : 'var(--ink-2)', fontSize: 12 },
+                }, d !== undefined ? d.label : r.decision),
+                createElement('span', { className: 'dsh-hint' }, r.scope === 'global' ? '全局' : '本次会话'),
+                createElement('button', {
+                  className: 'dsh-btn sm ghost', type: 'button', disabled: busy === r.id,
+                  onClick: () => remove(r.id),
+                  title: '撤销这条规则（同类调用恢复为按模式弹卡）',
+                }, busy === r.id ? '撤销中…' : '撤销'))
+            })))
 }
 
 export function SettingsView(props: SettingsViewProps): ReactElement {
@@ -245,6 +310,7 @@ export function SettingsView(props: SettingsViewProps): ReactElement {
               createElement('option', { value: 'chat' }, '对话'),
               createElement('option', { value: 'board' }, '看板'),
               createElement('option', { value: 'dag' }, 'DAG')))),
+        createElement(RulesPanel),
         createElement('div', { className: 'dsh-savebar' },
           saved ? createElement('span', { className: 'dsh-hint', style: { alignSelf: 'center' } }, '✓ 已保存') : null,
           createElement('button', {

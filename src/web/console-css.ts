@@ -40,15 +40,17 @@ export const CONSOLE_CSS = `
   border-right: 1px solid var(--line); z-index: 50;
 }
 .dsh-rail-brand { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; color: var(--primary); margin-bottom: 8px; }
+/* 图标下方带短标签：此前纯图标，新用户只能靠悬浮提示（触屏无法悬浮），等于不可发现 */
 .dsh-rail-item {
-  width: 40px; height: 40px; display: flex; align-items: center; justify-content: center;
-  border-radius: 8px; color: var(--ink-2); background: transparent; border: 0; cursor: pointer;
+  width: 56px; height: 48px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; border-radius: 8px; color: var(--ink-2); background: transparent; border: 0; cursor: pointer;
   transition: background .15s ease, color .15s ease; position: relative;
 }
+.dsh-rail-label { font-size: 9.5px; line-height: 1; letter-spacing: .2px; }
 .dsh-rail-item:hover { background: var(--surface-2); color: var(--ink); }
 .dsh-rail-item.active { color: var(--primary); background: rgba(34,211,238,.08); }
 .dsh-rail-badge {
-  position: absolute; top: 4px; right: 4px; min-width: 15px; height: 15px; padding: 0 4px;
+  position: absolute; top: 3px; right: 6px; min-width: 15px; height: 15px; padding: 0 4px;
   border-radius: 999px; background: var(--warning); color: #1a1000;
   font-size: 9.5px; font-weight: 700; display: flex; align-items: center; justify-content: center;
 }
@@ -285,6 +287,9 @@ export const CONSOLE_CSS = `
 .dsh-agent-slot.clickable { cursor: pointer; transition: border-color .12s, background .12s; }
 .dsh-agent-slot.clickable:hover { background: var(--surface-3); }
 .dsh-agent-slot.selected { border-color: var(--primary); background: var(--surface-3); }
+/* 审批规则列表（设置页） */
+.dsh-rule-list { display: flex; flex-direction: column; gap: 6px; }
+.dsh-rule-row { display: grid; grid-template-columns: 104px minmax(0,1fr) 44px 76px auto; gap: 10px; align-items: center; padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; }
 .dsh-agent-slot-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .dsh-agent-avatar { width: 34px; height: 34px; border-radius: 999px; background: var(--surface-3); color: var(--primary); display: flex; align-items: center; justify-content: center; flex: none; }
 .dsh-agent-name { font-size: 13px; font-weight: 600; }

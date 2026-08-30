@@ -301,3 +301,37 @@ export function postTaskPause(taskId: string): Promise<{ ok: boolean; task_id: s
 export function postTaskResume(taskId: string): Promise<{ ok: boolean; task_id: string; status: string }> {
   return postJson('/api/dsh-pod/task/resume', { task_id: taskId })
 }
+
+/** 审批规则（AgentScope-A/B：命中优先的裁决规则 + 「记住规则」沉淀）。 */
+export interface ApprovalRuleView {
+  id: string
+  tool: string
+  pattern?: string
+  decision: 'allow' | 'deny' | 'ask'
+  scope: 'mission' | 'global'
+  source?: string
+  ts: number
+}
+
+async function deleteJson<T>(path: string): Promise<T> {
+  return readJson<T>(await fetch(path, { method: 'DELETE' }))
+}
+
+export async function fetchRules(): Promise<{ rules: ApprovalRuleView[] }> {
+  return readJson<{ rules: ApprovalRuleView[] }>(await fetch('/api/dsh-pod/rules', { cache: 'no-store' }))
+}
+
+/** 「记住此规则」：此后同类调用免重复审批。 */
+export function postRule(input: {
+  tool: string
+  pattern?: string
+  decision: 'allow' | 'deny' | 'ask'
+  scope?: 'mission' | 'global'
+}): Promise<{ ok: boolean; rule: ApprovalRuleView }> {
+  return postJson('/api/dsh-pod/rules', { ...input })
+}
+
+/** 撤销规则——误建的规则（含自动记住的）此前只能手工改磁盘文件。 */
+export function deleteRule(ruleId: string): Promise<{ ok: boolean }> {
+  return deleteJson<{ ok: boolean }>('/api/dsh-pod/rules?id=' + encodeURIComponent(ruleId))
+}
