@@ -335,3 +335,91 @@ export function postRule(input: {
 export function deleteRule(ruleId: string): Promise<{ ok: boolean }> {
   return deleteJson<{ ok: boolean }>('/api/dsh-pod/rules?id=' + encodeURIComponent(ruleId))
 }
+
+/* ── 长期记忆（2.8.1 知识层）：HTTP 面此前缺失，只有 pod_mem_* 工具能给 LLM 用 ── */
+
+export type MemoryType = 'lesson' | 'pattern' | 'decision' | 'fact' | 'episode'
+export type MemoryRelation = 'supports' | 'contradicts' | 'derived-from'
+
+export interface MemoryRecordView {
+  id: string
+  owner_slot_id: string
+  type: MemoryType
+  importance: number
+  tags: string[]
+  content_ref: string
+  live_ref?: string
+  ts: number
+}
+
+export interface MemoryQueryInput {
+  owner?: string
+  type?: MemoryType
+  tags?: string[]
+  importance_min?: number
+  relates_to?: string
+  relation?: MemoryRelation
+  limit?: number
+}
+
+export async function fetchMemories(q: MemoryQueryInput = {}): Promise<{ records: MemoryRecordView[] }> {
+  const params = new URLSearchParams()
+  if (q.owner !== undefined) params.set('owner', q.owner)
+  if (q.type !== undefined) params.set('type', q.type)
+  if (q.tags !== undefined && q.tags.length > 0) params.set('tags', q.tags.join(','))
+  if (q.importance_min !== undefined) params.set('importance_min', String(q.importance_min))
+  if (q.relates_to !== undefined) params.set('relates_to', q.relates_to)
+  if (q.relation !== undefined) params.set('relation', q.relation)
+  if (q.limit !== undefined) params.set('limit', String(q.limit))
+  const suffix = params.toString()
+  const url = suffix.length > 0 ? `/api/dsh-pod/memory?${suffix}` : '/api/dsh-pod/memory'
+  return readJson<{ records: MemoryRecordView[] }>(await fetch(url, { cache: 'no-store' }))
+}
+
+export function postMemory(input: {
+  owner_slot_id: string
+  type?: MemoryType
+  importance?: number
+  tags?: string[]
+  content_ref?: string
+  live_ref?: string
+}): Promise<{ ok: boolean; record: MemoryRecordView }> {
+  return postJson('/api/dsh-pod/memory', input)
+}
+
+/**
+ * 纠正记忆（保留变更历史，可审计）。
+ * 注意 MemoryStore 没有删除记录的接口——记录只能纠正，不能撤销。
+ */
+export function postMemoryCorrect(
+  id: string,
+  patch: { type?: MemoryType; importance?: number; tags?: string[]; content_ref?: string; live_ref?: string },
+): Promise<{ ok: boolean; record: MemoryRecordView }> {
+  return postJson('/api/dsh-pod/memory/correct', { id, ...patch })
+}
+
+/* ── 定时任务：HTTP 面此前缺失，只能靠 pod_cron_list 工具看 ── */
+
+export interface CronJobView {
+  id: string
+  /** 触发周期（ms）。 */
+  intervalMs: number
+  /** 默认关（外部入口显式启用才开放）。 */
+  enabled: boolean
+  label?: string
+  lastFiredAt?: number
+  command: { kind: string; goal?: string; instruction?: string; [key: string]: unknown }
+}
+
+export interface CronFireView {
+  job_id: string
+  fired: boolean
+  reason: string
+  reply_text?: string
+  reply_ok?: boolean
+  ts: number
+}
+
+export async function fetchCron(): Promise<{ jobs: CronJobView[]; recent: CronFireView[] }> {
+  return readJson<{ jobs: CronJobView[]; recent: CronFireView[] }>(await fetch('/api/dsh-pod/cron', { cache: 'no-store' }))
+}

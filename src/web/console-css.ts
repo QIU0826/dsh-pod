@@ -290,6 +290,14 @@ export const CONSOLE_CSS = `
 /* 审批规则列表（设置页） */
 .dsh-rule-list { display: flex; flex-direction: column; gap: 6px; }
 .dsh-rule-row { display: grid; grid-template-columns: 104px minmax(0,1fr) 44px 76px auto; gap: 10px; align-items: center; padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; }
+/* 长期记忆列表（设置页）：类型 / 重要度 / 内容引用 / 纠正 */
+.dsh-mem-list { display: flex; flex-direction: column; gap: 6px; }
+.dsh-mem-row { display: grid; grid-template-columns: 48px 68px minmax(0,1fr) auto; gap: 10px; align-items: start; padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; }
+.dsh-mem-ref { font-size: 12.5px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 定时任务列表（设置页）：job / 周期 / 启用状态 / 上次触发 */
+.dsh-cron-list { display: flex; flex-direction: column; gap: 6px; }
+.dsh-cron-row { display: grid; grid-template-columns: minmax(0,1fr) 84px 68px 150px; gap: 10px; align-items: center; padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; }
+.dsh-cron-fire { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
 .dsh-agent-slot-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .dsh-agent-avatar { width: 34px; height: 34px; border-radius: 999px; background: var(--surface-3); color: var(--primary); display: flex; align-items: center; justify-content: center; flex: none; }
 .dsh-agent-name { font-size: 13px; font-weight: 600; }

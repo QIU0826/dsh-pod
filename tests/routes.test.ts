@@ -580,3 +580,101 @@ describe('POST /api/dsh-pod/reassign（任务换人接 HTTP）', () => {
     expect(String((written[0]!.body as { error: string }).error)).toContain('INVALID_TRANSITION')
   })
 })
+
+describe('长期记忆 / 定时任务 HTTP 面（此前只有 pod_* 工具可达）', () => {
+  const MEM_PATH = '/api/dsh-pod/memory'
+  const CORRECT_PATH = '/api/dsh-pod/memory/correct'
+  const CRON_PATH = '/api/dsh-pod/cron'
+
+  function request(path: string, method = 'GET', body?: unknown, remoteAddress = '127.0.0.1'): IncomingMessage {
+    return {
+      url: path,
+      method,
+      socket: { remoteAddress },
+      [Symbol.asyncIterator]() {
+        const chunks = body === undefined ? [] : [Buffer.from(JSON.stringify(body))]
+        let index = 0
+        return {
+          next: () =>
+            index < chunks.length
+              ? Promise.resolve({ done: false, value: chunks[index++] })
+              : Promise.resolve({ done: true, value: undefined }),
+        }
+      },
+    } as unknown as IncomingMessage
+  }
+
+  const routeOf = (path: string, over: Partial<PodService> = {}) =>
+    makePodRoutes(() => fakeService(over)).find((r) => r.path === path)!
+
+  it('GET /memory：查询参数按 MemoryQuery 语义透传（owner/type/tags/阈值/图谱遍历）', async () => {
+    const spy = vi.fn(() => [{ id: 'MEM-1' }])
+    const route = routeOf(MEM_PATH, { memoryQuery: spy as unknown as PodService['memoryQuery'] })
+    const { res, written } = captureResponse()
+    await route.handler(
+      request(`${MEM_PATH}?owner=M-1-S-1&type=lesson&tags=${encodeURIComponent('缓存,性能')}&importance_min=3&limit=20&relates_to=MEM-0&relation=supports`),
+      res,
+    )
+    expect(written[0]!.status).toBe(200)
+    expect(spy).toHaveBeenCalledWith({
+      owner_slot_id: 'M-1-S-1',
+      type: 'lesson',
+      tags: ['缓存', '性能'],
+      importance_min: 3,
+      limit: 20,
+      relates_to: 'MEM-0',
+      relation: 'supports',
+    })
+  })
+
+  it('GET /memory：非法 type / relation 忽略而非报错（不把脏值喂给 store）', async () => {
+    const spy = vi.fn(() => [])
+    const route = routeOf(MEM_PATH, { memoryQuery: spy as unknown as PodService['memoryQuery'] })
+    const { res } = captureResponse()
+    await route.handler(request(`${MEM_PATH}?type=${encodeURIComponent('不存在的类型')}&relation=evil`), res)
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ type: undefined, relation: undefined }))
+  })
+
+  it('POST /memory：owner_slot_id 必填，缺则 422；齐全则 201', async () => {
+    const route = routeOf(MEM_PATH, { memoryWrite: (() => ({ id: 'MEM-2' })) as unknown as PodService['memoryWrite'] })
+    const a = captureResponse()
+    await route.handler(request(MEM_PATH, 'POST', { type: 'fact' }), a.res)
+    expect(a.written[0]!.status).toBe(422)
+    const b = captureResponse()
+    await route.handler(request(MEM_PATH, 'POST', { owner_slot_id: 'M-1-S-1', type: 'fact', importance: 4, tags: ['x'] }), b.res)
+    expect(b.written[0]!.status).toBe(201)
+  })
+
+  it('POST /memory/correct：id 必填；人工纠正的变更人记为 user（审计留痕）', async () => {
+    const spy = vi.fn((_id: string, _patch: unknown, _by?: string) => ({ id: 'MEM-3' }))
+    const route = routeOf(CORRECT_PATH, { memoryCorrect: spy as unknown as PodService['memoryCorrect'] })
+    const a = captureResponse()
+    await route.handler(request(CORRECT_PATH, 'POST', { importance: 2 }), a.res)
+    expect(a.written[0]!.status).toBe(422)
+    const b = captureResponse()
+    await route.handler(request(CORRECT_PATH, 'POST', { id: 'MEM-3', importance: 2 }), b.res)
+    expect(b.written[0]!.status).toBe(200)
+    expect(spy.mock.calls[0]![2]).toBe('user')
+  })
+
+  it('GET /cron：返回 jobs 与最近触发历史', async () => {
+    const route = routeOf(CRON_PATH, {
+      cronList: (() => ({ jobs: [{ id: 'J-1' }], recent: [] })) as unknown as PodService['cronList'],
+    })
+    const { res, written } = captureResponse()
+    await route.handler(request(CRON_PATH), res)
+    expect(written[0]!.status).toBe(200)
+    expect((written[0]!.body as { jobs: unknown[] }).jobs).toHaveLength(1)
+  })
+
+  it('非 loopback → 403；方法不符 → 405', async () => {
+    const r1 = captureResponse()
+    await routeOf(MEM_PATH, { memoryQuery: (() => []) as unknown as PodService['memoryQuery'] })
+      .handler(request(MEM_PATH, 'GET', undefined, '10.0.0.5'), r1.res)
+    expect(r1.written[0]!.status).toBe(403)
+    const r2 = captureResponse()
+    await routeOf(CRON_PATH, { cronList: (() => ({ jobs: [], recent: [] })) as unknown as PodService['cronList'] })
+      .handler(request(CRON_PATH, 'POST', {}), r2.res)
+    expect(r2.written[0]!.status).toBe(405)
+  })
+})

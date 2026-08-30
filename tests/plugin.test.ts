@@ -121,6 +121,7 @@ describe('plugin 宿主契约', () => {
       '/api/dsh-pod/task/pause', '/api/dsh-pod/task/resume', '/api/dsh-pod/reassign',
       '/api/dsh-pod/assets', '/api/dsh-pod/missions', '/api/dsh-pod/missions/detail',
       '/api/dsh-pod/plan', '/api/dsh-pod/fs/browse', '/api/dsh-pod/approvals/detail',
+      '/api/dsh-pod/memory', '/api/dsh-pod/memory/correct', '/api/dsh-pod/cron',
       '/a2a', '/a2a/sendMessage', '/a2a/sendMessageStream', '/.well-known/agent-card',
     ]
     for (const path of required) expect(registered, `缺少路由 ${path}`).toContain(path)

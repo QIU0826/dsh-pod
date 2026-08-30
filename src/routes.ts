@@ -45,6 +45,23 @@ function writeJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(payload)
 }
 
+/** 记忆类型白名单（与 MemoryStore 的 MemoryType 同源；非法值忽略而非报错）。 */
+const MEMORY_TYPES = ['lesson', 'pattern', 'decision', 'fact', 'episode'] as const
+/** 记忆图谱边关系白名单。 */
+const MEMORY_RELATIONS = ['supports', 'contradicts', 'derived-from'] as const
+
+function asMemoryType(value: unknown): (typeof MEMORY_TYPES)[number] | undefined {
+  return typeof value === 'string' && (MEMORY_TYPES as readonly string[]).includes(value)
+    ? (value as (typeof MEMORY_TYPES)[number])
+    : undefined
+}
+
+function asMemoryRelation(value: unknown): (typeof MEMORY_RELATIONS)[number] | undefined {
+  return typeof value === 'string' && (MEMORY_RELATIONS as readonly string[]).includes(value)
+    ? (value as (typeof MEMORY_RELATIONS)[number])
+    : undefined
+}
+
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown> | undefined> {
   // P1 CSRF 修复：带 body 的请求强制 application/json——text/plain / form-encoded 属
   // CORS simple request，恶意网页可无预检跨站 POST（副作用照常生效）
@@ -1038,6 +1055,138 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
           console.error('[dsh-pod] route handler failed:', error)
           writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
         }
+      },
+    },
+    {
+      // 长期记忆此前只有工具面（pod_mem_write / query / correct）可达：agent 沉淀的经验
+      // 人看不到、也改不了。HTTP 面补齐后 UI 才能呈现记忆图谱并允许人工纠正。
+      // 注意：MemoryStore 只提供 correct（保留变更历史，可审计），**没有删除记录的接口**——
+      // 所以这里也不提供 DELETE：记录只能纠正，不能撤销。
+      kind: 'exact',
+      path: '/api/dsh-pod/memory',
+      handler: async (req, res) => {
+        if (!isLoopback(req)) {
+          writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        const current = service()
+        if (current === undefined) {
+          writeJson(res, 503, { error: 'pod runtime not initialized' })
+          return
+        }
+        if (req.method === 'GET') {
+          const url = new URL(req.url ?? '/', 'http://localhost')
+          const limitParam = Number(url.searchParams.get('limit') ?? '')
+          const importanceParam = Number(url.searchParams.get('importance_min') ?? '')
+          const tagsParam = url.searchParams.get('tags') ?? ''
+          try {
+            const records = current.memoryQuery({
+              owner_slot_id: url.searchParams.get('owner') ?? undefined,
+              type: asMemoryType(url.searchParams.get('type')),
+              tags: tagsParam.length > 0 ? tagsParam.split(',').map((t) => t.trim()).filter((t) => t.length > 0) : undefined,
+              importance_min: Number.isFinite(importanceParam) && importanceParam > 0 ? importanceParam : undefined,
+              relation: asMemoryRelation(url.searchParams.get('relation')),
+              relates_to: url.searchParams.get('relates_to') ?? undefined,
+              limit: Number.isFinite(limitParam) && limitParam > 0 ? Math.floor(limitParam) : undefined,
+            })
+            writeJson(res, 200, { records })
+          } catch (error) {
+            console.error('[dsh-pod] route handler failed:', error)
+            writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
+          }
+          return
+        }
+        if (req.method === 'POST') {
+          const body = await readJsonBody(req)
+          const owner = typeof body?.owner_slot_id === 'string' ? body.owner_slot_id.trim() : ''
+          if (owner.length === 0) {
+            writeJson(res, 422, { error: 'owner_slot_id is required' })
+            return
+          }
+          try {
+            const record = current.memoryWrite({
+              owner_slot_id: owner,
+              type: asMemoryType(body?.type),
+              importance: typeof body?.importance === 'number' ? body.importance : undefined,
+              tags: Array.isArray(body?.tags) ? body.tags.filter((t): t is string => typeof t === 'string') : undefined,
+              content_ref: typeof body?.content_ref === 'string' ? body.content_ref : undefined,
+              live_ref: typeof body?.live_ref === 'string' ? body.live_ref : undefined,
+            })
+            writeJson(res, 201, { ok: true, record })
+          } catch (error) {
+            console.error('[dsh-pod] route handler failed:', error)
+            writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
+          }
+          return
+        }
+        writeJson(res, 405, { error: 'method not allowed' })
+      },
+    },
+    {
+      // 纠正记忆（保留变更历史，可审计）：importance / tags / content_ref 等可改，
+      // 记录本身不可删除——MemoryStore 没有删除接口，这是既有设计（可审计优先）。
+      kind: 'exact',
+      path: '/api/dsh-pod/memory/correct',
+      handler: async (req, res) => {
+        if (!isLoopback(req)) {
+          writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        const current = service()
+        if (current === undefined) {
+          writeJson(res, 503, { error: 'pod runtime not initialized' })
+          return
+        }
+        if (req.method !== 'POST') {
+          writeJson(res, 405, { error: 'method not allowed' })
+          return
+        }
+        const body = await readJsonBody(req)
+        const id = typeof body?.id === 'string' ? body.id.trim() : ''
+        if (id.length === 0) {
+          writeJson(res, 422, { error: 'id is required' })
+          return
+        }
+        try {
+          const record = current.memoryCorrect(
+            id,
+            {
+              type: asMemoryType(body?.type),
+              importance: typeof body?.importance === 'number' ? body.importance : undefined,
+              tags: Array.isArray(body?.tags) ? body.tags.filter((t): t is string => typeof t === 'string') : undefined,
+              content_ref: typeof body?.content_ref === 'string' ? body.content_ref : undefined,
+              live_ref: typeof body?.live_ref === 'string' ? body.live_ref : undefined,
+            },
+            // 人工纠正：变更人如实记为 user（审计留痕，与 agent 自行纠正区分）
+            typeof body?.by === 'string' && body.by.length > 0 ? body.by : 'user',
+          )
+          writeJson(res, 200, { ok: true, record })
+        } catch (error) {
+          console.error('[dsh-pod] route handler failed:', error)
+          writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
+      // 定时任务此前只有 pod_cron_list 工具面可读：独立控制台上看不到有哪些 job、
+      // 下次什么时候触发，也无法确认改完 cron.json 后热加载是否生效。
+      kind: 'exact',
+      path: '/api/dsh-pod/cron',
+      handler: async (req, res) => {
+        if (!isLoopback(req)) {
+          writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        const current = service()
+        if (current === undefined) {
+          writeJson(res, 503, { error: 'pod runtime not initialized' })
+          return
+        }
+        if (req.method !== 'GET') {
+          writeJson(res, 405, { error: 'method not allowed' })
+          return
+        }
+        writeJson(res, 200, current.cronList())
       },
     },
     {

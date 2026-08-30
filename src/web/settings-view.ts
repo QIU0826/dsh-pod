@@ -4,7 +4,12 @@
  * 名册 = 表格点选（供应商/角色下拉 + 能力标签多选）；密度三档；默认视图三选。
  */
 import { createElement, useEffect, useState, type ReactElement } from 'react'
-import { deleteRule, fetchRules, fetchBrowse, type ApprovalRuleView, type BrowseResponse } from './api.js'
+import {
+  deleteRule, fetchRules, fetchBrowse,
+  fetchMemories, postMemoryCorrect, fetchCron,
+  type ApprovalRuleView, type BrowseResponse,
+  type MemoryRecordView, type CronJobView, type CronFireView,
+} from './api.js'
 import { Icon } from './icons.js'
 import { AVATAR_OPTIONS, Avatar, avatarLabel } from './avatars.js'
 import {
@@ -139,6 +144,139 @@ function RulesPanel(): ReactElement {
                   title: '撤销这条规则（同类调用恢复为按模式弹卡）',
                 }, busy === r.id ? '撤销中…' : '撤销'))
             })))
+}
+
+const MEMORY_TYPE: Record<string, { label: string; color: string }> = {
+  lesson: { label: '教训', color: 'var(--warning)' },
+  pattern: { label: '模式', color: 'var(--info)' },
+  decision: { label: '决策', color: 'var(--primary)' },
+  fact: { label: '事实', color: 'var(--ink-2)' },
+  episode: { label: '经历', color: '#a78bfa' },
+}
+
+/** 重要度圆点（1-5）；颜色随重要度加深，扫一眼能分出主次。 */
+function ImportanceDots(props: { value: number }): ReactElement {
+  const filled = Math.min(5, Math.max(0, props.value))
+  return createElement('span', { className: 'dsh-mono', style: { fontSize: 12, letterSpacing: 1 }, title: `重要度 ${filled}/5` },
+    '●'.repeat(filled) + '○'.repeat(5 - filled))
+}
+
+/**
+ * 长期记忆面板（2.8.1 知识层）。
+ * 此前这块只有工具面（pod_mem_*）能给 LLM 用，人完全够不着：agent 沉淀的经验
+ * 看不到、也改不了。这里补上只读 + 重要度纠正。
+ * 注意：MemoryStore 没有删除记录的接口（保留变更历史是可审计的前提），
+ * 所以不提供删除——这一点在卡头如实写明，避免用户找“删不掉的按钮”。
+ */
+function MemoryPanel(): ReactElement {
+  const [records, setRecords] = useState<MemoryRecordView[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
+
+  const load = (): void => {
+    fetchMemories({ limit: 50 })
+      .then((r) => { setRecords(r.records); setError(null) })
+      .catch((cause) => { setError(cause instanceof Error ? cause.message : String(cause)); setRecords([]) })
+  }
+  useEffect(() => { load() }, [])
+
+  const bump = (id: string, delta: number, current: number): void => {
+    const next = Math.min(5, Math.max(1, current + delta))
+    setBusy(id)
+    postMemoryCorrect(id, { importance: next })
+      .then(() => load())
+      .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+      .finally(() => setBusy(null))
+  }
+
+  return createElement('div', { className: 'dsh-card' },
+    createElement('div', { className: 'dsh-card-header' },
+      createElement('span', { className: 'dsh-card-title' }, '长期记忆'),
+      createElement('span', { className: 'dsh-hint' }, 'agent 沉淀的经验；只能纠正，不能删除（保留变更历史）')),
+    error !== null
+      ? createElement('div', { className: 'dsh-task-callout err' }, Icon('alertTriangle', 13), error)
+      : null,
+    records === null
+      ? createElement('div', { className: 'dsh-hint' }, '读取中…')
+      : records.length === 0
+        ? createElement('div', { className: 'dsh-hint' }, '（暂无记忆——agent 走完反思后会自动沉淀）')
+        : createElement('div', { className: 'dsh-mem-list' },
+            records.map((r) => {
+              const t = MEMORY_TYPE[r.type]
+              return createElement('div', { className: 'dsh-mem-row', key: r.id },
+                createElement('span', {
+                  style: { color: t !== undefined ? t.color : 'var(--ink-2)', fontSize: 12, fontWeight: 500 },
+                }, t !== undefined ? t.label : r.type),
+                createElement(ImportanceDots, { value: r.importance }),
+                createElement('div', { style: { minWidth: 0 } },
+                  createElement('div', { className: 'dsh-mem-ref', title: r.content_ref }, r.content_ref),
+                  createElement('div', { className: 'dsh-hint', style: { fontSize: 11 } },
+                    `${r.owner_slot_id}　${r.tags.length > 0 ? r.tags.join(' / ') : '无标签'}`)),
+                createElement('div', { style: { display: 'flex', gap: 4, flex: 'none' } },
+                  createElement('button', {
+                    className: 'dsh-btn sm ghost', type: 'button', title: '提高重要度',
+                    disabled: busy === r.id || r.importance >= 5,
+                    onClick: () => bump(r.id, 1, r.importance),
+                  }, '+'),
+                  createElement('button', {
+                    className: 'dsh-btn sm ghost', type: 'button', title: '降低重要度',
+                    disabled: busy === r.id || r.importance <= 1,
+                    onClick: () => bump(r.id, -1, r.importance),
+                  }, '−')))
+            })))
+}
+
+/** 触发周期的人类可读形式（cron.json 里存的是 ms）。 */
+function formatInterval(ms: number): string {
+  const min = Math.round(ms / 60_000)
+  if (min < 60) return `${min} 分钟`
+  const hour = Math.round(min / 60)
+  if (hour < 24) return `${hour} 小时`
+  return `${Math.round(hour / 24)} 天`
+}
+
+/** 定时任务面板：此前只能靠 pod_cron_list 工具看，独立控制台上看不到下次何时触发。 */
+function CronPanel(): ReactElement {
+  const [jobs, setJobs] = useState<CronJobView[] | null>(null)
+  const [recent, setRecent] = useState<CronFireView[]>([])
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    fetchCron()
+      .then((r) => { setJobs(r.jobs); setRecent(r.recent); setError(null) })
+      .catch((cause) => { setError(cause instanceof Error ? cause.message : String(cause)); setJobs([]) })
+  }, [])
+
+  return createElement('div', { className: 'dsh-card' },
+    createElement('div', { className: 'dsh-card-header' },
+      createElement('span', { className: 'dsh-card-title' }, '定时任务'),
+      createElement('span', { className: 'dsh-hint' }, 'cron.json 改动后调用 pod_cron_list 即热加载')),
+    error !== null
+      ? createElement('div', { className: 'dsh-task-callout err' }, Icon('alertTriangle', 13), error)
+      : null,
+    jobs === null
+      ? createElement('div', { className: 'dsh-hint' }, '读取中…')
+      : jobs.length === 0
+        ? createElement('div', { className: 'dsh-hint' }, '（暂无定时任务）')
+        : createElement('div', { className: 'dsh-cron-list' },
+            jobs.map((j) => createElement('div', { className: 'dsh-cron-row', key: j.id },
+              createElement('div', { style: { minWidth: 0 } },
+                createElement('div', { style: { fontSize: 13, fontWeight: 500 } }, j.label ?? j.id),
+                createElement('div', { className: 'dsh-hint', style: { fontSize: 11 }, title: JSON.stringify(j.command) },
+                  j.command.goal !== undefined ? `${j.command.kind}：${j.command.goal}` : j.command.kind)),
+              createElement('span', { className: 'dsh-mono', style: { fontSize: 12, color: 'var(--ink-2)' } }, formatInterval(j.intervalMs)),
+              createElement('span', { className: 'dsh-pill ' + (j.enabled ? 'done' : 'idle'), style: { fontSize: 11 } },
+                j.enabled ? '已启用' : '未启用'),
+              createElement('span', { className: 'dsh-hint', style: { fontSize: 11 } },
+                j.lastFiredAt !== undefined ? '上次 ' + new Date(j.lastFiredAt).toLocaleString('zh-CN') : '尚未触发')))),
+    recent.length > 0
+      ? createElement('div', { style: { marginTop: 12 } },
+          createElement('div', { className: 'dsh-label', style: { marginBottom: 6 } }, '最近触发'),
+          recent.map((f, i) => createElement('div', { className: 'dsh-cron-fire', key: i },
+            createElement('span', { style: { color: f.fired ? 'var(--success)' : 'var(--ink-3)', flex: 'none' } }, f.fired ? '●' : '○'),
+            createElement('span', { className: 'dsh-mono', style: { fontSize: 11.5, flex: 'none' } }, f.job_id),
+            createElement('span', { className: 'dsh-hint', style: { fontSize: 11 } }, f.reason))))
+      : null)
 }
 
 export function SettingsView(props: SettingsViewProps): ReactElement {
@@ -311,6 +449,8 @@ export function SettingsView(props: SettingsViewProps): ReactElement {
               createElement('option', { value: 'board' }, '看板'),
               createElement('option', { value: 'dag' }, 'DAG')))),
         createElement(RulesPanel),
+        createElement(MemoryPanel),
+        createElement(CronPanel),
         createElement('div', { className: 'dsh-savebar' },
           saved ? createElement('span', { className: 'dsh-hint', style: { alignSelf: 'center' } }, '✓ 已保存') : null,
           createElement('button', {
