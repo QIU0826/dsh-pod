@@ -38,7 +38,7 @@ async function run(
 }
 
 describe('pod_* 工具注册面（3.3 节工具作用域清单，七件套）', () => {
-  it('十四个 pod_* 工具按方案书清单注册（含 v0.2 记忆三件套 + v0.3 cron 只读面）', () => {
+  it('十五个 pod_* 工具按方案书清单注册 + P0-1 pod_expand_tool 元工具', () => {
     const { tools, names } = makePodTools(fakeService())
     expect(names).toEqual([
       'pod_launch',
@@ -56,8 +56,9 @@ describe('pod_* 工具注册面（3.3 节工具作用域清单，七件套）', 
       'pod_resume',
       'pod_cron_list',
       'pod_plan',
+      'pod_expand_tool',
     ])
-    expect(tools).toHaveLength(15)
+    expect(tools).toHaveLength(16)
   })
 
   it('每个工具带参数 schema 与输出渲染（契约完整）', () => {

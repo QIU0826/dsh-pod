@@ -92,3 +92,42 @@ ARK_API_KEY=<key> node scripts/bakeoff-cross-vendor.mjs   # 跨 vendor
 ME_START=0 ME_END=10 node scripts/memory-eval-code.mjs   # 记忆评测（分批）
 node scripts/summarize-memory-eval.mjs     # 汇总
 ```
+## 6. 脚手架措辞 A/B（P0-A 第二版，2026-08-31）
+
+> 目的：验证《从 ReAct 到 Agent Teams》「命令式/威胁框架措辞激活保守分布」在 dsh-pod
+> 脚手架措辞上是否可复现（改措辞前先量化，不拍脑袋）。
+> 方法：`scripts/wording-eval.mjs`——同构写码任务对，唯一自变量 = buildTaskPrompt 脚手架
+> 两处措辞（fallback + 交付纪律）；old = 2026-08-31 前的「必须/禁止」版，new = 当前正向版；
+> 交替指派抵消难度与顺序偏置；指标 done / wall / tokens（claude 实测）。10 次真实写码。
+
+| 对 | old（命令式） | new（正向） | Δwall(s) | Δtokens |
+|---|---|---|---|---|
+| 0 | mod 64.6s / 14,054 | pow 530.9s / 23,755 | +466.3 | +9,701 |
+| 1 | max2 637.1s / 18,216 | min2 300.3s / 15,391 | −336.8 | −2,825 |
+| 2 | gcd 1114.6s / 21,762 | lcm 725.5s / 18,602 | −389.1 | −3,160 |
+| 3 | floorInt 131.3s / 20,369 | absVal 268.5s / 18,142 | +137.2 | −2,227 |
+| 4 | roundTo 98s / 16,995 | divInt 78.4s / 15,729 | −19.6 | −1,266 |
+
+**汇总（5/5 对双 done，test 全 pass）**：done 5/5 平；wall 新快 3/5、均值 −28.4s；tokens 新省 4/5、均值 −45（≈0）。
+
+### 结论（诚实版，D1）
+
+1. **软化无回归**：done 率 5/5 = 5/5，test 全 pass——把脚手架从「必须/禁止」改成正向措辞
+   **不损害完成率与测试质量**。这是本次最有价值的负向/安全结论。
+2. **无显著收益**：wall 3/5、tokens 4/5 的符号检验均不显著（p≈0.50 / p≈0.19），
+   均值 Δtoken −45 ≈ 噪声。文章的「命令式措辞显著更贵」**未在此规模上复现**。
+3. **处理强度弱**：两版差异只在脚手架末尾两行（fallback + 交付纪律），任务 spec（占提示词
+   主体、由 planner 生成）两版完全一致——若措辞效应真实存在，其大头在 spec，不在脚手架。
+4. **端点方差主导**：run 时长 64s~1115s（今天端点明显慢，多 run 近 20 分钟上限），
+   远超措辞差异量级；任何墙钟结论都不可靠，tokens 结论略稳。
+5. **下一步**：不追加对「planner 生成 spec 包装」的投入——本批数据不支持再为措辞烧钱；
+   若后续要测，应先测 `buildPlannerSpec`（P0-A 第一版，planner 侧单份 prompt），而非脚手架。
+
+### 复现
+
+```bash
+npm run build   # 需先构建（dist 含当前措辞）
+node scripts/wording-eval.mjs            # 默认 5 对；ME_START/ME_END 分片
+# 结果：reports/wording-eval/summary.json（原始数据 reports/wording-eval/partial-*.json，不入库）
+```
+

@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { JsonStore } from '../src/core/store.js'
 import { routeTask } from '../src/core/dispatcher.js'
-import { buildResetSummary, estimateCtxUsage, needsAutoReset, sessionCtxUsage, tierDefaults } from '../src/core/session-tiers.js'
+import { buildRecentWindow, buildResetSummary, estimateCtxUsage, needsAutoReset, resetThresholdFor, sessionCtxUsage, tierDefaults } from '../src/core/session-tiers.js'
 import type { AgentSlot, Task } from '../src/core/types.js'
-import { CTX_RESET_THRESHOLD_PCT } from '../src/core/types.js'
+import { CONTENT_DENSITY_REVIEW, CTX_RESET_REVIEW_THRESHOLD_PCT, CTX_RESET_THRESHOLD_PCT } from '../src/core/types.js'
 
 const now = 1_700_000_000_000
 
@@ -158,6 +158,30 @@ describe('会话档位（3.2 节三档制 / O7）', () => {
   })
 })
 
+describe('P1-2 第二维：内容相似密度降阈值（review diff 密集提前重置）', () => {
+  it('resetThresholdFor：低密度 → 常规 70%；高密度（≥60）→ review 低阈值 50%', () => {
+    expect(resetThresholdFor({ content_density_pct: 0 })).toBe(70)
+    expect(resetThresholdFor({ content_density_pct: 40 })).toBe(70)
+    expect(resetThresholdFor({ content_density_pct: 60 })).toBe(50)
+    expect(resetThresholdFor({ content_density_pct: 90 })).toBe(50)
+    expect(resetThresholdFor({})).toBe(70) // 无密度记录 → 常规
+  })
+
+  it('needsAutoReset：density 高时 50% 即触发，70% 常规场景不误触', () => {
+    // review diff 密集：占用 55%（<70 但 ≥50）→ 触发低阈值重置
+    expect(needsAutoReset(makeSlot('S-1', { session_tier: 'per-mission', ctx_usage_pct: 55, content_density_pct: 85 }))).toBe(true)
+    // 同为 55% 但密度低（implement）→ 不触发（维持会话复用收益）
+    expect(needsAutoReset(makeSlot('S-1', { session_tier: 'per-mission', ctx_usage_pct: 55, content_density_pct: 10 }))).toBe(false)
+    // transient 永不触发（即使密度高）
+    expect(needsAutoReset(makeSlot('S-1', { session_tier: 'transient', ctx_usage_pct: 55, content_density_pct: 85 }))).toBe(false)
+  })
+
+  it('常量：review 阈值 50、密度门限 60', () => {
+    expect(CTX_RESET_REVIEW_THRESHOLD_PCT).toBe(50)
+    expect(CONTENT_DENSITY_REVIEW).toBe(60)
+  })
+})
+
 describe('buildResetSummary（档位 C 重置后的磁盘摘要注入）', () => {
   let root: string
   let store: JsonStore
@@ -187,5 +211,55 @@ describe('buildResetSummary（档位 C 重置后的磁盘摘要注入）', () =>
     expect(summary).toContain('abc')
     expect(summary).toContain('做缓存') // 进行中任务提示「进行中」，不含任务执行细节
     expect(summary).not.toContain('别人的活')
+  })
+})
+
+describe('buildRecentWindow（P1-3 重置后 verbatim 近期窗口）', () => {
+  let root: string
+  let store: JsonStore
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'pod-recent-'))
+    store = new JsonStore({ rootDir: root })
+    store.open()
+    store.createMission({
+      id: 'M-1', name: 'm', goal: 'g', status: 'running', budget_usd: 2,
+      spent_tokens: 0, spent_equiv_usd: 0, approval_mode: 1, cwd: 'C:\\repo',
+      worktree_policy: 'per-slot', orchestration_mode: 'commander',
+      commander_healthy: true, created_at: now, updated_at: now,
+    })
+  })
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  it('取在途任务最近 N=3 条原始事件逐字（steer/工具结果/问答）', () => {
+    store.appendEvent('M-1', { id: 'e1', mission_id: 'M-1', ts: now, kind: 'worker_progress', slot_id: 'S-1', task_id: 'T-9', payload: { kind: 'text', text: '我先看代码' } })
+    store.appendEvent('M-1', { id: 'e2', mission_id: 'M-1', ts: now + 1, kind: 'steer_queued', slot_id: 'S-1', task_id: 'T-9', payload: { instruction: '加一层缓存' } })
+    store.appendEvent('M-1', { id: 'e3', mission_id: 'M-1', ts: now + 2, kind: 'worker_progress', slot_id: 'S-1', task_id: 'T-9', payload: { kind: 'test_output', text: '3 failed: rate' } })
+    store.appendEvent('M-1', { id: 'e4', mission_id: 'M-1', ts: now + 3, kind: 'worker_progress', slot_id: 'S-1', task_id: 'T-9', payload: { kind: 'text', text: '改阈值' } })
+    const win = buildRecentWindow(store, 'M-1', 'S-1', 'T-9')
+    expect(win).toContain('近期窗口')
+    expect(win).toContain('加一层缓存')
+    expect(win).toContain('3 failed')
+    expect(win).toContain('改阈值')
+    expect(win).not.toContain('我先看代码') // 只留最近 3 条
+  })
+
+  it('只含该任务该槽位事件（不跨任务）；他任务/他槽位不混入', () => {
+    store.appendEvent('M-1', { id: 'e1', mission_id: 'M-1', ts: now, kind: 'worker_progress', slot_id: 'S-1', task_id: 'T-9', payload: { kind: 'text', text: '本任务' } })
+    store.appendEvent('M-1', { id: 'e2', mission_id: 'M-1', ts: now + 1, kind: 'worker_progress', slot_id: 'S-1', task_id: 'T-10', payload: { kind: 'text', text: '他任务' } })
+    store.appendEvent('M-1', { id: 'e3', mission_id: 'M-1', ts: now + 2, kind: 'worker_progress', slot_id: 'S-2', task_id: 'T-9', payload: { kind: 'text', text: '他槽位' } })
+    const win = buildRecentWindow(store, 'M-1', 'S-1', 'T-9')
+    expect(win).toContain('本任务')
+    expect(win).not.toContain('他任务')
+    expect(win).not.toContain('他槽位')
+  })
+
+  it('无相关事件 → 空串（任务结束即清空，不注入空窗口）', () => {
+    store.appendEvent('M-1', { id: 'e1', mission_id: 'M-1', ts: now, kind: 'worker_progress', slot_id: 'S-1', task_id: 'T-9', payload: { kind: 'text', text: 'x' } })
+    expect(buildRecentWindow(store, 'M-1', 'S-1', 'T-done')).toBe('')
+    expect(buildRecentWindow(store, 'M-1', 'S-2', 'T-9')).toBe('') // 槽位不匹配
   })
 })

@@ -81,6 +81,12 @@ export interface Mission {
   id: string
   name: string
   goal: string
+  /**
+   * 团队宗旨（P0-B，借鉴《从 ReAct 到 Agent Teams》「Mission/宗旨」机制）：
+   * 3-5 条价值观锚点（do/prioritize），派发时前置注入每个任务 spec 顶部，
+   * 给 agent 一个自洽的取舍方向——区别于 permission-rules 的工具级 enforce。
+   */
+  tenets?: string[]
   status: MissionStatus
   /** 美元预算（claude --max-budget-usd 双熔断对齐）。 */
   budget_usd: number
@@ -127,6 +133,11 @@ export interface AgentSlot {
   tokens_out: number
   /** 当前会话的上下文占用估算（扣除会话基线后的增量 / 窗口大小，档位 C 判定用）。 */
   ctx_usage_pct: number
+  /**
+   * P1-2 内容相似密度代理指标（0-100）：最近一次派发注入中「相似干扰项」（diff/工具输出）占比。
+   * review 任务 diff 密集 → 高；implement 任务 spec/指令异质 → 低。供 needsAutoReset 第二维降阈值。
+   */
+  content_density_pct?: number
   window_tokens: number
   worktree_path?: string
 }
@@ -153,6 +164,11 @@ export interface Task {
   result_ref?: string
   /** 任务 report 的 summary 摘要（DoD-19 复盘/审查最小上下文：非写码任务无 diff 时注入给审查者）。 */
   result_summary?: string
+  /** 产物查看（Web 第二批）：report 的测试结果 / 证据 / 决策 / 阻塞逐项落盘，UI 产物面读取。 */
+  test_result?: 'pass' | 'fail' | 'not_run'
+  test_evidence?: string
+  decisions?: string[]
+  blockers?: string[]
   /** 任务级墙钟上限（CR-01-6，默认 60 分钟）。 */
   max_wall_clock_ms: number
   started_at?: number
@@ -192,7 +208,35 @@ export interface Handoff {
   task_id: string
   payload: HandoffPayload
   mode: HandoffMode
+  /** P0-5 投递接线：是否已注入到重派任务的 prompt（防每次重试重复投递）。 */
+  delivered?: boolean
   ts: number
+}
+
+/**
+ * 会话重置摘要的增量 delta 条目（P1-1，ACE 化：Generator/Reflector/Curator）。
+ * 任务完成时入账一条 fact（Generator），重置时只渲染 active 条目（Reflector），
+ * 被推翻的条目标 superseded 保留不删（Curator，可审计）——替代「每次重置整份重写」的
+ * brevity bias / context collapse 失败模式。
+ */
+export interface ResetEntry {
+  id: string
+  mission_id: string
+  slot_id: string
+  /** 条目类型：fact 事实（已完成任务）/ decision 决策 / pitfall 坑。 */
+  type: 'fact' | 'decision' | 'pitfall'
+  /** 条目内容（Rich：含 commit/测试结果/决策，替代旧摘要的 title+commit+status 三字段）。 */
+  content: string
+  /** 来源任务 id（溯源）。 */
+  task_id?: string
+  /** 来源 commit（溯源，可审计）。 */
+  commit_sha?: string
+  /** active = 进摘要；superseded = 被新条目推翻，保留留痕。 */
+  status: 'active' | 'superseded'
+  /** 入账时间。 */
+  ts: number
+  /** 置 superseded 的时间（Curator 操作留痕）。 */
+  superseded_ts?: number
 }
 
 export interface LedgerEntry {
@@ -203,6 +247,10 @@ export interface LedgerEntry {
   ts: number
   tokens_in: number
   tokens_out: number
+  /** prompt cache 命中读 token（P0-2，实测 result.usage.cache_read_input_tokens）。 */
+  cache_read_tokens?: number
+  /** prompt cache 写入 token（P0-2，实测 result.usage.cache_creation_input_tokens）。 */
+  cache_creation_tokens?: number
   /** 等效美元（估算）。价目表无该模型时为 0，UI 依据 price_known 标注「无价目」。 */
   equiv_usd: number
   /** 价目表版本号（D7：估算必须标注版本）。 */
@@ -373,7 +421,15 @@ export interface WorkerCompletion {
   /** 后端已分类的故障（如 claude result.is_error 404 → auth_expired）；缺省由编排层按信号再分类。 */
   fault?: FaultKind
   report?: MissionReport
-  usage: { tokens_in: number; tokens_out: number; source: UsageSource }
+  usage: {
+    tokens_in: number
+    tokens_out: number
+    source: UsageSource
+    /** prompt cache 命中读 token（P0-2：claude result.usage.cache_read_input_tokens）。 */
+    cache_read_tokens?: number
+    /** prompt cache 写入 token（P0-2：claude result.usage.cache_creation_input_tokens）。 */
+    cache_creation_tokens?: number
+  }
   artifacts: string[]
   exit_code?: number
   signal?: string
@@ -428,6 +484,15 @@ export const DEFAULT_SESSION_TIERS: Record<Vendor, SessionTier> = {
 
 /** 档位 C 自动重置阈值：上下文占用 70%（3.2 节）。 */
 export const CTX_RESET_THRESHOLD_PCT = 70
+
+/**
+ * P1-2 第二维：review/diff 密集内容（相似干扰项高）用更低阈值提前重置。
+ * Context Rot 论点：语义相似且相关度低的内容让模型提前退化，70% 是容量视角不是质量视角。
+ */
+export const CTX_RESET_REVIEW_THRESHOLD_PCT = 50
+
+/** 内容密度 ≥ 该值视为「相似干扰项密集」（review diff 注入），启用低阈值。 */
+export const CONTENT_DENSITY_REVIEW = 60
 
 /** 重试上限：attempts ≥ 3 → 转人工（3.4 节）。 */
 export const MAX_TASK_ATTEMPTS = 3

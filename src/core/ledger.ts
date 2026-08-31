@@ -71,6 +71,10 @@ export class Ledger {
     tokensIn: number,
     tokensOut: number,
     source: UsageSource,
+    /** prompt cache 命中读 token（P0-2，claude result.usage.cache_read_input_tokens）。 */
+    cacheReadTokens?: number,
+    /** prompt cache 写入 token（P0-2，claude result.usage.cache_creation_input_tokens）。 */
+    cacheCreationTokens?: number,
   ): LedgerEntry {
     if (!Number.isFinite(tokensIn) || !Number.isFinite(tokensOut) || tokensIn < 0 || tokensOut < 0) {
       throw new PodError('token usage must be finite non-negative numbers', 'INVALID_USAGE', { tokensIn, tokensOut })
@@ -88,6 +92,8 @@ export class Ledger {
       ts: this.clock(),
       tokens_in: tokensIn,
       tokens_out: tokensOut,
+      ...(cacheReadTokens !== undefined ? { cache_read_tokens: cacheReadTokens } : {}),
+      ...(cacheCreationTokens !== undefined ? { cache_creation_tokens: cacheCreationTokens } : {}),
       equiv_usd: equivUsd,
       price_table_version: this.priceTable.version,
       price_known: priceKnown,
@@ -161,6 +167,10 @@ export class Ledger {
   summary(missionId: string): {
     total_tokens: number
     total_equiv_usd: number
+    /** prompt cache 命中读 token 汇总（P0-2）。 */
+    total_cache_read_tokens: number
+    /** prompt cache 写入 token 汇总（P0-2）。 */
+    total_cache_creation_tokens: number
     entries: LedgerEntry[]
     bySlot: Record<string, { tokens: number; equiv_usd: number; entries: number }>
     byModel: Record<string, { tokens: number; equiv_usd: number; entries: number }>
@@ -175,10 +185,14 @@ export class Ledger {
     const stageOf = new Map<string, string>()
     let totalTokens = 0
     let totalUsd = 0
+    let totalCacheRead = 0
+    let totalCacheCreation = 0
     for (const entry of entries) {
       const tokens = entry.tokens_in + entry.tokens_out
       totalTokens += tokens
       totalUsd += entry.equiv_usd
+      totalCacheRead += entry.cache_read_tokens ?? 0
+      totalCacheCreation += entry.cache_creation_tokens ?? 0
 
       let stage = 'unknown'
       const taskId = entry.task_id
@@ -208,6 +222,15 @@ export class Ledger {
         }
       }
     }
-    return { total_tokens: totalTokens, total_equiv_usd: totalUsd, entries, bySlot, byModel, byStage }
+    return {
+      total_tokens: totalTokens,
+      total_equiv_usd: totalUsd,
+      total_cache_read_tokens: totalCacheRead,
+      total_cache_creation_tokens: totalCacheCreation,
+      entries,
+      bySlot,
+      byModel,
+      byStage,
+    }
   }
 }

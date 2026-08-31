@@ -34,6 +34,7 @@ export function makeMcpServer(service: PodService): McpServer {
         goal: z.string().describe('一句话可验收目标'),
         cwd: z.string().describe('目标 git 仓库绝对路径（主树）'),
         budget_usd: z.number().optional().describe('美元预算上限（默认 3）'),
+        tenets: z.array(z.string()).optional().describe('团队宗旨（3-5 条 do/prioritize 价值观锚点；派发时注入每个任务 spec）'),
         approval_mode: z.number().optional().describe('审批模式 1（默认）/2/3（后两者需 experiments 灰度开启）'),
         slots: z.array(z.object({
           id: z.string(), vendor: z.enum(['claude', 'codex', 'dsh', 'ark', 'opencode']), role: z.string(),
@@ -50,6 +51,7 @@ export function makeMcpServer(service: PodService): McpServer {
       const mission = service.launch({
         name: args.name, goal: args.goal, cwd: args.cwd,
         budgetUsd: args.budget_usd ?? 3,
+        tenets: args.tenets,
         approvalMode: args.approval_mode === 2 || args.approval_mode === 3 ? args.approval_mode : 1,
         slots: args.slots,
         plan: args.plan,
@@ -169,6 +171,30 @@ export function makeMcpServer(service: PodService): McpServer {
     service.abort(args.reason ?? 'aborted via mcp')
     return { content: [{ type: 'text', text: JSON.stringify({ aborted: true }) }] }
   })
+
+  // ── pod_expand_tool：P0-1 按需展开元工具（外部 agent 需要跨 stage 工具时先点名展开）──
+  const TOOL_BRIEFS: Record<string, string> = {
+    pod_launch: '启动一个 Pod mission（组队开 mission）',
+    pod_status: '查看 mission 状态（看板/员工/审批/账本）',
+    pod_dispatch: '手动派发下一个就绪任务',
+    pod_collect: '收集任务产物（MISSION_REPORT/commit 区间/事件尾）',
+    pod_steer: '向员工排队指令',
+    pod_approve: '审批卡裁决（批准合并 / 驳回）',
+    pod_abort: '中止当前 mission（终态）',
+    pod_pause: '暂停当前 mission',
+    pod_resume: '恢复已暂停的 mission',
+    pod_plan: '查看/追加/重规划任务 DAG',
+    pod_reassign: '任务中途换人（交接四件套）',
+    pod_mem_write: '主动写入长期记忆记录',
+    pod_mem_query: '查询记忆图谱',
+    pod_mem_correct: '纠正记忆记录',
+    pod_cron_list: '查看定时任务与触发历史',
+  }
+  server.registerTool(
+    'pod_expand_tool',
+    { description: '展开某个 pod_* 工具的完整参数 schema（不在当前阶段全量清单里时，先点名展开再调用）。', inputSchema: { name: z.enum(Object.keys(TOOL_BRIEFS) as [string, ...string[]]) } },
+    (args) => ({ content: [{ type: 'text', text: JSON.stringify({ name: args.name, brief: TOOL_BRIEFS[args.name] ?? '', note: '完整 schema 由对应工具的 tools/list 返回；此处给一句话用途与存在性确认。' }) }] }),
+  )
 
   return server
 }

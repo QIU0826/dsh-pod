@@ -19,9 +19,13 @@ describe('设置页面板：长期记忆 / 定时任务（HTTP 面补齐后的�
     expect(html).toContain('定时任务')
   })
 
-  it('如实写明「只能纠正，不能删除」——MemoryStore 没有删除记录的接口', () => {
+  it('如实写明「记录不可删除」——MemoryStore 没有删除记录的接口（另：提供主动写入 + owner 筛选）', () => {
     // 少了这句，用户会去找一个不存在的删除按钮
-    expect(html).toContain('只能纠正，不能删除')
+    expect(html).toContain('记录不可删除')
+    // 写入入口（此前只有工具面 pod_mem_write 能给 LLM 用；团队归属 team:<mission_id> 在 UI 可见）
+    expect(html).toContain('主动写入')
+    expect(html).toContain('team:')
+    expect(html).toContain('按 owner 筛选')
   })
 
   it('首屏是读取中占位，不是空白（取数失败也由面板自己渲染错误条）', () => {

@@ -111,6 +111,22 @@ describe('validateLaunch（Team Builder 提交校验）', () => {
     expect(bad.value.parallel).toBeUndefined()
   })
 
+  it('tenets：字符串数组透传（过滤空串、上限 8 条），缺省/非数组 → undefined', () => {
+    const ok = validateLaunch({
+      name: 'm', goal: 'g', cwd: 'x',
+      tenets: ['先跑通再优化', '', '   ', '优先可维护性', 't1', 't2', 't3', 't4', 't5', 't6', 't7', 't8', 't9'],
+      slots: [{ id: 's', vendor: 'claude', role: 'r' }],
+    })
+    expect(ok.ok).toBe(true)
+    if (!ok.ok) return
+    // 过滤空串后 11 条，slice(0,8) 只保留前 8 条
+    expect(ok.value.tenets).toEqual(['先跑通再优化', '优先可维护性', 't1', 't2', 't3', 't4', 't5', 't6'])
+    const none = validateLaunch({ name: 'm', goal: 'g', cwd: 'x', slots: [{ id: 's', vendor: 'claude', role: 'r' }] })
+    expect(none.ok).toBe(true)
+    if (!none.ok) return
+    expect(none.value.tenets).toBeUndefined()
+  })
+
   it('缺 goal / 未知 vendor / 空 slots → 422 校验失败', () => {
     expect(validateLaunch({ name: 'm', cwd: 'x', slots: [] }).ok).toBe(false)
     expect(validateLaunch({ name: 'm', goal: 'g', cwd: 'x', slots: [{ id: 's', vendor: 'grok', role: 'r' }] }).ok).toBe(false)
@@ -667,14 +683,23 @@ describe('长期记忆 / 定时任务 HTTP 面（此前只有 pod_* 工具可达
     expect((written[0]!.body as { jobs: unknown[] }).jobs).toHaveLength(1)
   })
 
-  it('非 loopback → 403；方法不符 → 405', async () => {
+  it('非 loopback → 403；未支持方法 → 405', async () => {
     const r1 = captureResponse()
     await routeOf(MEM_PATH, { memoryQuery: (() => []) as unknown as PodService['memoryQuery'] })
       .handler(request(MEM_PATH, 'GET', undefined, '10.0.0.5'), r1.res)
     expect(r1.written[0]!.status).toBe(403)
     const r2 = captureResponse()
     await routeOf(CRON_PATH, { cronList: (() => ({ jobs: [], recent: [] })) as unknown as PodService['cronList'] })
-      .handler(request(CRON_PATH, 'POST', {}), r2.res)
+      .handler(request(CRON_PATH, 'PUT', {}), r2.res)
     expect(r2.written[0]!.status).toBe(405)
+  })
+
+  it('POST /cron：cronSave 收 jobs（Web 第三批编辑入口）', async () => {
+    const spy = vi.fn(() => ({ ok: true, message: 'saved' }))
+    const route = routeOf(CRON_PATH, { cronSave: spy as unknown as PodService['cronSave'] })
+    const a = captureResponse()
+    await route.handler(request(CRON_PATH, 'POST', { jobs: [{ id: 'J-1', intervalMs: 60000, enabled: true, command: { kind: 'status' } }] }), a.res)
+    expect(a.written[0]!.status).toBe(200)
+    expect(spy).toHaveBeenCalledWith([{ id: 'J-1', intervalMs: 60000, enabled: true, command: { kind: 'status' } }])
   })
 })

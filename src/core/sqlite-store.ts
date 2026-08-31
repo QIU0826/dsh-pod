@@ -22,6 +22,7 @@ import type {
   LedgerEntry,
   Mission,
   PodEvent,
+  ResetEntry,
   Task,
 } from './types.js'
 import { JsonStore, MAX_EVENTS_PER_MISSION, SCHEMA_VERSION } from './store.js'
@@ -82,6 +83,7 @@ export class SqliteStore implements PodStore {
       'CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, data TEXT NOT NULL)',
       'CREATE TABLE IF NOT EXISTS handoffs (id TEXT PRIMARY KEY, data TEXT NOT NULL)',
       'CREATE TABLE IF NOT EXISTS ledger (seq INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT NOT NULL)',
+      'CREATE TABLE IF NOT EXISTS reset_entries (id TEXT PRIMARY KEY, data TEXT NOT NULL)',
       'CREATE TABLE IF NOT EXISTS approvals (id TEXT PRIMARY KEY, data TEXT NOT NULL)',
       'CREATE TABLE IF NOT EXISTS rules (id TEXT PRIMARY KEY, data TEXT NOT NULL)',
       'CREATE TABLE IF NOT EXISTS events (mission_id TEXT NOT NULL, seq INTEGER NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (mission_id, seq))',
@@ -111,6 +113,7 @@ export class SqliteStore implements PodStore {
       const insTask = db.prepare('INSERT INTO tasks (id, data) VALUES (?, ?)')
       const insHandoff = db.prepare('INSERT INTO handoffs (id, data) VALUES (?, ?)')
       const insLedger = db.prepare('INSERT INTO ledger (data) VALUES (?)')
+      const insReset = db.prepare('INSERT INTO reset_entries (id, data) VALUES (?, ?)')
       const insApproval = db.prepare('INSERT INTO approvals (id, data) VALUES (?, ?)')
       const insRule = db.prepare('INSERT INTO rules (id, data) VALUES (?, ?)')
       const insEvent = db.prepare('INSERT INTO events (mission_id, seq, id, data) VALUES (?, ?, ?, ?)')
@@ -119,6 +122,7 @@ export class SqliteStore implements PodStore {
         for (const t of legacy.listTasks(m.id)) insTask.run(`${t.mission_id}::${t.id}`, JSON.stringify(t))
         for (const h of legacy.listHandoffs(m.id)) insHandoff.run(h.id, JSON.stringify(h))
         for (const e of legacy.listLedger(m.id)) insLedger.run(JSON.stringify(e))
+        for (const e of legacy.listResetEntries(m.id)) insReset.run(e.id, JSON.stringify(e))
         for (const a of legacy.listApprovals(m.id)) insApproval.run(a.id, JSON.stringify(a))
         legacy.listEvents(m.id).forEach((ev, i) => insEvent.run(m.id, i, ev.id, JSON.stringify(ev)))
       }
@@ -269,12 +273,40 @@ export class SqliteStore implements PodStore {
     return this.listJson<Handoff>('handoffs').filter((h) => h.mission_id === missionId)
   }
 
+  updateHandoff(missionId: string, id: string, patch: Partial<Handoff>): void {
+    const rows = this.listJson<Handoff>('handoffs')
+    const existing = rows.find((h) => h.mission_id === missionId && h.id === id)
+    if (existing === undefined) throw new NotFoundError('handoff', id)
+    this.requireDb()
+      .prepare('UPDATE handoffs SET data = ? WHERE id = ?')
+      .run(JSON.stringify({ ...existing, ...patch, id, mission_id: missionId }), id)
+  }
+
   addLedgerEntry(entry: LedgerEntry): void {
     this.requireDb().prepare('INSERT INTO ledger (data) VALUES (?)').run(JSON.stringify({ ...entry }))
   }
 
   listLedger(missionId: string): LedgerEntry[] {
     return this.listJson<LedgerEntry>('ledger').filter((e) => e.mission_id === missionId)
+  }
+
+  listResetEntries(missionId: string, slotId?: string): ResetEntry[] {
+    const all = this.listJson<ResetEntry>('reset_entries')
+    return all.filter((e) => e.mission_id === missionId && (slotId === undefined || e.slot_id === slotId))
+  }
+
+  addResetEntry(entry: ResetEntry): void {
+    this.requireDb().prepare('INSERT INTO reset_entries (id, data) VALUES (?, ?)').run(entry.id, JSON.stringify({ ...entry }))
+  }
+
+  supersedeResetEntry(missionId: string, id: string, ts?: number): void {
+    const db = this.requireDb()
+    const existing = this.getJson<ResetEntry>('reset_entries', id)
+    if (existing === undefined || existing.mission_id !== missionId) throw new NotFoundError('reset entry', id)
+    db.prepare('UPDATE reset_entries SET data = ? WHERE id = ?').run(
+      JSON.stringify({ ...existing, status: 'superseded', superseded_ts: ts ?? this.clock() }),
+      id,
+    )
   }
 
   getApproval(id: string): ApprovalRequest | undefined {

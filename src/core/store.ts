@@ -28,6 +28,7 @@ import type {
   LedgerEntry,
   Mission,
   PodEvent,
+  ResetEntry,
   Task,
 } from './types.js'
 
@@ -42,6 +43,8 @@ export interface StoreData {
   tasks: Record<string, Task>
   handoffs: Handoff[]
   ledger: LedgerEntry[]
+  /** P1-1 delta 账本：会话重置摘要增量条目（ACE 化，可审计）。 */
+  resetEntries: ResetEntry[]
   approvals: Record<string, ApprovalRequest>
   /** v2.1 审批规则层（suggested-rules 持久化，AgentScope-B）。 */
   rules: Record<string, ApprovalRule>
@@ -78,8 +81,14 @@ export interface PodStore {
   updateTask(id: string, patch: Partial<Task>): void
   addHandoff(handoff: Handoff): void
   listHandoffs(missionId: string): Handoff[]
+  updateHandoff(missionId: string, id: string, patch: Partial<Handoff>): void
   addLedgerEntry(entry: LedgerEntry): void
   listLedger(missionId: string): LedgerEntry[]
+  /** P1-1 delta 账本：重置摘要增量条目。 */
+  listResetEntries(missionId: string, slotId?: string): ResetEntry[]
+  addResetEntry(entry: ResetEntry): void
+  /** 把条目置 superseded（保留留痕，可审计）；不存在抛 NotFoundError。 */
+  supersedeResetEntry(missionId: string, id: string, ts?: number): void
   getApproval(id: string): ApprovalRequest | undefined
   listApprovals(missionId: string): ApprovalRequest[]
   createApproval(approval: ApprovalRequest): void
@@ -115,6 +124,7 @@ function emptyData(): StoreData {
     tasks: {},
     handoffs: [],
     ledger: [],
+    resetEntries: [],
     approvals: {},
     rules: {},
     events: {},
@@ -212,6 +222,8 @@ export class JsonStore implements PodStore {
     }
     // v2.1 兼容：旧 store 文件无 rules 表 → 补空表（不 bump schema，字段可选）
     if (current.rules === undefined) current.rules = {}
+    // P1-1 兼容：旧 store 文件无 resetEntries → 补空数组（delta 账本可选字段）
+    if (current.resetEntries === undefined) current.resetEntries = []
     return current
   }
 
@@ -362,6 +374,15 @@ export class JsonStore implements PodStore {
     return this.requireData().handoffs.filter((h) => h.mission_id === missionId)
   }
 
+  updateHandoff(missionId: string, id: string, patch: Partial<Handoff>): void {
+    const data = this.requireData()
+    const existing = data.handoffs.find((h) => h.mission_id === missionId && h.id === id)
+    if (existing === undefined) throw new NotFoundError('handoff', id)
+    const next = { ...existing, ...patch, id, mission_id: missionId }
+    data.handoffs[data.handoffs.indexOf(existing)] = next
+    this.persist()
+  }
+
   addLedgerEntry(entry: LedgerEntry): void {
     this.requireData().ledger.push({ ...entry })
     this.persist()
@@ -369,6 +390,24 @@ export class JsonStore implements PodStore {
 
   listLedger(missionId: string): LedgerEntry[] {
     return this.requireData().ledger.filter((e) => e.mission_id === missionId)
+  }
+
+  listResetEntries(missionId: string, slotId?: string): ResetEntry[] {
+    const all = this.requireData().resetEntries
+    return all.filter((e) => e.mission_id === missionId && (slotId === undefined || e.slot_id === slotId))
+  }
+
+  addResetEntry(entry: ResetEntry): void {
+    this.requireData().resetEntries.push({ ...entry })
+    this.persist()
+  }
+
+  supersedeResetEntry(missionId: string, id: string, ts?: number): void {
+    const data = this.requireData()
+    const idx = data.resetEntries.findIndex((e) => e.id === id && e.mission_id === missionId)
+    if (idx < 0) throw new NotFoundError('reset entry', id)
+    data.resetEntries[idx] = { ...data.resetEntries[idx]!, status: 'superseded', superseded_ts: ts ?? this.clock() }
+    this.persist()
   }
 
   getApproval(id: string): ApprovalRequest | undefined {

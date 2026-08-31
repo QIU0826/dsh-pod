@@ -311,6 +311,11 @@ export class TaskMachine {
         // DoD-19 复盘/审查最小上下文：非写码任务（research/doc/plan）report 摘要落盘，
         // 供后续 review 注入（无 diff 时审查者仍能拿到产物内容）
         result_summary: report.summary,
+        // 产物查看（Web 第二批）：测试结果/证据/决策/阻塞逐项落盘，UI 产物面读取
+        test_result: report.test_result,
+        test_evidence: report.test_evidence,
+        decisions: report.decisions,
+        blockers: report.blockers,
         done_at: this.clock(),
       })
       this.releaseSlot(task)

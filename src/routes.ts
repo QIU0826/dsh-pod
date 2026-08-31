@@ -91,10 +91,12 @@ export interface LaunchRouteBody {
   budget_tokens?: unknown
   /** 并行执行上限（1-8；缺省引擎默认 2）。 */
   parallel?: unknown
+  /** 团队宗旨（3-5 条 do/prioritize 价值观锚点；派发时注入每个任务 spec）。 */
+  tenets?: unknown
 }
 
 
-export function validateLaunch(body: LaunchRouteBody): { ok: true; value: { name: string; goal: string; cwd: string; budgetUsd: number; budgetTokens?: number; parallel?: number; slots: Array<{ id: string; vendor: Vendor; role: string; capabilities: string[]; model?: string; avatar?: string }>; plan?: unknown } } | { ok: false; error: string } {  if (typeof body.name !== 'string' || body.name.length === 0) return { ok: false, error: 'name is required' }
+export function validateLaunch(body: LaunchRouteBody): { ok: true; value: { name: string; goal: string; cwd: string; budgetUsd: number; budgetTokens?: number; parallel?: number; tenets?: string[]; slots: Array<{ id: string; vendor: Vendor; role: string; capabilities: string[]; model?: string; avatar?: string }>; plan?: unknown } } | { ok: false; error: string } {  if (typeof body.name !== 'string' || body.name.length === 0) return { ok: false, error: 'name is required' }
   if (typeof body.goal !== 'string' || body.goal.length === 0) return { ok: false, error: 'goal is required' }
   if (typeof body.cwd !== 'string' || body.cwd.length === 0) return { ok: false, error: 'cwd is required' }
   if (!Array.isArray(body.slots) || body.slots.length === 0) return { ok: false, error: 'slots must be a non-empty array' }
@@ -121,7 +123,11 @@ export function validateLaunch(body: LaunchRouteBody): { ok: true; value: { name
     : 3
   const budgetTokens = typeof body.budget_tokens === 'number' && body.budget_tokens > 0 ? body.budget_tokens : undefined
   const parallel = typeof body.parallel === 'number' && Number.isInteger(body.parallel) && body.parallel >= 1 ? Math.min(8, body.parallel) : undefined
-  return { ok: true, value: { name: body.name, goal: body.goal, cwd: body.cwd, budgetUsd, budgetTokens, parallel, slots, plan: body.plan } }
+  // 团队宗旨（P0-B）：过滤空串、上限 8 条；缺省/非数组 → undefined（不注入）
+  const tenets = Array.isArray(body.tenets)
+    ? body.tenets.filter((t): t is string => typeof t === 'string' && t.trim().length > 0).slice(0, 8)
+    : undefined
+  return { ok: true, value: { name: body.name, goal: body.goal, cwd: body.cwd, budgetUsd, budgetTokens, parallel, tenets, slots, plan: body.plan } }
 }
 
 /** A2A 对外基址（loopback-only 部署的固定形态）。 */
@@ -1182,11 +1188,16 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
           writeJson(res, 503, { error: 'pod runtime not initialized' })
           return
         }
-        if (req.method !== 'GET') {
-          writeJson(res, 405, { error: 'method not allowed' })
+        if (req.method === 'GET') {
+          writeJson(res, 200, current.cronList())
           return
         }
-        writeJson(res, 200, current.cronList())
+        if (req.method === 'POST') {
+          const body = await readJsonBody(req)
+          writeJson(res, 200, current.cronSave(body?.jobs))
+          return
+        }
+        writeJson(res, 405, { error: 'method not allowed' })
       },
     },
     {

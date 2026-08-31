@@ -11,7 +11,7 @@
 
 import type { PodStore } from './store.js'
 import type { AgentSlot, SessionTier, Vendor } from './types.js'
-import { CTX_RESET_THRESHOLD_PCT } from './types.js'
+import { CONTENT_DENSITY_REVIEW, CTX_RESET_REVIEW_THRESHOLD_PCT, CTX_RESET_THRESHOLD_PCT } from './types.js'
 
 /** 默认档位（2.3 节⑤ / O7）。 */
 export function tierDefaults(vendor: Vendor): SessionTier {
@@ -60,8 +60,22 @@ export function sessionCtxUsage(
  * 改为「凡复用会话的槽位达阈值即重置」：占用率是运行时事实，不该依赖用户
  * 预先选对一个连入口都不存在的配置项。transient 每次都是新进程，无累积可言。
  */
-export function needsAutoReset(slot: Pick<AgentSlot, 'session_tier' | 'ctx_usage_pct'>): boolean {
-  return slot.session_tier !== 'transient' && slot.ctx_usage_pct >= CTX_RESET_THRESHOLD_PCT
+/**
+ * P1-2 第二维：内容相似密度决定使用哪个阈值。
+ * Context Rot 论点——diff 密集（相似干扰项高）的内容让模型提前退化，70% 是容量视角不是
+ * 质量视角；review 场景（diff 注入占比高）应在 50% 即动作。返回该 slot 应触发的阈值。
+ */
+export function resetThresholdFor(slot: Pick<AgentSlot, 'content_density_pct'>): number {
+  const density = slot.content_density_pct ?? 0
+  return density >= CONTENT_DENSITY_REVIEW ? CTX_RESET_REVIEW_THRESHOLD_PCT : CTX_RESET_THRESHOLD_PCT
+}
+
+export function needsAutoReset(
+  slot: Pick<AgentSlot, 'session_tier' | 'ctx_usage_pct' | 'content_density_pct'>,
+): boolean {
+  if (slot.session_tier === 'transient') return false
+  const threshold = resetThresholdFor(slot)
+  return slot.ctx_usage_pct >= threshold
 }
 
 /**
@@ -91,4 +105,39 @@ export function buildResetSummary(store: PodStore, missionId: string, slotId: st
   }
   lines.push('', '## 继续条件', '继续执行进行中任务；新任务以交接消息为准（指针与意图，磁盘传内容）。')
   return lines.join('\n')
+}
+
+/**
+ * P1-3 重置后 verbatim 近期窗口（调研 §2.3，CaT 三层高保真短期交互）。
+ * 重置摘要只给结构化事实（S5），但进行中任务的最近原始事件（steer 指令 / 工具结果 /
+ * task_question 问答）可能在重置瞬间丢失 → 「重置后断片」。这里把该员工当前在途任务
+ * 最近 N 条原始事件逐字注入，任务结束即清空（按 task_id 过滤，不跨任务不叙事，不违 S5）。
+ */
+export const RECENT_WINDOW_SIZE = 3
+
+export function buildRecentWindow(store: PodStore, missionId: string, slotId: string, taskId: string): string {
+  const events = store.listEvents(missionId).filter((e) =>
+    e.slot_id === slotId && e.task_id === taskId &&
+    (e.kind === 'worker_progress' || e.kind === 'steer_queued' || e.kind === 'task_question' || e.kind === 'agent_relay'),
+  )
+  const recent = events.slice(-RECENT_WINDOW_SIZE)
+  if (recent.length === 0) return ''
+  const lines: string[] = ['## 近期窗口（在途任务最近原始事件，逐字）', '']
+  for (const e of recent) {
+    const p = e.payload
+    let body = ''
+    if (e.kind === 'worker_progress') {
+      const sub = typeof p.kind === 'string' ? p.kind : 'text'
+      body = typeof p.text === 'string' ? p.text : (typeof p.tool === 'string' ? p.tool : (typeof p.file === 'string' ? p.file : ''))
+      if (sub !== 'text') body = `[${sub}] ${body}`
+    } else if (e.kind === 'steer_queued') {
+      body = `[steer] ${typeof p.instruction === 'string' ? p.instruction : ''}`
+    } else if (e.kind === 'task_question') {
+      body = `[问答] ${typeof p.question === 'string' ? p.question : JSON.stringify(p)}`
+    } else if (e.kind === 'agent_relay') {
+      body = `[relay] ${typeof p.note === 'string' ? p.note : ''}`
+    }
+    if (body.length > 0) lines.push(`- ${body.slice(0, 300)}`)
+  }
+  return lines.length > 2 ? lines.join('\n') : ''
 }

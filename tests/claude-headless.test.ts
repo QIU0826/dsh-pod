@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import {
   buildTaskPrompt,
+  buildTaskPromptSegments,
   classifyClaudeExit,
   extractReport,
   extractUsage,
@@ -87,6 +89,18 @@ describe('extractUsage（result 事件 → usage，CR-01-5 实测来源）', () 
   it('无 usage → undefined', () => {
     expect(extractUsage({ type: 'result' })).toBeUndefined()
   })
+
+  it('result.usage 含 cache_read/cache_creation → 透出（P0-2 prompt cache 测量）', () => {
+    expect(extractUsage({ type: 'result', usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 140, cache_creation_input_tokens: 60 } })).toEqual({
+      tokens_in: 10,
+      tokens_out: 5,
+      source: 'measured',
+      cache_read_tokens: 140,
+      cache_creation_tokens: 60,
+    })
+    // 无缓存字段的 result → 不产出 undefined 键（保持向后兼容）
+    expect(extractUsage({ type: 'result', usage: { input_tokens: 1, output_tokens: 1 } })).toEqual({ tokens_in: 1, tokens_out: 1, source: 'measured' })
+  })
 })
 
 describe('extractReport（MISSION_REPORT JSON 提取）', () => {
@@ -148,8 +162,10 @@ describe('buildTaskPrompt（任务简报 + charter 纪律 + 报告 schema）', (
       worktreePath: 'C:\\repo\\.worktrees\\S-1',
     })
     expect(prompt).toContain('T-3')
+    expect(prompt).toContain('# 任务 T-3：')
     expect(prompt).toContain('rate limiter')
-    expect(prompt).toContain('task-T-3')
+    // 交付纪律为 byte-稳定段：不内联任务 id（P0-2 静态前缀工程），commit 前缀由 worker 从任务头解析
+    expect(prompt).toContain('task-<任务ID>')
     expect(prompt).toContain('C:\\repo\\.worktrees\\S-1')
     expect(prompt).toContain('MISSION_REPORT')
     expect(prompt).toContain('commit_sha')
@@ -182,6 +198,68 @@ describe('buildTaskPrompt（任务简报 + charter 纪律 + 报告 schema）', (
     expect(prompt).toContain('审查任务')
     expect(prompt).toContain('最小上下文')
     expect(prompt).toContain('刻意排除实现者推理叙事')
+  })
+
+  it('任务简报含正向措辞的交付纪律（P0-A：去「必须/禁止」威胁框架）', () => {
+    const prompt = buildTaskPrompt({ task: makeTask(), charterText: charter, worktreePath: 'X' })
+    expect(prompt).toContain('任务完成后按序交付')
+    expect(prompt).toContain('脏 diff 会在独立 review 中暴露')
+    expect(prompt).not.toContain('完成后必须')
+    expect(prompt).not.toContain('禁止：合并主树')
+  })
+})
+
+describe('buildTaskPromptSegments（P0-2 静态前缀工程：byte-稳定哈希快照）', () => {
+  const charter = '你是 Implementer。\n规则：\n1. 只处理分配给你的任务。'
+
+  function sha256(text: string): string {
+    return createHash('sha256').update(text, 'utf8').digest('hex')
+  }
+
+  it('同任务两次构造 → 完整 prompt 逐字节一致（deterministic 快照）', () => {
+    const a = buildTaskPromptSegments({ task: makeTask(), charterText: charter, worktreePath: 'W' })
+    const b = buildTaskPromptSegments({ task: makeTask(), charterText: charter, worktreePath: 'W' })
+    expect(buildTaskPrompt({ task: makeTask(), charterText: charter, worktreePath: 'W' })).toBe(
+      buildTaskPrompt({ task: makeTask(), charterText: charter, worktreePath: 'W' }),
+    )
+    expect(a.static).toBe(b.static)
+    expect(a.dynamic).toBe(b.dynamic)
+    expect(sha256(a.static)).toBe(sha256(b.static))
+  })
+
+  it('同类型不同任务 → 静态前缀哈希相等（cache 可命中前缀），动态段变化', () => {
+    const t1 = makeTask()
+    const t2 = makeTask()
+    t2.id = 'T-7'
+    t2.title = '另一个 implement'
+    t2.spec = '不同的任务简报内容'
+    const s1 = buildTaskPromptSegments({ task: t1, charterText: charter, worktreePath: 'W' })
+    const s2 = buildTaskPromptSegments({ task: t2, charterText: charter, worktreePath: 'W' })
+    expect(s1.static).toBe(s2.static)
+    expect(sha256(s1.static)).toBe(sha256(s2.static))
+    expect(s1.dynamic).not.toBe(s2.dynamic)
+  })
+
+  it('spec 变更 → 仅 dynamic 变化，static 前缀不变（拆分正确性）', () => {
+    const t1 = makeTask()
+    const t2 = makeTask()
+    t2.spec = '实现 RFC-99 的另一个中间件'
+    const s1 = buildTaskPromptSegments({ task: t1, charterText: charter, worktreePath: 'W' })
+    const s2 = buildTaskPromptSegments({ task: t2, charterText: charter, worktreePath: 'W' })
+    expect(s1.static).toBe(s2.static)
+    expect(s1.dynamic).not.toBe(s2.dynamic)
+  })
+
+  it('review 任务与 implement 任务 → 静态前缀不同（schema 提示随任务类型变化，属预期）', () => {
+    const impl = makeTask()
+    const rev = makeTask()
+    rev.type = 'review'
+    const si = buildTaskPromptSegments({ task: impl, charterText: charter, worktreePath: 'W' })
+    const sr = buildTaskPromptSegments({ task: rev, charterText: charter, worktreePath: 'W' })
+    expect(si.static).not.toBe(sr.static)
+    // 但静态块必须连续前置：静态脚手架出现在完整 prompt 开头
+    const full = buildTaskPrompt({ task: makeTask(), charterText: charter, worktreePath: 'W' })
+    expect(full.startsWith(si.static)).toBe(true)
   })
 })
 
@@ -217,6 +295,17 @@ describe('真实夹具验证（W1 本机实证输出，tests/fixtures/claude-w1/
     expect(usage.source).toBe('measured')
     expect(usage.tokens_out).toBeGreaterThan(0)
     expect(classifyClaudeExit(0, null, false, result)).toBeNull()
+  })
+
+  it('会话夹具 usage 实测 prompt cache 字段（P0-2：plant-session 的 cache_read_input_tokens>0）', () => {
+    const lines = readFileSync(join('tests', 'fixtures', 'claude-w1', 'plant-session.jsonl'), 'utf8').split('\n')
+    const events = lines.map(parseStreamJsonLine).filter((e) => e !== undefined)
+    const result = events.reverse().find((e) => e?.type === 'result')!
+    const usage = extractUsage(result)!
+    expect(usage.source).toBe('measured')
+    // W1 实证：resume 会话 cache_read_input_tokens=142720（跨轮前缀命中）
+    expect(usage.cache_read_tokens).toBeGreaterThan(0)
+    expect(usage.cache_creation_tokens).toBe(0)
   })
 
   it('会话连续性夹具：--session-id 与 -r 同 session_id + 跨进程召回 ALPHA-77', () => {

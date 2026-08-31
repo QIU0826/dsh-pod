@@ -24,6 +24,8 @@ export interface BoardViewProps {
   onDispatch: () => void
   onRefresh: () => void
   onAddTask: (title: string, type: string) => void
+  /** 重规划（P1）：把失败现状喂回 planner 重新分解（有界 REPLAN_LIMIT=2）。 */
+  onReplan: () => void
   /** 点任务卡 → 上下文查看器。 */
   onOpenContext: (taskId: string) => void
   /** 任务级暂停 / 恢复（任务生命周期 InProgress⇄Paused）。 */
@@ -115,7 +117,7 @@ function TaskCard(props: {
 }
 
 export function BoardView(props: BoardViewProps): ReactElement {
-  const { missionLive, tasks, slots, onDispatch, onRefresh, onAddTask, onOpenContext, onPauseTask, onResumeTask, onReassign, reassignTarget, reassignTargetLabel, onSelectSlot } = props
+  const { missionLive, tasks, slots, onDispatch, onRefresh, onAddTask, onReplan, onOpenContext, onPauseTask, onResumeTask, onReassign, reassignTarget, reassignTargetLabel, onSelectSlot } = props
   const [query, setQuery] = useState('')
   const [adding, setAdding] = useState(false)
   const [addTitle, setAddTitle] = useState('')
@@ -133,6 +135,12 @@ export function BoardView(props: BoardViewProps): ReactElement {
       createElement('span', { style: { flex: 1 } }),
       missionLive
         ? createElement('button', { className: 'dsh-btn sm', type: 'button', onClick: onDispatch }, Icon('send', 13), '手动分派')
+        : null,
+      missionLive
+        ? createElement('button', {
+            className: 'dsh-btn sm', type: 'button', onClick: onReplan,
+            title: '把失败/未完成任务现状喂回 planner 重新分解（有界 REPLAN_LIMIT=2；超限/无 planner/预算不足会拒绝）',
+          }, Icon('rotate', 13), '重规划')
         : null,
       createElement('button', { className: 'dsh-btn sm icon', type: 'button', 'aria-label': '刷新', onClick: onRefresh }, Icon('refresh', 14))),
     createElement('div', { className: 'dsh-board-wrap' },

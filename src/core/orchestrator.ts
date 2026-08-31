@@ -20,11 +20,14 @@ import { ApprovalEngine } from './approvals.js'
 import { routeTask } from './dispatcher.js'
 import { emitWorkerProgress, resetReplyCursor } from './events.js'
 import { ConcurrencyLimitError, InvalidTransitionError, NotFoundError, PodError } from './errors.js'
-import { buildHandoff } from './handoff.js'
+import { buildHandoff, planDelivery, type DeliveryAction } from './handoff.js'
+import { buildTwoLevelDiff } from './diff-hunks.js'
+import { appendTaskFact, resetSummaryFromStore } from './reset-ledger.js'
+import { teamOwnerId } from './memory.js'
 import { Ledger } from './ledger.js'
 import { MissionMachine } from './mission.js'
-import { PLAN_TASK_SKILL, REPLAN_LIMIT, buildPlannerSpec, extractPlanProposal, hasPlannerSlot, validatePlanProposal } from './planner.js'
-import { buildResetSummary, needsAutoReset, sessionCtxUsage } from './session-tiers.js'
+import { PLAN_TASK_SKILL, REPLAN_LIMIT, buildCapabilityFeedback, buildPlannerSpec, classifyPlanErrors, extractPlanProposal, hasPlannerSlot, validatePlanProposal } from './planner.js'
+import { buildRecentWindow, needsAutoReset, resetThresholdFor, sessionCtxUsage } from './session-tiers.js'
 import type { PodStore } from './store.js'
 import { classifyFault, TaskMachine, type TaskVerifyFn } from './task-machine.js'
 import type {
@@ -44,7 +47,6 @@ import type {
   WorkerProgressEvent,
 } from './types.js'
 import { UNLIMITED_BUDGET_USD,
-  CTX_RESET_THRESHOLD_PCT,
   DEFAULT_MAX_WALL_CLOCK_MS,
   DEFAULT_SESSION_TIERS,
   MAX_PARALLEL_TASKS,
@@ -83,6 +85,8 @@ export interface LaunchInput {
    * clamp 到 [1, MAX_PARALLEL_CEILING]。提升并行不改质量门/状态机，只放宽 fan-out。
    */
   parallel?: number
+  /** 团队宗旨（P0-B）：3-5 条 do/prioritize 价值观锚点，派发时注入每个任务 spec。 */
+  tenets?: string[]
   slots: SlotInput[]
 }
 
@@ -140,7 +144,33 @@ export interface OrchestratorDeps {
    * 回调抛错只记日志不阻断（plan.md 是回溯面，不是执行面）。
    */
   onPlanExpanded?: (missionId: string, plan: PlanTaskInput[], sourceTaskId: string) => void
+  /**
+   * 长期记忆查询（N2 记忆运行时注入，CR-07-4）：派发时按「槽位 + 团队(team:<mission>)」拉取
+   * 相关记录注入 worker prompt（有界、指针式）。缺省不注入（测试/无记忆宿主）。
+   */
+  memoryQuery?: (q: MemoryQueryLike) => MemoryRecordLike[]
 }
+
+/** 记忆查询最小结构（避免硬依赖 MemoryStore 全类型；返回值含 UI 需要的展示字段）。 */
+export interface MemoryQueryLike {
+  owner_slot_id?: string
+  type?: string
+  tags?: string[]
+  importance_min?: number
+  limit?: number
+}
+export interface MemoryRecordLike {
+  id: string
+  type: string
+  importance: number
+  tags: string[]
+  content_ref: string
+}
+
+/** N2 记忆注入上限：单次派发最多注入的记录数（防上下文膨胀，token 敏感）。 */
+export const MAX_MEMORY_INJECT = 6
+/** 单条记忆 content_ref 注入长度上限（指针式：给到能定位即可，不全文）。 */
+export const MAX_MEMORY_REF_CHARS = 160
 
 /**
  * 注入审查提示词的 diff 长度上限（超限截断并标注，防窗口爆炸）。
@@ -213,6 +243,7 @@ export class MissionOrchestrator {
   /** 用户暂停标记：被终止 worker 的 killed 退出不算故障（任务已迁 paused）。 */
   private readonly pauseMarkers = new Set<string>()
   private readonly credentialHint: ((vendor: Vendor) => boolean) | undefined
+  private readonly memoryQuery: ((q: MemoryQueryLike) => MemoryRecordLike[]) | undefined
   private readonly wakeLatch: WakeLatch = { fired: false }
   private stopRequested = false
   /** 本次 stopRequested 的语义（summarize 据此区分 paused/budget_exceeded/aborted）。 */
@@ -233,6 +264,7 @@ export class MissionOrchestrator {
     this.diffProvider = deps.diffProvider
     this.credentialHint = deps.credentialHint
     this.onPlanExpanded = deps.onPlanExpanded
+    this.memoryQuery = deps.memoryQuery
     this.experiments = deps.experiments ?? { isEnabled: () => false }
     this.approvals = new ApprovalEngine(this.store, { clock: this.clock })
     this.ledger = new Ledger(this.store, { clock: this.clock })
@@ -284,6 +316,7 @@ export class MissionOrchestrator {
       id: this.missionId,
       name: input.name,
       goal: input.goal,
+      tenets: input.tenets,
       status: 'planning',
       // 0/负数 = 不限预算（与 HTTP 层 validateLaunch 同语义归一；0 真上限会锁死一切派发）
       budget_usd: input.budgetUsd > 0 ? input.budgetUsd : UNLIMITED_BUDGET_USD,
@@ -571,13 +604,23 @@ export class MissionOrchestrator {
     }
 
     let spec = task.spec
+    // P0-B 团队宗旨（借鉴《从 ReAct 到 Agent Teams》Mission 机制）：mission 级价值观锚点，
+    // 前置注入每个任务 spec（任务简报顶部给取舍方向；不取代 permission-rules 的代码约束）。
+    // 短（3-5 条 × 一行），token 成本可忽略；有才注入，空/缺省不产生任何内容。
+    if (mission.tenets !== undefined && mission.tenets.length > 0) {
+      spec = `## 团队宗旨（mission 取舍锚点）\n${mission.tenets.map((t) => `- ${t}`).join('\n')}\n\n${spec}`
+    }
     // 档位 C（运行时自适应）：复用会话的槽位在上下文占用达阈值时销毁会话重建，
     // 并注入结构化摘要续接——没有这一步，B 档的会话复用会一路累积到撑爆窗口，
     // 而这道「刹车」此前从未接线（判据要求 auto-reset 档位，而该档位无设置入口）。
     if (needsAutoReset(slot)) {
       const usage = slot.ctx_usage_pct
       const base = slot.tokens_in + slot.tokens_out
-      spec += `\n\n## 会话重置摘要（上下文占用 ${usage.toFixed(0)}% 达阈值，已重建会话）\n${buildResetSummary(this.store, this.missionId, slot.id)}`
+      spec += `\n\n## 会话重置摘要（上下文占用 ${usage.toFixed(0)}% 达阈值，已重建会话）\n${resetSummaryFromStore(this.store, this.missionId, slot.id)}`
+      // P1-3 verbatim 近期窗口：把在途任务最近原始事件逐字带上（防重置断片）；
+      // 按 task_id 过滤 → 任务结束即自动清空，不跨任务不叙事，不违 S5
+      const recentWindow = buildRecentWindow(this.store, this.missionId, slot.id, task.id)
+      if (recentWindow.length > 0) spec += `\n\n${recentWindow}`
       this.store.updateSlot(slot.id, {
         session_ref: undefined,
         session_base_tokens: base,
@@ -591,11 +634,17 @@ export class MissionOrchestrator {
         kind: 'session_reset',
         task_id: task.id,
         slot_id: slot.id,
-        payload: { ctx_usage_pct: usage, threshold: CTX_RESET_THRESHOLD_PCT, base_tokens: base },
+        payload: { ctx_usage_pct: usage, threshold: resetThresholdFor(slot), base_tokens: base, content_density_pct: slot.content_density_pct ?? 0 },
       })
     }
     // review 最小上下文（2.5 节）：只给 diff 指针 + 规格，无实现者叙事；
     // 有 diffProvider 时把 diff 内容直接注入（审查者无需仓库命令权限，CR-03）
+    // P1-5 截断元数据：预算外 hunk 的标题清单（供 verifier 判断覆盖度 + 事后 bakeoff）；
+    // 声明在外层作用域，供 task_context 事件 payload 读取（review 块内赋值）
+    let reviewTruncatedHunks: string[] = []
+    // P1-2 内容相似密度代理指标（0-100）：review diff 密集 → 高；implement spec/指令异质 → 低。
+    // 供 needsAutoReset 第二维（下次派发时据此降阈值）。
+    let contentDensityPct = 0
     if (task.type === 'review') {
       const targets = task.depends_on.map((id) => this.store.getTask(this.missionId, id)).filter((t): t is Task => t !== undefined)
       const diffRanges = targets
@@ -612,9 +661,22 @@ export class MissionOrchestrator {
       }
       if (this.diffProvider !== undefined) {
         const diffText = await this.diffProvider(task)
-        const truncated = diffText.length > MAX_REVIEW_DIFF_CHARS
-        const bounded = truncated ? diffText.slice(0, MAX_REVIEW_DIFF_CHARS) : diffText
-        spec += `\n\n## 被审 diff（宿主机注入，勿访问仓库）\n\`\`\`diff\n${bounded}\n\`\`\`${truncated ? '\n（diff 超长已截断；如需完整内容请以 need_clarify 说明）' : ''}`
+        // P1-5 hunk 级两级加载（调研 §1.3）：变更地图恒全量（第一级），hunk 正文按
+        // 与 spec 的相关度装入预算（第二级）；预算外的 hunk 保留在地图，审查者经 fs-browse
+        // 主动拉取——替代旧「40K 定长截断」（按长度不按相关性，尾部文件/关键 hunk 整丢）。
+        const two = buildTwoLevelDiff(diffText, MAX_REVIEW_DIFF_CHARS, task.spec)
+        // P1-2 密度代理：注入的 diff/地图字符占 spec 的比例（clamp 0-100）。
+        // review 场景 diff 占比常 ≥80% → 超过 CONTENT_DENSITY_REVIEW，下次派发走 50% 低阈值。
+        const diffInjectedChars = two.map.length + two.injectedText.length
+        contentDensityPct = spec.length > 0 ? Math.min(100, Math.round((diffInjectedChars / spec.length) * 100)) : 0
+        spec += `\n\n${two.map}`
+        if (two.injectedText.length > 0) {
+          spec += `\n\n## 被审 diff（hunk 正文，宿主机注入，勿访问仓库）\n\`\`\`diff\n${two.injectedText}\n\`\`\``
+        }
+        if (two.retainedCount > 0) {
+          spec += `\n\n（预算外 ${two.retainedCount} 个 hunk 保留在变更地图；如需完整正文，可经 fs-browse 按文件/行号主动拉取，或 need_clarify 说明）`
+          reviewTruncatedHunks = two.truncatedHunks
+        }
       }
       // agent_relay：审查上下文注入是真实的 agent 间传信（实现者产物 → 审查者），
       // 落盘事件让前端以对话形式呈现（不做前端表面的假消息）
@@ -634,6 +696,30 @@ export class MissionOrchestrator {
           },
         })
       }
+      // 审计 P1 · 常规流转 handoff 协议对齐：implement→review 的常规传递（宿主注入
+      // diff + 产物摘要）与 reassign 换人同走 handoff 协议面——补一条 handoff_created
+      // 事件（带 verify 清单）让「谁传了什么给谁」在协议层可见，前端可据此呈现传递链。
+      // 注意：不改传递机制（CR-03 审查者无仓库权限是硬约束，diff 仍由宿主注入），
+      // 只把既成事实落成与协议一致的审计记录，避免「reassign 走协议、常规流转裸奔」的漂移。
+      if (reviewFromSlot !== undefined && targets.length > 0) {
+        this.store.appendEvent(this.missionId, {
+          id: `ev-handoff-review-${task.id}-${this.clock()}`,
+          mission_id: this.missionId,
+          ts: this.clock(),
+          kind: 'handoff_created',
+          task_id: task.id,
+          slot_id: slot.id,
+          payload: {
+            handoff_id: `H-REVIEW-${task.id}-${this.clock()}`, // 常规流转非持久化 handoff，仅事件留痕
+            from: reviewFromSlot,
+            to: slot.id,
+            mode: 'queue',
+            targets: targets.map((t) => ({ id: t.id, commit: t.commit_sha ?? null })),
+            verify: ['diff_range_valid', 'test_log_exists', 'report_fields_complete'],
+            note: `实现者产物（diff 区间 + 报告摘要）经宿主注入审查者（最小上下文，CR-03）`,
+          },
+        })
+      }
     }
     // CR-01-2：steer 排队指令，本次派单必带（运行中指令落盘，不打断进程）
     const queued = this.queuedSteer.get(slot.id) ?? []
@@ -641,6 +727,16 @@ export class MissionOrchestrator {
       spec += `\n\n## 排队指令（用户 steer）\n${queued.join('\n')}`
       this.queuedSteer.delete(slot.id)
     }
+    // N2 记忆运行时注入（CR-07-4）：按「槽位 + 团队(team:<mission>)」拉相关记录，
+    // 有界 + 指针式（content_ref 非原始对话）；worker 不必有 pod_mem_* 工具——相关经验自动进上下文。
+    const mem = this.injectRelevantMemory(slot.id, task, spec)
+    const memoryInjected = mem.injected
+    spec = mem.spec
+    // P0-5 投递接线：重派任务若有未投递的交接（reassign 产物），按 planDelivery 2×3 矩阵
+    // 决定投递动作并注入（矩阵从此有真实调用点）。delivered 标记防重试重复投递。
+    const hd = this.deliverPendingHandoff(task, slot, spec)
+    const handoffInjected = hd.injected
+    spec = hd.spec
 
     const enriched: Task = { ...task, spec }
     // Context Builder 落盘：把「实际发给该 agent 的完整上下文」存为事件——
@@ -665,8 +761,17 @@ export class MissionOrchestrator {
         final_length: spec.length,
         review_injected: task.type === 'review',
         steer_injected: queued.length > 0,
+        tenets_injected: (mission.tenets?.length ?? 0) > 0,
+        memory_injected: memoryInjected,
+        handoff_injected: handoffInjected,
+        review_truncated_hunks: reviewTruncatedHunks,
+        content_density_pct: contentDensityPct,
       },
     })
+    // P1-2 第二维落盘：把本次派发的密度记到 slot，供下次 needsAutoReset 降阈值判定
+    if (slot.content_density_pct !== contentDensityPct) {
+      this.store.updateSlot(slot.id, { content_density_pct: contentDensityPct })
+    }
     this.taskMachine.dispatch(task.id, slot.id)
     this.taskMachine.start(task.id)
     // DoD-19：新派发 = 新 reply（重置聚合游标）
@@ -989,6 +1094,8 @@ export class MissionOrchestrator {
           completion.usage.tokens_in,
           completion.usage.tokens_out,
           completion.usage.source,
+          completion.usage.cache_read_tokens,
+          completion.usage.cache_creation_tokens,
         )
       } catch (error) {
         if (error instanceof PodError && error.code === 'BUDGET_EXCEEDED') {
@@ -1047,6 +1154,16 @@ export class MissionOrchestrator {
               : undefined
           if (validation === undefined || !validation.ok) {
             const errors = validation === undefined ? ['report.plan missing or malformed'] : validation.errors
+            const cls = validation === undefined ? undefined : classifyPlanErrors(validation.errors)
+            // P1 Worker feedback 轻量环：语义类拒绝（能力缺口）→ 把执行侧约束写回失败任务
+            // spec，自动重试即带反馈（此前 silent_failure 按原 spec 无反馈重试，同样错误反复发生）。
+            // 结构类拒绝（id/环/依赖/规模）不写回——纯形状问题，直接重试即可，无需反馈。
+            let feedbackApplied = false
+            if (cls !== undefined && cls.semantic.length > 0) {
+              const feedback = buildCapabilityFeedback(cls.capabilityGaps, this.store.listSlots(this.missionId))
+              this.store.updateTask(this.missionId, taskId, { spec: `${task.spec}\n\n## 上次提案被拒的反馈（执行侧约束）\n${feedback}` })
+              feedbackApplied = true
+            }
             this.taskMachine.fail(taskId, { kind: 'silent_failure', message: `plan proposal rejected: ${errors.join('; ').slice(0, 400)}` })
             this.store.appendEvent(this.missionId, {
               id: `ev-plan-rejected-${taskId}-${this.clock()}`,
@@ -1054,7 +1171,7 @@ export class MissionOrchestrator {
               ts: this.clock(),
               kind: 'plan_rejected',
               task_id: taskId,
-              payload: { errors },
+              payload: { errors, semantic: cls?.semantic ?? [], structural: cls?.structural ?? [], feedback_applied: feedbackApplied },
             })
             break
           }
@@ -1065,6 +1182,8 @@ export class MissionOrchestrator {
         }
         await this.taskMachine.report(taskId, completion.report)
         this.maybeEmitQuestion(task, completion.report)
+        // P1-1 Generator：任务完成即入账 delta 账本（fact 条目只写一次，重置时不再整份重写）
+        this.recordTaskFact(taskId)
         break
       }
       case 'rate_limited':
@@ -1092,6 +1211,22 @@ export class MissionOrchestrator {
     }
     this.maybeAutoReplan(taskId)
     this.signalCompletion()
+  }
+
+  /**
+   * P1-1 Generator：任务完成（report done 后）把已完成任务入账进 delta 账本。
+   * 幂等（同任务同 commit 不重复入账）；账本条目是重置摘要的 Rich 事实源。
+   */
+  private recordTaskFact(taskId: string): void {
+    const task = this.store.getTask(this.missionId, taskId)
+    if (task === undefined || task.status !== 'done') return
+    const slotId = task.owner_slot_id
+    if (slotId === undefined) return
+    try {
+      appendTaskFact(this.store, this.missionId, slotId, task, this.clock())
+    } catch {
+      // 入账失败不阻断任务完成主路径（账本是续接面，不是执行面）
+    }
   }
 
   private signalCompletion(): void {
@@ -1271,6 +1406,83 @@ export class MissionOrchestrator {
     return task!
   }
 
+  /**
+   * N2 记忆运行时注入（CR-07-4）：按槽位 + 团队(team:<mission>) 拉相关记忆，
+   * 排序（标签命中任务 skill_tags 优先 → 重要度降序），去重、有界（MAX_MEMORY_INJECT），
+   * 指针式注入 content_ref（非原始对话）。无 memoryQuery / 无记录 → 不注入（零开销）。
+   */
+  private injectRelevantMemory(slotId: string, task: Task, spec: string): { spec: string; injected: boolean } {
+    if (this.memoryQuery === undefined) return { spec, injected: false }
+    const records = [
+      ...(this.memoryQuery({ owner_slot_id: slotId, importance_min: 3, limit: 4 }) ?? []),
+      ...(this.memoryQuery({ owner_slot_id: teamOwnerId(this.missionId), importance_min: 3, limit: 4 }) ?? []),
+    ]
+    if (records.length === 0) return { spec, injected: false }
+    const taskTags = new Set(task.skill_tags ?? [])
+    const seen = new Set<string>()
+    const picked: MemoryRecordLike[] = []
+    for (const r of [...records].sort((a, b) => {
+      const aHit = (a.tags ?? []).some((t) => taskTags.has(t)) ? 1 : 0
+      const bHit = (b.tags ?? []).some((t) => taskTags.has(t)) ? 1 : 0
+      return bHit - aHit || b.importance - a.importance
+    })) {
+      if (seen.has(r.id)) continue
+      seen.add(r.id)
+      picked.push(r)
+      if (picked.length >= MAX_MEMORY_INJECT) break
+    }
+    if (picked.length === 0) return { spec, injected: false }
+    const block = picked
+      .map((r) => `- [${r.type}·${r.importance}]${(r.tags ?? []).length > 0 ? ` #${r.tags.join(',')}` : ''} → ${clip(r.content_ref, MAX_MEMORY_REF_CHARS)}`)
+      .join('\n')
+    return { spec: `${spec}\n\n## 相关记忆（团队沉淀，指针式）\n${block}`, injected: true }
+  }
+  /**
+   * P0-5 投递接线：找该任务对目标槽位「未投递」的交接，按 planDelivery 2×3 矩阵决定动作
+   * 并注入 prompt；标记 delivered（防每次重试重复投递）+ 落 handoff_delivered 事件（审计）。
+   */
+  private deliverPendingHandoff(task: Task, slot: AgentSlot, spec: string): { spec: string; injected: boolean } {
+    const pending = this.store
+      .listHandoffs(this.missionId)
+      .filter((h) => h.task_id === task.id && h.to_slot === slot.id && !h.delivered)
+    if (pending.length === 0) return { spec, injected: false }
+    const h = pending[pending.length - 1]!
+    const action = planDelivery(slot, h.mode)
+    spec += this.renderHandoffDelivery(h, action)
+    this.store.updateHandoff(this.missionId, h.id, { delivered: true })
+    this.store.appendEvent(this.missionId, {
+      id: `ev-handoff-delivered-${h.id}-${this.clock()}`,
+      mission_id: this.missionId,
+      ts: this.clock(),
+      kind: 'handoff_delivered',
+      task_id: task.id,
+      slot_id: slot.id,
+      payload: { handoff_id: h.id, from: h.from_slot, mode: h.mode, action: action.kind },
+    })
+    return { spec, injected: true }
+  }
+
+  /** 交接四件套的注入渲染：queue 行全量（意图/规格指针/产物/校验），reset-session 压缩为摘要。 */
+  private renderHandoffDelivery(h: Handoff, action: DeliveryAction): string {
+    const p = h.payload
+    if (action.kind === 'reset-session') {
+      return [
+        '\n\n## 交接摘要（会话已重建）',
+        `- 原移交人 ${h.from_slot}`,
+        `- 意图：${p.intent.brief.slice(0, 200)}`,
+        `- 校验：${p.verify.join('、')}`,
+      ].join('\n')
+    }
+    const lines = [
+      '## 交接消息（来自 ' + h.from_slot + ' 的 peer 请求，' + action.kind + '）',
+      `意图：${p.intent.brief.slice(0, 300)}`,
+      `规格指针：${clip(p.artifacts.spec, 300)}`,
+      p.artifacts.diff_range !== undefined ? `改动区间：${p.artifacts.diff_range}` : '',
+      `期望产物：${clip(p.expected_output, 300)}`,
+      `收方校验（可检查物）：${p.verify.join('、')}`,
+    ].filter((s) => s.length > 0)
+    return '\n\n' + lines.join('\n')
+  }
   /** 未完成任务摘要（重规划上下文的数据源）。 */
   private undoneTaskSummary(): Array<{ id: string; title: string; status: string; fault?: string; last_error?: string }> {
     return this.store

@@ -205,6 +205,7 @@ function makeOrchestrator(
   fixture: Fixture,
   script: Record<string, { progress?: WorkerProgressEvent[]; completion?: WorkerCompletion; next?: WorkerCompletion; hang?: boolean; delayMs?: number }>,
   missionId = 'M-1',
+  deps: { memoryQuery?: (q: { owner_slot_id?: string; importance_min?: number; limit?: number }) => Array<{ id: string; type: string; importance: number; tags: string[]; content_ref: string }> } = {},
 ) {
   const backends: Record<string, FakeBackend> = {
     claude: new FakeBackend('claude', script),
@@ -224,6 +225,7 @@ function makeOrchestrator(
       failures: [],
       mismatch: false,
     }),
+    ...(deps.memoryQuery !== undefined ? { memoryQuery: deps.memoryQuery } : {}),
   })
 }
 
@@ -249,7 +251,7 @@ function makeOrchestratorWithDiff(
       failures: [],
       mismatch: false,
     }),
-    diffProvider: async () => 'diff --git a/x.ts b/x.ts\n+export const add = (a, b) => a + b\n',
+    diffProvider: async () => 'diff --git a/x.ts b/x.ts\nindex 111..222 100644\n--- a/x.ts\n+++ b/x.ts\n@@ -1,1 +1,1 @@\n+export const add = (a, b) => a + b\n',
   })
 }
 
@@ -440,8 +442,123 @@ describe('steer（CR-01-2：运行中指令排队为 micro-task）', () => {
     orchestrator.createTasks(plan())
     await orchestrator.run()
     const review = fixture.backends.codex!.started.find((s) => s.task.type === 'review')!
-    expect(review.task.spec).toContain('被审 diff（宿主机注入，勿访问仓库）')
-    expect(review.task.spec).toContain('diff --git a/x.ts b/x.ts')
+    // P1-5 两级加载：变更地图全量 + hunk 正文注入（hunk 头在正文里，diff --git 行被解析进地图）
+    expect(review.task.spec).toContain('被审 diff（hunk 正文，宿主机注入，勿访问仓库）')
+    expect(review.task.spec).toContain('变更地图')
+    expect(review.task.spec).toContain('@@ -1,1 +1,1 @@')
+    expect(review.task.spec).toContain('export const add')
+  })
+
+  it('常规 implement→review 流转落 handoff_created 事件（审计 P1：协议层与实际传递对齐）', async () => {
+    const orchestrator = makeOrchestratorWithDiff(fixture, {})
+    orchestrator.launch(launchInput({ cwd: fixture.repo }))
+    orchestrator.createTasks(plan())
+    await orchestrator.run()
+    // 实现→审查的常规传递（宿主注入 diff）补一条 handoff_created，带 verify 清单
+    const handoffs = fixture.store.listEvents('M-1').filter((e) => e.kind === 'handoff_created')
+    const reviewHandoff = handoffs.find((e) => (e.payload as { handoff_id?: string }).handoff_id?.startsWith('H-REVIEW-'))
+    expect(reviewHandoff).toBeDefined()
+    const p = reviewHandoff!.payload as { from: string; to: string; verify: string[]; targets: Array<{ id: string }> }
+    expect(p.from).toBeDefined() // 实现者槽位
+    expect(p.to).toBeDefined()   // 审查者槽位
+    expect(p.verify).toContain('diff_range_valid')
+    expect(p.verify).toContain('test_log_exists')
+    expect(p.verify).toContain('report_fields_complete')
+    expect(p.targets.length).toBeGreaterThan(0)
+  })
+})
+
+describe('团队宗旨（P0-B：mission 级价值观锚点注入）', () => {
+  it('launch 带 tenets → 每个派发任务 spec 前置注入，task_context 事件标注', async () => {
+    const orchestrator = makeOrchestrator(fixture, {})
+    orchestrator.launch(
+      launchInput({ cwd: fixture.repo, tenets: ['优先可维护性：宁可多写两行说明，也别埋坑', '先跑通再优化'] }),
+    )
+    orchestrator.createTasks([{ id: 'T-1', title: '实现', spec: '实现 add', type: 'implement', skill_tags: ['编码'] }])
+    await orchestrator.run()
+    const started = fixture.backends.claude!.started[0]!
+    expect(started.task.spec).toContain('团队宗旨（mission 取舍锚点）')
+    expect(started.task.spec).toContain('优先可维护性')
+    // 宗旨前置在任务简报内容之前（价值观锚点先行，而非塞在结尾）
+    expect(started.task.spec.indexOf('团队宗旨')).toBeLessThan(started.task.spec.indexOf('实现 add'))
+    const ctx = fixture.store.listEvents('M-1').find((e) => e.kind === 'task_context')
+    expect(ctx?.payload.tenets_injected).toBe(true)
+  })
+
+  it('无 tenets → 不注入', async () => {
+    const orchestrator = makeOrchestrator(fixture, {})
+    orchestrator.launch(launchInput({ cwd: fixture.repo }))
+    orchestrator.createTasks([{ id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'] }])
+    await orchestrator.run()
+    const started = fixture.backends.claude!.started[0]!
+    expect(started.task.spec).not.toContain('团队宗旨')
+  })
+})
+
+describe('产物字段持久化（Web 第二批：report → Task）', () => {
+  it('done 任务把 test_result/test_evidence/decisions/blockers 落盘（UI 产物面数据源）', async () => {
+    const orch = makeOrchestrator(fixture, {})
+    orch.launch(launchInput({ cwd: fixture.repo }))
+    orch.createTasks(plan())
+    await orch.run()
+    const impl = fixture.store.getTask('T-1')!
+    expect(impl.status).toBe('done')
+    expect(impl.test_result).toBe('pass')
+    expect(impl.result_summary).toBeDefined()
+    expect(impl.test_evidence).toBeDefined()
+    expect(Array.isArray(impl.decisions)).toBe(true)
+    expect(Array.isArray(impl.blockers)).toBe(true)
+  })
+})
+
+describe('N2 记忆运行时注入（CR-07-4：相关 + 有界 + 指针式）', () => {
+  it('派发时按槽位/团队注入相关记忆 + task_context 标注 memory_injected', async () => {
+    const orch = makeOrchestrator(fixture, {}, 'M-1', {
+      memoryQuery: () => [
+        { id: 'mem-1', type: 'lesson', importance: 5, tags: ['编码'], content_ref: 'src/util.ts 用 export function 风格，测试放 tests/ 用 node:test' },
+      ],
+    })
+    orch.launch(launchInput({ cwd: fixture.repo }))
+    orch.createTasks([{ id: 'T-1', title: '实现', spec: '实现 add', type: 'implement', skill_tags: ['编码'] }])
+    await orch.run()
+    const started = fixture.backends.claude!.started[0]!
+    expect(started.task.spec).toContain('相关记忆（团队沉淀，指针式）')
+    expect(started.task.spec).toContain('src/util.ts 用 export function 风格')
+    const ctx = fixture.store.listEvents('M-1').find((e) => e.kind === 'task_context' && e.task_id === 'T-1')
+    expect(ctx?.payload.memory_injected).toBe(true)
+  })
+
+  it('无 memoryQuery → 不注入（零开销）', async () => {
+    const orch = makeOrchestrator(fixture, {})
+    orch.launch(launchInput({ cwd: fixture.repo }))
+    orch.createTasks([{ id: 'T-1', title: '实现', spec: '实现 add', type: 'implement', skill_tags: ['编码'] }])
+    await orch.run()
+    expect(fixture.backends.claude!.started[0]!.task.spec).not.toContain('相关记忆')
+  })
+})
+
+describe('P0-5 交接投递（planDelivery 接线：重派按矩阵注入交接）', () => {
+  it('reassign 后重派 → spec 注入交接 + delivered 标记 + task_context handoff_injected', async () => {
+    const slots = [
+      { id: 'S-1', vendor: 'claude' as const, role: 'implementer', capabilities: ['编码'], model: 'm', session_tier: 'per-mission' as const },
+      { id: 'S-2', vendor: 'claude' as const, role: 'implementer', capabilities: ['编码'], model: 'm', session_tier: 'per-mission' as const },
+    ]
+    const orch = makeOrchestrator(fixture, {})
+    orch.launch(launchInput({ cwd: fixture.repo, slots }))
+    orch.createTasks([{ id: 'T-1', title: '实现', spec: '实现 add', type: 'implement', skill_tags: ['编码'] }])
+    fixture.store.updateTask('T-1', { owner_slot_id: 'M-1-S-1', status: 'blocked', fault: 'crash' })
+    await orch.reassignTask('T-1', 'M-1-S-2', '原槽位卡死')
+    const handoff = fixture.store.listHandoffs('M-1')[0]!
+    expect(handoff.delivered).toBeUndefined()
+    await orch.run()
+    const started = fixture.backends.claude!.started.find((s) => s.task.id === 'T-1')
+    expect(started).toBeDefined()
+    expect(started!.task.spec).toContain('交接消息')
+    expect(started!.task.spec).toContain('原槽位卡死')
+    expect(fixture.store.listHandoffs('M-1')[0]!.delivered).toBe(true)
+    expect(fixture.store.listEvents('M-1').some((e) => e.kind === 'handoff_delivered')).toBe(true)
+    const ctx = fixture.store.listEvents('M-1').find((e) => e.kind === 'task_context' && e.task_id === 'T-1')
+    expect(ctx?.payload.handoff_injected).toBe(true)
   })
 })
 
@@ -1075,7 +1192,9 @@ describe('P1 规划层（goal → DAG 智能分解，AgentScope DAGPlanExecutor 
     { id: 'T-1', title: '实现', spec: 's', type: 'implement' as const, skill_tags: ['编码'], depends_on: [] },
     { id: 'T-2', title: '独立 review', spec: 'r', type: 'review' as const, skill_tags: ['审查'], depends_on: ['T-1'] },
   ]
-  const planDone = (taskId: string, plan: typeof validPlan | undefined): WorkerCompletion => ({
+  // plan 参数放宽为通用 shape（非法提案同样塞进 report，由 validatePlanProposal 裁决）
+  type PlanShape = Array<{ id: string; title: string; spec: string; type: 'implement' | 'review' | 'test' | 'doc' | 'research'; skill_tags?: string[]; depends_on?: string[] }>
+  const planDone = (taskId: string, plan: PlanShape | undefined): WorkerCompletion => ({
     exit: 'done',
     report: doneReport(taskId, { task_type: 'plan', ...(plan !== undefined ? { plan } : {}) }),
     usage: { tokens_in: 10, tokens_out: 5, source: 'measured' },
@@ -1135,6 +1254,41 @@ describe('P1 规划层（goal → DAG 智能分解，AgentScope DAGPlanExecutor 
     expect(fixture.store.listEvents('M-1').some((e) => e.kind === 'plan_rejected')).toBe(true)
     // 规划任务自身失败不触发自动重规划
     expect(orch.replanRemaining()).toBe(2)
+  })
+
+  it('语义类拒绝（能力缺口）→ 执行侧约束写回失败任务 spec + plan_rejected 标注（P1 feedback 环）', async () => {
+    const gapPlan = [
+      { id: 'T-1', title: '实现', spec: 's', type: 'implement' as const, skill_tags: ['运维'], depends_on: [] },
+      { id: 'T-2', title: '独立 review', spec: 'r', type: 'review' as const, skill_tags: ['审查'], depends_on: ['T-1'] },
+    ]
+    const orch = makeOrchestrator(fixture, { 'P-1': { completion: planDone('P-1', gapPlan) } })
+    orch.launch(launchInput({ cwd: fixture.repo, slots: plannerRoster }))
+    orch.createPlannerTask('目标')
+    await orch.run()
+    const p1 = fixture.store.getTask('P-1')!
+    // 反馈已写回失败任务 spec——重试即带执行侧约束（此前按原 spec 无反馈重试，同样错误反复发生）
+    expect(p1.spec).toContain('上次提案被拒的反馈（执行侧约束）')
+    expect(p1.spec).toContain('T-1 需求 [运维]')
+    expect(p1.spec).toContain('名册实际能力')
+    const ev = fixture.store.listEvents('M-1').find((e) => e.kind === 'plan_rejected')!
+    expect((ev.payload.semantic as string[]).some((s) => s.includes('capability gap'))).toBe(true)
+    expect(ev.payload.feedback_applied).toBe(true)
+  })
+
+  it('结构类拒绝（自依赖）→ 不写回反馈，plan_rejected 标注 structural（P1 feedback 环）', async () => {
+    const badPlan = [
+      { id: 'T-1', title: '实现', spec: 's', type: 'implement' as const, skill_tags: ['编码'], depends_on: ['T-1'] },
+    ]
+    const orch = makeOrchestrator(fixture, { 'P-1': { completion: planDone('P-1', badPlan) } })
+    orch.launch(launchInput({ cwd: fixture.repo, slots: plannerRoster }))
+    orch.createPlannerTask('目标')
+    await orch.run()
+    const p1 = fixture.store.getTask('P-1')!
+    expect(p1.spec).not.toContain('上次提案被拒的反馈')
+    const ev = fixture.store.listEvents('M-1').find((e) => e.kind === 'plan_rejected')!
+    expect(ev.payload.semantic).toHaveLength(0)
+    expect((ev.payload.structural as string[]).some((s) => s.includes('depends on itself'))).toBe(true)
+    expect(ev.payload.feedback_applied).toBe(false)
   })
 
   it('自动重规划：实现任务转人工 → 带 failure 上下文的 P 任务；REPLAN_LIMIT 有界', async () => {
@@ -1404,6 +1558,30 @@ describe('P0 会话档位：会话句柄写回 slot（档位 B 复用）', () =>
     const slot = fx.store.getSlot('M-1-S-1')!
     expect(slot.session_base_tokens).toBe(80)
     expect(slot.ctx_usage_pct).toBeLessThan(CTX_RESET_THRESHOLD_PCT)
+    fx.store.close()
+    rmSync(fx.root, { recursive: true, force: true })
+  })
+
+  it('P1-2 review 派发记录内容密度；高密度下重置事件用 50% 低阈值', async () => {
+    const fx = await makeFixture()
+    const backend = new FakeBackend('ark', {
+      'T-1': { completion: { exit: 'done', report: doneReport('T-1'), usage: { tokens_in: 5, tokens_out: 5, source: 'measured' }, artifacts: [] } },
+    })
+    const orch = new MissionOrchestrator('M-1', {
+      store: fx.store,
+      backends: { ark: backend },
+      worktree: { ensure: async () => fx.repo },
+      verify: async (task, report) => ({ ok: true, failures: [], commit_sha: report.commit_sha, parent_sha: task.id + '-p', mismatch: false }),
+      diffProvider: async () => 'diff --git a/x.ts b/x.ts\nindex 1..2 100644\n--- a/x.ts\n+++ b/x.ts\n@@ -1,1 +1,30 @@\n' + '+line\n'.repeat(50),
+    })
+    orch.launch({ name: 'r', goal: 'g', cwd: fx.repo, budgetUsd: 5, parallel: 1, slots: [{ id: 'S-1', vendor: 'ark', role: 'reviewer', capabilities: ['审查'] }] })
+    orch.createTasks([{ id: 'T-1', title: '审查', spec: '审查 T-1', type: 'review', skill_tags: ['审查'], depends_on: [] }])
+    await orch.run()
+    // review 派发后 slot 记录内容密度（diff 密集 → 高）
+    const slot = fx.store.getSlot('M-1-S-1')!
+    expect(slot.content_density_pct).toBeGreaterThanOrEqual(60)
+    const ctx = fx.store.listEvents('M-1').find((e) => e.kind === 'task_context' && e.task_id === 'T-1')!
+    expect((ctx.payload as { content_density_pct: number }).content_density_pct).toBeGreaterThanOrEqual(60)
     fx.store.close()
     rmSync(fx.root, { recursive: true, force: true })
   })

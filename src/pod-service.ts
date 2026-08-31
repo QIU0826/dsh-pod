@@ -221,6 +221,33 @@ export class PodService {
     return { jobs: this.cron.list(), recent: this.cron.historyTail(10) }
   }
 
+  /** cron 编辑（Web 第三批）：校验 + 写回 cron.json + 热加载。lastFiredAt 是运行时节流状态，不入配置。 */
+  cronSave(jobs: unknown): { ok: boolean; message: string } {
+    if (!Array.isArray(jobs)) return { ok: false, message: 'jobs must be an array' }
+    const clean: CronJob[] = []
+    for (const raw of jobs as Array<Record<string, unknown>>) {
+      if (raw === null || typeof raw !== 'object') return { ok: false, message: 'job must be an object' }
+      if (typeof raw.id !== 'string' || typeof raw.intervalMs !== 'number' || typeof raw.enabled !== 'boolean') {
+        return { ok: false, message: 'each job needs id (string) / intervalMs (ms number) / enabled (boolean)' }
+      }
+      const command = raw.command as { kind?: unknown } | undefined
+      if (command === null || typeof command !== 'object' || typeof command.kind !== 'string') {
+        return { ok: false, message: 'job needs command.kind (status|launch|approve|deny|steer|pause|resume|abort)' }
+      }
+      clean.push({
+        id: raw.id,
+        intervalMs: Math.max(1_000, Math.floor(raw.intervalMs)),
+        command: raw.command as CronJob['command'],
+        enabled: raw.enabled,
+        label: typeof raw.label === 'string' && raw.label.length > 0 ? raw.label : undefined,
+      })
+    }
+    mkdirSync(this.dataDir, { recursive: true })
+    writeFileSync(this.cronJobsFile, JSON.stringify({ jobs: clean }, null, 2), 'utf8')
+    this.reloadCronJobs()
+    return { ok: true, message: `已写入 ${clean.length} 条定时任务（cron.json + 热加载）` }
+  }
+
 
   /** 插件层注入 commander 会话启动器（pod_launch 后自动创建 mission 编排会话，3.3 节）。 */
   setCommanderLauncher(launcher: CommanderLauncher | undefined): void {
@@ -544,6 +571,8 @@ export class PodService {
         return verifyTaskArtifacts({ git: execGitClient(), repoDir }, task, report)
       },
       experiments: this.experiments,
+      // N2 记忆运行时注入：派发时按槽位/团队拉相关记录（有界、指针式），worker 无需 pod_mem_* 工具
+      memoryQuery: (q) => this.memory.query(q as Parameters<MemoryStore['query']>[0]),
       diffProvider: async (task) => {
         const parts: string[] = []
         for (const targetId of task.depends_on) {

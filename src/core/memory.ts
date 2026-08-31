@@ -82,6 +82,22 @@ export interface ReflectionResult {
   pruned: number
 }
 
+/**
+ * 团队级记忆归属（P1：经验从个体上升为团队资产，借鉴《从 ReAct 到 Agent Teams》「集体复盘」）。
+ * owner_slot_id 是不透明字符串键——团队记录用「team:<mission_id>」作为 owner，与槽位记录天然隔离
+ * （query 按 owner 精确匹配）。收口纪律（CR-07-4 同源）：团队记录由 commander（宿主 agent）主动策展
+ * 写入，不做 mission 结束自动摘要；worker 个体记录仍走各自 owner_slot_id。
+ */
+export const TEAM_OWNER_PREFIX = 'team:'
+/** mission 的团队 owner id（团队复盘记录的归属键）。 */
+export function teamOwnerId(missionId: string): string {
+  return TEAM_OWNER_PREFIX + missionId
+}
+/** 是否为团队级 owner（区别于槽位 owner）。 */
+export function isTeamOwner(owner: string): boolean {
+  return owner.startsWith(TEAM_OWNER_PREFIX)
+}
+
 function emptyMemoryData(): MemoryData {
   return { schemaVersion: 1, records: {}, edges: [], history: {} }
 }

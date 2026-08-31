@@ -6,9 +6,9 @@
 import { createElement, useEffect, useState, type ReactElement } from 'react'
 import {
   deleteRule, fetchRules, fetchBrowse,
-  fetchMemories, postMemoryCorrect, fetchCron,
+  fetchMemories, postMemory, postMemoryCorrect, fetchCron, saveCron,
   type ApprovalRuleView, type BrowseResponse,
-  type MemoryRecordView, type CronJobView, type CronFireView,
+  type MemoryRecordView, type MemoryType, type CronJobView, type CronFireView,
 } from './api.js'
 import { Icon } from './icons.js'
 import { AVATAR_OPTIONS, Avatar, avatarLabel } from './avatars.js'
@@ -172,13 +172,35 @@ function MemoryPanel(): ReactElement {
   const [records, setRecords] = useState<MemoryRecordView[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  const [ownerFilter, setOwnerFilter] = useState('')
+  const [wf, setWf] = useState({ owner: '', type: 'fact' as MemoryType, importance: '3', tags: '', content_ref: '' })
+  const [writing, setWriting] = useState(false)
 
   const load = (): void => {
-    fetchMemories({ limit: 50 })
+    const owner = ownerFilter.trim()
+    fetchMemories({ owner: owner.length > 0 ? owner : undefined, limit: 50 })
       .then((r) => { setRecords(r.records); setError(null) })
       .catch((cause) => { setError(cause instanceof Error ? cause.message : String(cause)); setRecords([]) })
   }
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [ownerFilter])
+
+  const write = (): void => {
+    if (wf.owner.trim().length === 0) {
+      setError('owner 必填：槽位 id 或 team:<mission_id>（团队复盘由 commander 收口）')
+      return
+    }
+    setWriting(true)
+    postMemory({
+      owner_slot_id: wf.owner.trim(),
+      type: wf.type,
+      importance: Math.min(5, Math.max(1, Number(wf.importance) || 3)),
+      tags: wf.tags.split(/[,，]/).map((s) => s.trim()).filter((s) => s.length > 0).slice(0, 8),
+      content_ref: wf.content_ref.trim() || undefined,
+    })
+      .then(() => { setWf({ owner: '', type: 'fact', importance: '3', tags: '', content_ref: '' }); load() })
+      .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+      .finally(() => setWriting(false))
+  }
 
   const bump = (id: string, delta: number, current: number): void => {
     const next = Math.min(5, Math.max(1, current + delta))
@@ -192,7 +214,20 @@ function MemoryPanel(): ReactElement {
   return createElement('div', { className: 'dsh-card' },
     createElement('div', { className: 'dsh-card-header' },
       createElement('span', { className: 'dsh-card-title' }, '长期记忆'),
-      createElement('span', { className: 'dsh-hint' }, 'agent 沉淀的经验；只能纠正，不能删除（保留变更历史）')),
+      createElement('span', { className: 'dsh-hint' }, '可查看/写入/纠正；记录不可删除（保留变更历史）')),
+    createElement('div', { className: 'dsh-mem-write', style: { display: 'grid', gap: 6, marginBottom: 10 } },
+      createElement('div', { className: 'dsh-hint', style: { fontSize: 11 } }, '主动写入（不自动摘要）：owner 为槽位 id 或 team:<mission_id>（团队复盘由 commander 收口）'),
+      createElement('div', { style: { display: 'flex', gap: 6 } },
+        createElement('input', { className: 'dsh-input dsh-mono', placeholder: 'owner：S-1 或 team:M-1', value: wf.owner, onChange: (e: { target: { value: string } }) => setWf({ ...wf, owner: e.target.value }) }),
+        createElement('select', { className: 'dsh-select', style: { flex: 'none' }, value: wf.type, onChange: (e: { target: { value: string } }) => setWf({ ...wf, type: e.target.value as MemoryType }) },
+          (Object.entries(MEMORY_TYPE) as Array<[MemoryType, { label: string; color: string }]>).map(([k, v]) => createElement('option', { key: k, value: k }, v.label))),
+        createElement('input', { className: 'dsh-input dsh-mono', style: { width: 64, flex: 'none' }, placeholder: '重要度', inputMode: 'numeric', value: wf.importance, onChange: (e: { target: { value: string } }) => setWf({ ...wf, importance: e.target.value }) }),
+        createElement('button', { className: 'dsh-btn sm', type: 'button', disabled: writing, onClick: write }, writing ? '写入中…' : '写入')),
+      createElement('input', { className: 'dsh-input dsh-mono', placeholder: '内容引用（文件/路径/摘要，非原始对话转录）', value: wf.content_ref, onChange: (e: { target: { value: string } }) => setWf({ ...wf, content_ref: e.target.value }) }),
+      createElement('input', { className: 'dsh-input dsh-mono', placeholder: '标签（逗号分隔，≤8）', value: wf.tags, onChange: (e: { target: { value: string } }) => setWf({ ...wf, tags: e.target.value }) })),
+    createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 } },
+      createElement('span', { className: 'dsh-label', style: { flex: 'none' } }, '按 owner 筛选'),
+      createElement('input', { className: 'dsh-input dsh-mono', style: { width: 240 }, placeholder: '槽位 id 或 team:<mission_id>（留空 = 全部）', value: ownerFilter, onChange: (e: { target: { value: string } }) => setOwnerFilter(e.target.value) })),
     error !== null
       ? createElement('div', { className: 'dsh-task-callout err' }, Icon('alertTriangle', 13), error)
       : null,
@@ -240,36 +275,84 @@ function CronPanel(): ReactElement {
   const [jobs, setJobs] = useState<CronJobView[] | null>(null)
   const [recent, setRecent] = useState<CronFireView[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [saving, setSaving] = useState(false)
 
-  useEffect(() => {
+  const load = (): void => {
     fetchCron()
       .then((r) => { setJobs(r.jobs); setRecent(r.recent); setError(null) })
       .catch((cause) => { setError(cause instanceof Error ? cause.message : String(cause)); setJobs([]) })
-  }, [])
+  }
+  useEffect(() => { load() }, [])
+
+  const startEdit = (): void => {
+    const config = (jobs ?? []).map((j) => ({ id: j.id, intervalMs: j.intervalMs, enabled: j.enabled, label: j.label, command: j.command }))
+    setDraft(JSON.stringify({ jobs: config }, null, 2))
+    setEditing(true)
+  }
+
+  const save = (): void => {
+    setSaving(true)
+    try {
+      const parsed = JSON.parse(draft) as { jobs?: unknown }
+      saveCron(parsed.jobs)
+        .then((r) => {
+          if (!r.ok) { setError(r.message); return }
+          setEditing(false)
+          load()
+        })
+        .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+        .finally(() => setSaving(false))
+    } catch (cause) {
+      setError('JSON 解析失败：' + (cause instanceof Error ? cause.message : String(cause)))
+      setSaving(false)
+    }
+  }
 
   return createElement('div', { className: 'dsh-card' },
     createElement('div', { className: 'dsh-card-header' },
       createElement('span', { className: 'dsh-card-title' }, '定时任务'),
-      createElement('span', { className: 'dsh-hint' }, 'cron.json 改动后调用 pod_cron_list 即热加载')),
-    error !== null
+      createElement('span', { className: 'dsh-hint' }, 'cron.json 改动后调用 pod_cron_list 即热加载'),
+      createElement('button', {
+        className: 'dsh-btn sm ghost', type: 'button', style: { marginLeft: 'auto' },
+        onClick: startEdit,
+      }, Icon('edit', 13), '编辑')),
+    editing
+      ? createElement('div', { style: { display: 'grid', gap: 8 } },
+          createElement('textarea', {
+            className: 'dsh-input dsh-mono', rows: 12,
+            value: draft,
+            onChange: (e: { target: { value: string } }) => setDraft(e.target.value),
+          }),
+          createElement('div', { style: { display: 'flex', gap: 8 } },
+            createElement('button', { className: 'dsh-btn primary sm', type: 'button', disabled: saving, onClick: save },
+              saving ? '保存中…' : '保存并热加载'),
+            createElement('button', { className: 'dsh-btn sm ghost', type: 'button', onClick: () => setEditing(false) }, '取消')),
+          createElement('span', { className: 'dsh-hint' },
+            'JSON 形状 { "jobs": [{ "id", "intervalMs"(毫秒), "enabled", "label"?, "command": { "kind": "status|launch|steer|approve|deny|pause|resume|abort", … } }] }；lastFiredAt 是运行态，保存时丢弃。'))
+      : null,
+    !editing && error !== null
       ? createElement('div', { className: 'dsh-task-callout err' }, Icon('alertTriangle', 13), error)
       : null,
-    jobs === null
+    !editing && jobs === null
       ? createElement('div', { className: 'dsh-hint' }, '读取中…')
-      : jobs.length === 0
+      : !editing && jobs !== null && jobs.length === 0
         ? createElement('div', { className: 'dsh-hint' }, '（暂无定时任务）')
-        : createElement('div', { className: 'dsh-cron-list' },
-            jobs.map((j) => createElement('div', { className: 'dsh-cron-row', key: j.id },
-              createElement('div', { style: { minWidth: 0 } },
-                createElement('div', { style: { fontSize: 13, fontWeight: 500 } }, j.label ?? j.id),
-                createElement('div', { className: 'dsh-hint', style: { fontSize: 11 }, title: JSON.stringify(j.command) },
-                  j.command.goal !== undefined ? `${j.command.kind}：${j.command.goal}` : j.command.kind)),
-              createElement('span', { className: 'dsh-mono', style: { fontSize: 12, color: 'var(--ink-2)' } }, formatInterval(j.intervalMs)),
-              createElement('span', { className: 'dsh-pill ' + (j.enabled ? 'done' : 'idle'), style: { fontSize: 11 } },
-                j.enabled ? '已启用' : '未启用'),
-              createElement('span', { className: 'dsh-hint', style: { fontSize: 11 } },
-                j.lastFiredAt !== undefined ? '上次 ' + new Date(j.lastFiredAt).toLocaleString('zh-CN') : '尚未触发')))),
-    recent.length > 0
+        : !editing && jobs !== null
+          ? createElement('div', { className: 'dsh-cron-list' },
+              jobs.map((j) => createElement('div', { className: 'dsh-cron-row', key: j.id },
+                createElement('div', { style: { minWidth: 0 } },
+                  createElement('div', { style: { fontSize: 13, fontWeight: 500 } }, j.label ?? j.id),
+                  createElement('div', { className: 'dsh-hint', style: { fontSize: 11 }, title: JSON.stringify(j.command) },
+                    j.command.goal !== undefined ? `${j.command.kind}：${j.command.goal}` : j.command.kind)),
+                createElement('span', { className: 'dsh-mono', style: { fontSize: 12, color: 'var(--ink-2)' } }, formatInterval(j.intervalMs)),
+                createElement('span', { className: 'dsh-pill ' + (j.enabled ? 'done' : 'idle'), style: { fontSize: 11 } },
+                  j.enabled ? '已启用' : '未启用'),
+                createElement('span', { className: 'dsh-hint', style: { fontSize: 11 } },
+                  j.lastFiredAt !== undefined ? '上次 ' + new Date(j.lastFiredAt).toLocaleString('zh-CN') : '尚未触发'))))
+          : null,
+    !editing && recent.length > 0
       ? createElement('div', { style: { marginTop: 12 } },
           createElement('div', { className: 'dsh-label', style: { marginBottom: 6 } }, '最近触发'),
           recent.map((f, i) => createElement('div', { className: 'dsh-cron-fire', key: i },
@@ -351,6 +434,21 @@ export function SettingsView(props: SettingsViewProps): ReactElement {
                 createElement('span', { className: 'dsh-hint' }, '按 token 消耗熔断（输入/输出合计）；达到上限会在继续前请求确认。'))
             : createElement('div', { className: 'dsh-form-row', key: 'unlimited' },
                 createElement('span', { className: 'dsh-hint' }, '不限预算：会话只显示已消耗 token，不做熔断（本地运行自己把关）。')))),
+        createElement('div', { className: 'dsh-card' },
+          createElement('div', { className: 'dsh-card-header' },
+            createElement('span', { className: 'dsh-card-title' }, '团队宗旨'),
+            createElement('span', { className: 'dsh-hint' }, 'mission 价值观锚点——派发时注入每个任务 spec 顶部，给 agent 取舍方向（缺省不注入）')),
+          createElement('div', { className: 'dsh-form-row' },
+            createElement('label', { className: 'dsh-label', htmlFor: 'set-tenets' }, '宗旨（每行一条，≤8 条）'),
+            createElement('textarea', {
+              id: 'set-tenets', className: 'dsh-input dsh-mono', rows: 4,
+              placeholder: '优先可维护性：宁可多写两行说明，也别埋坑；先跑通再优化',
+              value: draft.tenets.join('\n'),
+              onChange: (e: { target: { value: string } }) =>
+                patch({ tenets: e.target.value.split('\n').map((s) => s.trim()).filter((s) => s.length > 0).slice(0, 8) }),
+            }),
+            createElement('span', { className: 'dsh-hint' }, '安全纪律由引擎三道防线保证，不靠口头；留空则不注入。')),
+        ),
         createElement('div', { className: 'dsh-card' },
           createElement('div', { className: 'dsh-card-header' },
             createElement('span', { className: 'dsh-card-title' }, '默认员工名册'),

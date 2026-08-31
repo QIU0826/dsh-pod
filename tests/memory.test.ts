@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { MemoryStore } from '../src/core/memory.js'
+import { MemoryStore, TEAM_OWNER_PREFIX, isTeamOwner, teamOwnerId } from '../src/core/memory.js'
 
 function makeStore() {
   const dir = mkdtempSync(join(import.meta.dirname, '.mem-'))
@@ -28,6 +28,24 @@ describe('记忆子系统 2.8.1（MemoryStore，主动策展 + 图谱 + reflecti
     expect(store.query({ type: 'fact' })).toHaveLength(1)
     expect(store.query({ tags: ['review'] })).toHaveLength(1)
     expect(store.query({ importance_min: 4 })).toHaveLength(1)
+    expect(store.query()).toHaveLength(2)
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('团队级归属：team:<mission_id> 与槽位记录隔离（P1 团队复盘资产）', () => {
+    const { store, dir } = makeStore()
+    const team = teamOwnerId('M-1')
+    expect(team).toBe('team:M-1')
+    expect(TEAM_OWNER_PREFIX).toBe('team:')
+    expect(isTeamOwner(team)).toBe(true)
+    expect(isTeamOwner('S-1')).toBe(false)
+    store.write({ owner_slot_id: team, type: 'lesson', importance: 5, tags: ['team', 'review'], content_ref: '本组合复盘：审查必须给可复现反例' })
+    store.write({ owner_slot_id: 'S-1', type: 'fact', content_ref: '个体记录' })
+    // 团队 owner 查询只命中团队记录；槽位查询互不串扰
+    const teamRecs = store.query({ owner_slot_id: team })
+    expect(teamRecs).toHaveLength(1)
+    expect(teamRecs[0]!.tags).toContain('team')
+    expect(store.query({ owner_slot_id: 'S-1' })).toHaveLength(1)
     expect(store.query()).toHaveLength(2)
     rmSync(dir, { recursive: true, force: true })
   })

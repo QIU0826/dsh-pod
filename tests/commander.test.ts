@@ -37,7 +37,7 @@ describe('createCommanderSession（官方 API 使用面契约）', () => {
     expect(session.sessionId).toBe('mission-session-1')
   })
 
-  it('setup 经 agentCtx.tools.register 注册全部十个工具（作用域注册，非全局）', async () => {
+  it('setup 经 agentCtx.tools.register 注册全部 pod_* 工具（含 P0-1 pod_expand_tool；作用域注册，非全局）', async () => {
     const toolNames: string[] = []
     const agentCtxRegister = vi.fn((tool: { name?: string }) => {
       if (typeof tool.name === 'string') toolNames.push(tool.name)
@@ -70,6 +70,7 @@ describe('createCommanderSession（官方 API 使用面契约）', () => {
       'pod_resume',
       'pod_cron_list',
       'pod_plan',
+      'pod_expand_tool',
     ])
   })
 

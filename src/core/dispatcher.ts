@@ -79,6 +79,10 @@ export function routeTask(task: Task, context: RouteContext): RouteResult {
     }))
     .sort(
       (a, b) =>
+        // 换人目标优先（P0-5 交接投递的正确性前提）：任务有 owner（reassign 后 = 人工指定
+        // 目标）且该槽位在候选内 → 优先投给目标，交接四件套才能送达；原槽位/其他槽位同权。
+        // 若 owner 槽位被排除（谢绝/不可用），ownerPref 落空，回落常规路由。
+        ownerPref(a, task, b) ||
         a.load - b.load || // 负载升序
         a.cost - b.cost || // 成本升序
         b.successRate - a.successRate || // 历史成功率降序（越高越优先）
@@ -86,6 +90,14 @@ export function routeTask(task: Task, context: RouteContext): RouteResult {
     )
   const best = scored[0]!
   return { slotId: best.slot.id, reason: `load=${best.load} cost-rank ok success=${best.successRate.toFixed(2)}` }
+}
+
+/** owner 偏好：任务已归属（换人后 = 目标槽位）且该槽位在候选内 → 排最前。 */
+function ownerPref(a: { slot: { id: string } }, task: Task, b: { slot: { id: string } }): number {
+  const aOwn = a.slot.id === task.owner_slot_id
+  const bOwn = b.slot.id === task.owner_slot_id
+  if (aOwn === bOwn) return 0
+  return aOwn ? -1 : 1
 }
 
 /** 成功率收敛到 [0,1]；undefined/越界 → 0.5（中性，与无数据等价的稳定序）。 */

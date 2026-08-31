@@ -52,6 +52,8 @@ export interface ConsoleSettings {
   budgetTokens: string
   /** 并行执行上限（1-8；更高 = 更快但 token 消耗更集中）。 */
   parallel: string
+  /** 团队宗旨（mission 价值观锚点，每行一条；launch 时透传，派发注入每个任务 spec）。 */
+  tenets: string[]
   roster: RosterMember[]
   density: Density
   defaultView: 'chat' | 'board' | 'dag'
@@ -64,6 +66,7 @@ export const DEFAULT_SETTINGS: ConsoleSettings = {
   budgetMode: 'tokens',
   budgetTokens: '2000000',
   parallel: '2',
+  tenets: [],
   roster: DEFAULT_ROSTER,
   density: 'standard',
   defaultView: 'chat',
@@ -111,6 +114,8 @@ export function loadSettings(): ConsoleSettings {
       if (merged.budgetMode === 'tokens' && merged.budgetTokens.trim().length === 0) {
         merged.budgetTokens = '2000000'
       }
+      // 团队宗旨（P0-B UI 补口）：旧数据无 tenets → 空数组；非数组（损坏）归零
+      if (!Array.isArray(merged.tenets)) merged.tenets = []
       merged.roster = merged.roster.map((m, i) => ({ ...m, avatar: m.avatar ?? DEFAULT_ROSTER[i % DEFAULT_ROSTER.length]!.avatar }))
       return merged
     }

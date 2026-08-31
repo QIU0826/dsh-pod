@@ -13,7 +13,9 @@
  */
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { EXPAND_TOOL_NAME } from './core/tool-stages.js'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { JsonValue } from '@deepseek-ai/dsh-session'
 import type { PodService } from './pod-service.js'
 import type { PlanTaskInput } from './core/orchestrator.js'
 import type { TaskType, Vendor } from './core/types.js'
@@ -42,6 +44,8 @@ interface LaunchArgs {
   approval_mode?: number
   /** 并行执行上限（默认 2，v0.2 并行强化；clamp 1-8）。 */
   parallel?: number
+  /** 团队宗旨（P0-B）：3-5 条 do/prioritize 价值观锚点。 */
+  tenets?: string[]
   slots: Array<{
     id: string
     vendor: Vendor
@@ -73,6 +77,11 @@ export function makePodTools(service: PodService): PodToolBundle {
         budget_tokens: { type: 'number', description: 'token 预算上限（可选，方案书 2.3 节⑤）：未设则仅美元熔断' },
         approval_mode: { type: 'number', description: '审批模式：1（默认，合并前确认）/ 2（交接确认）/ 3（全自动）。模式 2/3 需 ~/.dsh/pod/experiments.json 对应开关开启。' },
         parallel: { type: 'number', description: '并行执行上限（默认 2；v0.2 并行强化，clamp 1-8）' },
+        tenets: {
+          type: 'array',
+          description: '团队宗旨（3-5 条价值观锚点，do/prioritize；派发时注入每个任务 spec，给 agent 取舍方向）',
+          items: { type: 'string' },
+        },
         slots: {
           type: 'array',
           required: true,
@@ -128,6 +137,7 @@ export function makePodTools(service: PodService): PodToolBundle {
           budgetTokens: input.budget_tokens,
           approvalMode: input.approval_mode === 2 || input.approval_mode === 3 ? input.approval_mode : 1,
           parallel: input.parallel,
+          tenets: input.tenets,
           slots: input.slots,
           plan: input.plan,
         })
@@ -332,9 +342,9 @@ export function makePodTools(service: PodService): PodToolBundle {
 
     defineTool({
       name: 'pod_mem_write',
-      description: '主动写入长期记忆记录（2.8.1 知识层）：type/importance/tags/content_ref/live_ref，owner_slot_id 隔离。触发词：记经验 / 记住。',
+      description: '主动写入长期记忆记录（2.8.1 知识层）：type/importance/tags/content_ref/live_ref，owner_slot_id 隔离。团队级（mission 复盘）用 team:<mission_id> 作为 owner_slot_id，由 commander 主动策展（不做自动摘要）。触发词：记经验 / 记住。',
       parameters: {
-        owner_slot_id: { type: 'string', required: true, description: '拥有者槽位' },
+        owner_slot_id: { type: 'string', required: true, description: '拥有者槽位；团队级（mission 复盘）用 team:<mission_id>' },
         type: { type: 'string', enum: ['lesson', 'pattern', 'decision', 'fact', 'episode'] },
         importance: { type: 'number', description: '1-5，越高越重要' },
         tags: { type: 'array', items: { type: 'string' } },
@@ -640,6 +650,36 @@ export function makePodTools(service: PodService): PodToolBundle {
       },
     }),
   ]
+  // P0-1 元工具：需要跨 stage 工具时先展开完整 schema（模型下一轮再调用，不占本轮全量注入）。
+  // 展开内容（description+parameters）只在被点名时才进上下文——正是分层加载的「按需展开」。
+  tools.push(
+    defineTool({
+      name: EXPAND_TOOL_NAME,
+      description:
+        '展开某个 pod_* 工具的完整参数 schema 与说明（仅当该工具不在当前 stage 全量清单里时使用；展开结果只供你下一轮直接调用，无需二次展开）',
+      parameters: {
+        name: { type: 'string', required: true, enum: tools.map((t) => t.name) },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            name: { type: 'string', required: true },
+            brief: { type: 'string', required: true },
+            params: { type: 'object', additionalProperties: true, required: true },
+          },
+        },
+        render: (_args, value: { name: string; brief: string }) => text(`[${value.name}] ${value.brief}`),
+      },
+      async execute(args: { name?: string }) {
+        const name = args.name
+        const t = tools.find((x) => x.name === name)
+        if (typeof name !== 'string' || t === undefined) return { name: String(name), brief: '（未知工具）', params: {} }
+        return { name, brief: t.description, params: t.parameters as unknown as Record<string, JsonValue> }
+      },
+    }),
+  )
   // AgentScope-E 工具级 middleware（Should 落地）：每个 pod_* 工具 execute 包审计钩子——
   // 调用前记开始、调用后记耗时/成败（service.recordToolAudit → pod_tool_called 事件）。
   // 薄壳边界保持：wrapTool 只做横切记账，不改变工具返回值。

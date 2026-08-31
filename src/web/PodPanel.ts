@@ -17,6 +17,8 @@ import {
   postDispatch,
   postLaunch,
   postPause,
+  fetchAssetText,
+  postPlan,
   postReassign,
   postTaskPause,
   postTaskResume,
@@ -62,6 +64,8 @@ export function PodPanel(): ReactElement {
   const [selectedSlot, setSelectedSlot] = useState('')
   const [approvalId, setApprovalId] = useState('')
   const [ctxTaskId, setCtxTaskId] = useState('')
+  // 审计 P1 · /assets 前端接线：产物路径点开按 path 拉取文件内容（受 worktree 根白名单限制）
+  const [assetView, setAssetView] = useState<{ path: string; loading: boolean; content: string; error: string | null } | null>(null)
   const lastEventId = useRef('')
 
   const activeId = status?.mission?.id ?? ''
@@ -203,6 +207,7 @@ export function PodPanel(): ReactElement {
         budget_usd: 0,
         budget_tokens: settings.budgetMode === 'tokens' && Number(settings.budgetTokens) > 0 ? Number(settings.budgetTokens) : undefined,
         parallel: Number(settings.parallel) >= 1 ? Math.min(8, Number(settings.parallel)) : undefined,
+        tenets: settings.tenets.length > 0 ? settings.tenets : undefined,
         slots: rosterToSlots(settings.roster),
       }))
       return
@@ -357,6 +362,11 @@ export function PodPanel(): ReactElement {
                   tasks, slots,
                   onDispatch: () => void runAction(() => postDispatch()),
                   onRefresh: () => { void poll(); void pollMissions() },
+                  onReplan: () => {
+                    const reason = window.prompt('把当前失败/未完成任务现状喂回 planner 重新分解？（有界 REPLAN_LIMIT=2；超限/无 planner/预算不足会拒绝）', '看板手动重规划')
+                    if (reason === null) return
+                    void runAction(async () => { await postPlan('replan', { reason: reason.trim() }); void poll(); void pollMissions() })
+                  },
                   onOpenContext: (taskId: string) => setCtxTaskId(taskId),
                   onPauseTask: (taskId: string) => { void runAction(() => postTaskPause(taskId)); void poll() },
                   onResumeTask: (taskId: string) => { void runAction(() => postTaskResume(taskId)); void poll() },
@@ -403,7 +413,7 @@ export function PodPanel(): ReactElement {
           const ctxEvents = events.filter((e) => e.kind === 'task_context' && e.task_id === ctxTaskId)
           const ev = ctxEvents[ctxEvents.length - 1]
           const task = tasks.find((t) => t.id === ctxTaskId)
-          const p = (ev?.payload ?? {}) as { spec?: string; base_length?: number; final_length?: number; review_injected?: boolean; steer_injected?: boolean }
+          const p = (ev?.payload ?? {}) as { spec?: string; base_length?: number; final_length?: number; review_injected?: boolean; steer_injected?: boolean; tenets_injected?: boolean }
           const spec = p.spec ?? (archive?.tasks.find((t) => t.id === ctxTaskId)?.spec ?? '')
           return createElement('div', { className: 'dsh-overlay', role: 'dialog', 'aria-modal': 'true', onClick: (e: { target: Element; currentTarget: Element }) => { if (e.target === e.currentTarget) setCtxTaskId('') } },
             createElement('div', { className: 'dsh-modal', style: { maxWidth: 760 } },
@@ -415,11 +425,60 @@ export function PodPanel(): ReactElement {
                     `${task?.title ?? ''} · 基础规格 ${p.base_length ?? spec.length} 字符` +
                     (p.final_length !== undefined ? ` → 注入后 ${p.final_length}` : '') +
                     (p.review_injected === true ? ' · 已注入审查上下文' : '') +
-                    (p.steer_injected === true ? ' · 已注入排队指令' : '')))),
+                    (p.steer_injected === true ? ' · 已注入排队指令' : '') +
+                    (p.tenets_injected === true ? ' · 已注入团队宗旨' : '')))),
               createElement('div', { className: 'dsh-modal-body' },
                 spec.length > 0
                   ? createElement('pre', { className: 'dsh-ctxspec' }, spec)
                   : createElement('span', { className: 'dsh-hint' }, '（无落盘上下文——该任务派发于上下文记录上线前，或尚未派发）')),
+              task !== undefined && task.result_summary != null && task.result_summary !== ''
+                ? createElement('div', { className: 'dsh-modal-body', style: { borderTop: '1px solid var(--line)', paddingTop: 12 } },
+                    createElement('div', { className: 'dsh-modal-title', style: { fontSize: 14 } }, '产物（MISSION_REPORT）'),
+                    createElement('div', { className: 'dsh-kvrow' },
+                      createElement('span', null, '测试'),
+                      createElement('span', { className: 'dsh-mono' }, task.test_result ?? '—')),
+                    task.test_evidence != null && task.test_evidence !== ''
+                      ? createElement('div', { className: 'dsh-kvrow' },
+                          createElement('span', null, '证据'),
+                          createElement('span', { className: 'dsh-mono' }, task.test_evidence))
+                      : null,
+                    createElement('div', { className: 'dsh-kvrow' },
+                      createElement('span', null, '摘要'),
+                      createElement('span', null, task.result_summary)),
+                    task.decisions != null && task.decisions.length > 0
+                      ? createElement('div', { className: 'dsh-kvrow' },
+                          createElement('span', null, '决策'),
+                          createElement('span', null, task.decisions.join('；')))
+                      : null,
+                    task.blockers != null && task.blockers.length > 0
+                      ? createElement('div', { className: 'dsh-kvrow' },
+                          createElement('span', null, '阻塞'),
+                          createElement('span', { style: { color: 'var(--error)' } }, task.blockers.join('；')))
+                      : null,
+                    task.commit != null && task.commit !== ''
+                      ? createElement('div', { className: 'dsh-kvrow' },
+                          createElement('span', null, 'Commit'),
+                          createElement('span', { className: 'dsh-mono' }, task.commit))
+                      : null,
+                    task.result_ref != null && task.result_ref !== ''
+                      ? createElement('div', { className: 'dsh-kvrow' },
+                          createElement('span', null, '产物路径'),
+                          createElement('span', { className: 'dsh-mono' }, task.result_ref),
+                          // 审计 P1 · /assets 接线：点开按 path 拉取文件内容（受 worktree 根白名单限制）
+                          createElement('button', {
+                            className: 'dsh-btn ghost',
+                            type: 'button',
+                            style: { width: 'auto', marginLeft: 8 },
+                            onClick: () => {
+                              const p = task.result_ref as string
+                              setAssetView({ path: p, loading: true, content: '', error: null })
+                              fetchAssetText(p)
+                                .then((content) => setAssetView({ path: p, loading: false, content, error: null }))
+                                .catch((cause: unknown) => setAssetView({ path: p, loading: false, content: '', error: cause instanceof Error ? cause.message : String(cause) }))
+                            },
+                          }, '查看产物'))
+                      : null)
+                : null,
               createElement('div', { className: 'dsh-modal-footer', style: { display: 'flex', gap: 8 } },
                 task !== undefined && (task.status === 'negotiating' || task.status === 'accepted' || task.status === 'dispatched' || task.status === 'running')
                   ? createElement('button', {
@@ -435,5 +494,22 @@ export function PodPanel(): ReactElement {
                   : null,
                 createElement('button', { className: 'dsh-btn ghost', type: 'button', style: { width: 'auto', flex: 1 }, onClick: () => setCtxTaskId('') }, '关闭'))))
         })()
-      : null))
+      : null,
+      assetView !== null
+        ? createElement('div', { className: 'dsh-overlay', role: 'dialog', 'aria-modal': 'true', onClick: (e: { target: Element; currentTarget: Element }) => { if (e.target === e.currentTarget) setAssetView(null) } },
+            createElement('div', { className: 'dsh-modal', style: { maxWidth: 860 } },
+              createElement('div', { className: 'dsh-modal-header' },
+                createElement('div', { className: 'dsh-modal-badge' }, Icon('fileText', 18)),
+                createElement('div', null,
+                  createElement('div', { className: 'dsh-modal-title' }, '产物内容'),
+                  createElement('div', { className: 'dsh-hint' }, assetView.path))),
+              createElement('div', { className: 'dsh-modal-body' },
+                assetView.loading
+                  ? createElement('span', { className: 'dsh-hint' }, '加载中…')
+                  : assetView.error !== null
+                    ? createElement('span', { style: { color: 'var(--error)' } }, assetView.error)
+                    : createElement('pre', { className: 'dsh-ctxspec', style: { maxHeight: 480, overflow: 'auto' } }, assetView.content)),
+              createElement('div', { className: 'dsh-modal-footer', style: { display: 'flex', gap: 8 } },
+                createElement('button', { className: 'dsh-btn ghost', type: 'button', style: { width: 'auto' }, onClick: () => setAssetView(null) }, '关闭'))))
+        : null))
 }

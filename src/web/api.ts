@@ -15,6 +15,13 @@ export interface StatusTask {
   depends_on: string[]
   /** 最近错误（blocked/escalated 时的故障描述）。 */
   last_error?: string | null
+  /** 产物查看（Web 第二批）：report 逐项落盘后由服务端透出。 */
+  result_summary?: string | null
+  test_result?: 'pass' | 'fail' | 'not_run' | null
+  test_evidence?: string | null
+  decisions?: string[] | null
+  blockers?: string[] | null
+  result_ref?: string | null
 }
 
 export interface StatusSlot {
@@ -142,6 +149,20 @@ export async function fetchBrowse(path: string): Promise<BrowseResponse> {
   )
 }
 
+/**
+ * 审计 P1 · /assets 前端接线：按 path 拉取产物文件文本（受 worktree 根白名单限制）。
+ * 用于产物面板/上下文查看器点开 result_ref / test_evidence 路径时读取内容；
+ * 非 2xx（越界/不存在）抛出带服务端原因的错误，调用方展示给用户。
+ */
+export async function fetchAssetText(path: string): Promise<string> {
+  const res = await fetch(`/api/dsh-pod/assets?path=${encodeURIComponent(path)}`, { cache: 'no-store' })
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string } | null
+    throw new Error(body?.error ?? `HTTP ${res.status}`)
+  }
+  return res.text()
+}
+
 /** 会话摘要（会话列表行）。 */
 export interface MissionSummary {
   id: string
@@ -221,6 +242,8 @@ export interface LaunchPayload {
   budget_tokens?: number
   /** 并行执行上限（1-8）。 */
   parallel?: number
+  /** 团队宗旨（P0-B）：3-5 条 do/prioritize 价值观锚点，派发时注入每个任务 spec。 */
+  tenets?: string[]
   slots: Array<{ id: string; vendor: string; role: string; capabilities: string[]; model?: string }>
 }
 
@@ -230,6 +253,24 @@ export async function postLaunch(payload: LaunchPayload): Promise<{ mission_id: 
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
+    }),
+  )
+}
+
+/** 规划面动作（list/add/replan）：看板重规划等 UI 入口。 */
+export async function postPlan(
+  action: 'list' | 'add' | 'replan',
+  body: { tasks?: Array<{ id: string; title: string; spec: string; type: string; skill_tags?: string[]; depends_on?: string[] }>; reason?: string } = {},
+): Promise<Record<string, unknown>> {
+  return readJson<Record<string, unknown>>(
+    await fetch('/api/dsh-pod/plan', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        action,
+        ...(body.tasks !== undefined ? { tasks: body.tasks } : {}),
+        ...(body.reason !== undefined ? { reason: body.reason } : {}),
+      }),
     }),
   )
 }
@@ -422,4 +463,9 @@ export interface CronFireView {
 
 export async function fetchCron(): Promise<{ jobs: CronJobView[]; recent: CronFireView[] }> {
   return readJson<{ jobs: CronJobView[]; recent: CronFireView[] }>(await fetch('/api/dsh-pod/cron', { cache: 'no-store' }))
+}
+
+/** cron 编辑（Web 第三批）：写回 cron.json + 热加载（服务端校验 jobs 形状）。 */
+export async function saveCron(jobs: unknown): Promise<{ ok: boolean; message: string }> {
+  return postJson<{ ok: boolean; message: string }>('/api/dsh-pod/cron', { jobs })
 }

@@ -7,7 +7,9 @@ import {
   MAX_PLAN_TASKS,
   PlanProposalSchema,
   REPLAN_LIMIT,
+  buildCapabilityFeedback,
   buildPlannerSpec,
+  classifyPlanErrors,
   extractPlanProposal,
   hasPlannerSlot,
   validatePlanProposal,
@@ -142,5 +144,44 @@ describe('validatePlanProposal（代码裁决）', () => {
     expect(REPLAN_LIMIT).toBeGreaterThan(0)
     expect(REPLAN_LIMIT).toBeLessThanOrEqual(3)
     expect(MAX_PLAN_TASKS).toBeGreaterThan(0)
+  })
+})
+
+describe('classifyPlanErrors（P1 feedback 环：语义 vs 结构分类）', () => {
+  it('capability gap → semantic + 缺口明细；其余 → structural', () => {
+    const cls = classifyPlanErrors([
+      'capability gap: task T-2 needs [运维] but no slot covers it',
+      'capability gap: task T-3 needs [编码,数据库] but no slot covers it',
+      'dependency cycle: T-1 -> T-2 -> T-1',
+      'task id not allowed: ../evil',
+      'plan has 17 tasks (max 16)',
+    ])
+    expect(cls.semantic).toHaveLength(2)
+    expect(cls.structural).toHaveLength(3)
+    expect(cls.capabilityGaps).toEqual([
+      { taskId: 'T-2', tags: ['运维'] },
+      { taskId: 'T-3', tags: ['编码', '数据库'] },
+    ])
+    expect(cls.structural).toContain('dependency cycle: T-1 -> T-2 -> T-1')
+  })
+
+  it('无能力缺口 → semantic 空，全 structural', () => {
+    const cls = classifyPlanErrors(['duplicate task id: T-1', 'task T-1 depends on itself'])
+    expect(cls.semantic).toHaveLength(0)
+    expect(cls.capabilityGaps).toHaveLength(0)
+    expect(cls.structural).toHaveLength(2)
+  })
+
+  it('buildCapabilityFeedback：列出缺口 + 名册实际能力', () => {
+    const fb = buildCapabilityFeedback(
+      [{ taskId: 'T-2', tags: ['运维'] }],
+      [
+        { id: 'S-1', role: 'implementer', capabilities: ['编码'] },
+        { id: 'S-P', role: 'planner', capabilities: ['规划'] },
+      ],
+    )
+    expect(fb).toContain('T-2 需求 [运维]')
+    expect(fb).toContain('S-1（implementer）：编码')
+    expect(fb).toContain('名册实际能力')
   })
 })

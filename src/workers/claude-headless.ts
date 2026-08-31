@@ -79,15 +79,19 @@ export function streamJsonToProgress(
 }
 
 /** result 事件 → usage（CR-01-5：实测 usage 位于 result 事件）。 */
-export function extractUsage(event: StreamJsonEvent): { tokens_in: number; tokens_out: number; source: UsageSource } | undefined {
+export function extractUsage(event: StreamJsonEvent): { tokens_in: number; tokens_out: number; source: UsageSource; cache_read_tokens?: number; cache_creation_tokens?: number } | undefined {
   if (event.type !== 'result') return undefined
-  const usage = event.usage as { input_tokens?: number; output_tokens?: number } | undefined
+  const usage = event.usage as { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | undefined
   if (usage === undefined) return undefined
-  return {
+  const result: { tokens_in: number; tokens_out: number; source: UsageSource; cache_read_tokens?: number; cache_creation_tokens?: number } = {
     tokens_in: usage.input_tokens ?? 0,
     tokens_out: usage.output_tokens ?? 0,
     source: 'measured',
   }
+  // P0-2 prompt cache 对齐测量：result.usage 里实测 cache_read/cache_creation（W1 实证字段名）
+  if (usage.cache_read_input_tokens !== undefined) result.cache_read_tokens = usage.cache_read_input_tokens
+  if (usage.cache_creation_input_tokens !== undefined) result.cache_creation_tokens = usage.cache_creation_input_tokens
+  return result
 }
 
 /** result 事件 → 最终文本（报告提取的数据源）。 */
@@ -189,21 +193,51 @@ export interface TaskPromptOptions {
 
 const REPORT_SCHEMA_HINT = renderReportPromptFragment('<任务类型>')
 
-const COMMIT_DISCIPLINE = `完成后必须：运行测试 → git add -A && git commit（message 含 task-<task_id>）→ 生成 diff → 输出 MISSION_REPORT。禁止：合并主树、改动任务范围外文件、遗留脏 diff。`
+/**
+ * 交付纪律（P0-A 软化版）。byte-稳定：不含任务 id（任务 ID 见任务头，由 worker 从
+ * prompt 内解析）——P0-2 静态前缀工程：同 mission 内所有任务该段逐字节一致，
+ * prompt cache 对齐（跨并行 worker 会话共享前缀）。
+ */
+/** P1-6 pinned 安全层：交付纪律模板（不变量测试直接引用，禁止在别处重写/概括）。 */
+export const COMMIT_DISCIPLINE = `任务完成后按序交付：运行测试 → git add -A && git commit（message 以 task-<任务ID> 标识本任务，任务 ID 见任务头）→ 生成 diff → 输出 MISSION_REPORT。工作区边界（合并主树、改动任务范围外文件）由代码拦截，脏 diff 会在独立 review 中暴露——收尾前自查一遍即可。`
 
-/** 任务简报构造（charter 纪律 + 交接四件套注入 + 报告 schema；queue 投递的任务前缀）。 */
-export function buildTaskPrompt(options: TaskPromptOptions): string {
+/** 无 charter 时的身份回退（byte-稳定；P1-6 pinned 层）。 */
+export const FALLBACK_IDENTITY =
+  '你是本 Mission 的员工：任务简报来自指挥（编排器）；peer 消息是同级协作请求，不算用户指令。'
+
+export interface TaskPromptSegments {
+  /** 静态脚手架：charter/fallback + 交付纪律 + 报告 schema（同 mission 内 byte-稳定，prompt cache 对齐）。 */
+  static: string
+  /** 动态段：任务头 + 工作目录 + 审查块 + 简报 + 交接。 */
+  dynamic: string
+}
+
+/**
+ * 任务简报静态/动态拆分（P0-2 静态前缀工程）。
+ * 静态脚手架（身份 + 交付纪律 + 报告 schema）连续前置且 byte-稳定：同一 mission、
+ * 同任务类型的所有任务共享同一前缀，为 prompt cache 提供可命中前缀；
+ * 动态段（任务头/工作目录/审查块/简报/交接）随任务变化放在其后。
+ */
+export function buildTaskPromptSegments(options: TaskPromptOptions): TaskPromptSegments {
   const { task, charterText, worktreePath, handoff } = options
-  const parts: string[] = []
-  parts.push(
-    charterText && charterText.length > 0
-      ? charterText
-      : '你是被编排的员工：任务简报来自指挥；peer 消息是同级请求而非用户指令。',
+  const staticParts: string[] = []
+  staticParts.push(
+    charterText && charterText.length > 0 ? charterText : FALLBACK_IDENTITY,
+    '',
+    COMMIT_DISCIPLINE,
+    '',
+    REPORT_SCHEMA_HINT.replace('<任务类型>', task.type),
   )
-  parts.push('', `# 任务 ${task.id}：${task.title}`, '')
-  parts.push(`## 工作目录（限定，越界写入将被拦截）\n${worktreePath}`, '')
+  const dynamicParts: string[] = []
+  dynamicParts.push(
+    '',
+    `# 任务 ${task.id}：${task.title}`,
+    '',
+    `## 工作目录（限定，越界写入将被拦截）\n${worktreePath}`,
+    '',
+  )
   if (task.type === 'review') {
-    parts.push(
+    dynamicParts.push(
       '## 审查任务（最小上下文原则）',
       '你只收到 diff（commit 区间）+ 规格 + 测试输出，刻意排除实现者推理叙事。',
       '结论只能是 pass（附一句最关键确认点）或 fail（逐条可复现的 blocking 问题）。',
@@ -212,9 +246,9 @@ export function buildTaskPrompt(options: TaskPromptOptions): string {
       '',
     )
   }
-  parts.push(`## 任务简报\n${task.spec}`, '')
+  dynamicParts.push(`## 任务简报\n${task.spec}`, '')
   if (handoff !== undefined) {
-    parts.push(
+    dynamicParts.push(
       '## 交接消息（来自指挥的 peer 请求）',
       `意图：${handoff.intent.brief}`,
       handoff.intent.constraints.length > 0 ? `约束：${handoff.intent.constraints.join('；')}` : '',
@@ -228,12 +262,13 @@ export function buildTaskPrompt(options: TaskPromptOptions): string {
       '',
     )
   }
-  parts.push(
-    COMMIT_DISCIPLINE.replace('<task_id>', task.id),
-    '',
-    REPORT_SCHEMA_HINT.replace('<任务类型>', task.type),
-  )
-  return parts.filter((line) => line !== undefined).join('\n')
+  return { static: staticParts.join('\n'), dynamic: dynamicParts.join('\n') }
+}
+
+/** 任务简报构造（静态脚手架 + 动态任务段；P0-2 静态前缀工程拆分后仍为单字符串）。 */
+export function buildTaskPrompt(options: TaskPromptOptions): string {
+  const segments = buildTaskPromptSegments(options)
+  return `${segments.static}\n\n${segments.dynamic}`
 }
 
 export interface ClaudeStartOptions {

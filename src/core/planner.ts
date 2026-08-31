@@ -104,17 +104,18 @@ export function buildPlannerSpec(opts: PlannerSpecOptions): string {
   }
   lines.push(
     '',
-    '## 分解规则（必须全部满足，代码会逐条校验，违例 = 提案被拒）',
+    '## 分解契约（产出会经代码裁决校验：符合下述形状即可通过，校验失败会自动重试）',
+    '目标：把用户目标拆成一份名册员工能在最小上下文内独立完成的 DAG。',
     '1. 每个任务：id（T-n 形式）/ title / spec（给员工的完整任务书）/ type / skill_tags / depends_on；',
     '2. type ∈ implement|review|test|doc|research（不允许 plan——规划不嵌套）；',
-    '3. 每个 implement 任务必须配至少一个 review 任务，其 depends_on 指向该实现任务（独立审查不可省）；',
-    '4. 每个任务的 skill_tags 必须被名册中至少一名员工的能力集合覆盖（能力覆盖体检）；',
-    '5. 依赖必须无环、只引用提案内的任务 id；任务数 ≤ ' + MAX_PLAN_TASKS + '；',
-    '6. 任务切分 = 窗口管理：每个任务上下文控制在「几个文件」量级，仓库级任务必须拆分；',
-    '7. 你不写实现、不读实现者工作区；规划完成你的任务即结束。',
+    '3. 每个 implement 任务配至少一个 review 任务，其 depends_on 指向该实现任务（独立审查不可省）；',
+    '4. 每个任务的 skill_tags 被名册中至少一名员工的能力集合覆盖（能力覆盖体检）；',
+    '5. 依赖无环、只引用提案内的任务 id；任务数 ≤ ' + MAX_PLAN_TASKS + '；',
+    '6. 任务切分 = 窗口管理：把每个任务上下文控制在「几个文件」量级——宁可多拆一层，也别让任务读全库；',
+    '7. 你的产出是规划本身：不写实现、不读实现者工作区；规划完成即结束。',
     '',
     '## 输出契约',
-    '在 MISSION_REPORT 的 plan 字段输出结构化 DAG（数组），并在 assumptions 里写明不确定的技术假设（禁止编造）：',
+    '在 MISSION_REPORT 的 plan 字段输出结构化 DAG（数组）。不确定的技术点如实写进 assumptions（如「未验证，待实现阶段确认」），不冒充事实：',
     '```json',
     '"plan": [',
     '  { "id": "T-1", "title": "实现 X", "spec": "…完整任务书…", "type": "implement", "skill_tags": ["编码"], "depends_on": [] },',
@@ -210,4 +211,58 @@ export function validatePlanProposal(
     assumptions: proposal.assumptions,
     goalRestatement: proposal.goal_restatement,
   }
+}
+
+/**
+ * 规划提案拒绝错误分类（P1 Worker feedback 轻量环）：区分
+ *   - 语义类（capability gap——执行侧可补约束，重试必须带反馈）；
+ *   - 结构类（id/环/依赖/规模——纯形状问题，直接重试即可，无需反馈）。
+ * 注：spec 含糊目前无代码级判定（spec 只要求非空），语义类暂只含能力缺口。
+ */
+export interface PlanErrorClass {
+  structural: string[]
+  semantic: string[]
+  /** 能力缺口明细（执行侧反馈的数据源）：taskId → 需求的技能标签。 */
+  capabilityGaps: Array<{ taskId: string; tags: string[] }>
+}
+
+export function classifyPlanErrors(errors: string[]): PlanErrorClass {
+  const structural: string[] = []
+  const semantic: string[] = []
+  const capabilityGaps: Array<{ taskId: string; tags: string[] }> = []
+  for (const e of errors) {
+    const m = /^capability gap: task (\S+) needs \[(.*?)\]/.exec(e)
+    if (m !== null) {
+      semantic.push(e)
+      capabilityGaps.push({
+        taskId: m[1]!,
+        tags: m[2]!.split(',').map((s) => s.trim()).filter((s) => s.length > 0),
+      })
+    } else {
+      structural.push(e)
+    }
+  }
+  return { structural, semantic, capabilityGaps }
+}
+
+/**
+ * 执行侧反馈文本（P1 轻量环）：把能力缺口 + 名册实际能力喂回 planner，
+ * 重试即带反馈（此前 silent_failure 按原 spec 无反馈重试，同样错误会反复发生）。
+ */
+export function buildCapabilityFeedback(
+  gaps: Array<{ taskId: string; tags: string[] }>,
+  slots: Array<Pick<AgentSlot, 'id' | 'role' | 'capabilities'>>,
+): string {
+  const gapLines = gaps.map(
+    (g) => `- ${g.taskId} 需求 [${g.tags.join('、')}]，名册无槽位覆盖——请调整 skill_tags 或拆分/合并任务`,
+  )
+  const roster = slots
+    .map((s) => `- ${s.id}（${s.role}）：${s.capabilities.join('、') || '（未声明）'}`)
+    .join('\n')
+  return [
+    '上次提案被裁决拒绝（执行侧约束）：',
+    ...gapLines,
+    '名册实际能力（skill_tags 只能取自这些）：',
+    roster,
+  ].join('\n')
 }

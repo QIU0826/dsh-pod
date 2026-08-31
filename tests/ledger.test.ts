@@ -125,6 +125,18 @@ describe('汇总（Debrief 页数据源）', () => {
     expect(summary.entries).toHaveLength(2)
   })
 
+  it('recordUsage 记录 prompt cache 命中/写入 token（P0-2）', () => {
+    const entry = ledger.recordUsage('M-1', 'S-1', 'T-1', 'claude-sonnet', 1000, 100, 'measured', 40_000, 5_000)
+    expect(entry.cache_read_tokens).toBe(40_000)
+    expect(entry.cache_creation_tokens).toBe(5_000)
+    const summary = ledger.summary('M-1')
+    expect(summary.total_cache_read_tokens).toBe(40_000)
+    expect(summary.total_cache_creation_tokens).toBe(5_000)
+    // 无缓存列的历史条目不受影响（undefined 不参与求和）
+    ledger.recordUsage('M-1', 'S-1', 'T-2', 'claude-sonnet', 10, 10, 'measured')
+    expect(ledger.summary('M-1').total_cache_read_tokens).toBe(40_000)
+  })
+
   it('默认价目表自带版本号（DoD-7：估算必须标注价目表版本）', () => {
     expect(DEFAULT_PRICE_TABLE.version).toMatch(/pod-default-\d{4}-\d{2}-\d{2}/)
     expect(DEFAULT_PRICE_TABLE.rates['claude-sonnet']).toBeDefined()
