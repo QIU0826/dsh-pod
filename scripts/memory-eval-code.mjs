@@ -125,7 +125,7 @@ async function main() {
     const baseRes = await runWrite('baseline-' + pair.baseline.fn, baseSpec, false)
     results.push({ memory: memRes, baseline: baseRes })
     console.log('[memory-eval-code] pair done:', JSON.stringify({ memory: { done: memRes.done, wall: memRes.wall_clock_s, tokens: memRes.tokens_in + memRes.tokens_out }, baseline: { done: baseRes.done, wall: baseRes.wall_clock_s, tokens: baseRes.tokens_in + baseRes.tokens_out } }))
-  if (!memRes.done || !baseRes.done) console.log('[memory-eval-code][debug] mem:', JSON.stringify(memRaw).slice(0, 600), '\n[debug] base:', JSON.stringify(baseRaw).slice(0, 600))
+  if (!memRes.done || !baseRes.done) console.log('[memory-eval-code][debug] mem:', JSON.stringify(memRes).slice(0, 600), '\n[debug] base:', JSON.stringify(baseRes).slice(0, 600))
     // 增量持久化：每对完成即写盘（超时/中断不丢已完成对）
     writeFileSync(join(reportsDir, 'partial-' + start + '-' + end + '.json'), JSON.stringify({ run_at: new Date().toISOString(), completed: results.length, results }, null, 2), 'utf8')
   }
