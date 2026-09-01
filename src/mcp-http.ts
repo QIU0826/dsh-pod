@@ -26,6 +26,11 @@ export interface McpHttpOptions {
   token?: string
   make?: (service: PodService) => McpServer
   dataDir?: string
+  /**
+   * 工具清单模式（ADOL P2-1）：'short' 时 tools/list 只回一句话清单，完整 schema 走
+   * pod_expand_tool 按需展开。缺省读 env POD_MCP_TOOL_LISTING（=short 生效），再缺省 full。
+   */
+  toolListing?: 'full' | 'short'
 }
 
 const MAX_MCP_BODY_BYTES = 1024 * 1024
@@ -146,7 +151,8 @@ export function createMcpHttpServer(service: PodService, opts: McpHttpOptions = 
         return
       }
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID() })
-      const server = (opts.make ?? makeMcpServer)(service)
+      const listing = opts.toolListing ?? (process.env.POD_MCP_TOOL_LISTING === 'short' ? 'short' : 'full')
+      const server = (opts.make ?? ((svc: PodService) => makeMcpServer(svc, { toolListing: listing })))(service)
       await server.connect(transport)
       // initialize 请求本身必须交给该 transport 处理：session id 在此刻才生成并随响应头下发。
       try {

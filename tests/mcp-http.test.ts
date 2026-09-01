@@ -137,4 +137,22 @@ describe('mcp-http P1 加固（content-type + fail-closed）', () => {
   it('listenMcpHttp：非 loopback 无 token → 拒绝启动（库层 fail-closed）', async () => {
     await expect(listenMcpHttp(fakeService(), { host: '0.0.0.0', port: 0 })).rejects.toThrow(/without token/)
   })
+
+  it('toolListing=short：tools/list 入参置空，pod_expand_tool 展开完整 schema（ADOL P2-1 HTTP 面）', async () => {
+    const service = fakeService()
+    const started = await listenMcpHttp(service, { toolListing: 'short' })
+    try {
+      const client = await connectClient(started.url)
+      const tools = await client.listTools()
+      const launch = tools.tools.find((t) => t.name === 'pod_launch')
+      const schema = launch!.inputSchema as { properties?: Record<string, unknown> }
+      expect(schema.properties ?? {}).toEqual({})
+      const res = await client.callTool({ name: 'pod_expand_tool', arguments: { name: 'pod_launch' } })
+      const parsed = JSON.parse(textOf(res)) as { params?: { properties?: Record<string, unknown> } }
+      expect(Object.keys(parsed.params?.properties ?? {})).toEqual(expect.arrayContaining(['name', 'goal', 'cwd', 'slots']))
+      await client.close()
+    } finally {
+      await started.close()
+    }
+  })
 })
