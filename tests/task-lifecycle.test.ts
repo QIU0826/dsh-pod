@@ -239,17 +239,24 @@ describe('TaskMachine 生命周期迁移（非法迁移 fail-closed）', () => {
     expect(() => machine.resume('T-1')).toThrow()
   })
 
-  it('rejectBySlot 回 ready 换人；rejectTerminal 仅协商态可达', () => {
+  it('rejectBySlot 回 ready 换人；rejectTerminal 允许 ready（E2E 实证 2026-09-01：换人后无下家的终局拒绝）', () => {
     seed()
     const machine = new TaskMachine(fixture.store, { missionId: 'M-1' })
     machine.offer('T-1', 'S-1', {})
     machine.rejectBySlot('T-1', '凭据失效')
     expect(fixture.store.getTask('M-1', 'T-1')?.status).toBe('ready')
-    expect(() => machine.rejectTerminal('T-1', 'x')).toThrow()
-    machine.offer('T-1', 'S-1', {})
+    // 修复语义：rejectBySlot 回退到 ready 后，换尽槽位仍无下家 → 终局拒绝合法
     machine.rejectTerminal('T-1', '全员谢绝')
     expect(fixture.store.getTask('M-1', 'T-1')?.status).toBe('rejected')
     expect(fixture.store.listEvents('M-1').some((e) => e.kind === 'task_rejected')).toBe(true)
+  })
+
+  it('rejectTerminal 对非法前置态（running）仍抛错（守卫不放宽到任意状态）', () => {
+    seed()
+    const machine = new TaskMachine(fixture.store, { missionId: 'M-1' })
+    const t = fixture.store.getTask('M-1', 'T-1')!
+    fixture.store.updateTask('M-1', t.id, { status: 'running' })
+    expect(() => machine.rejectTerminal('T-1', 'x')).toThrow(/only a negotiating/)
   })
 })
 

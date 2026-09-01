@@ -219,11 +219,16 @@ export class TaskMachine {
     this.emit(this.getTask(taskId), 'task_negotiation', { phase: 'rejected', by_slot: bySlot, reason })
   }
 
-  /** 终局拒绝（Negotiating → rejected）：全部可派槽位都谢绝（能力/凭据缺口），转人工或重规划。 */
+  /**
+   * 终局拒绝（Negotiating|ready → rejected）：全部可派槽位都谢绝（能力/凭据缺口），
+   * 转人工或重规划。允许 ready：协商换人路径 rejectBySlot 会把任务回退到 ready 再
+   * 重路由，若下一轮再无下家（excluded 已满）即在此终局拒绝——此时任务状态是 ready
+   * 而非 negotiating（E2E 实证 2026-09-01：v4 双 harness crash ready->rejected）。
+   */
   rejectTerminal(taskId: string, reason: string): void {
     const task = this.getTask(taskId)
-    if (task.status !== 'negotiating') {
-      throw new InvalidTransitionError(task.status, 'rejected', 'only a negotiating task can be terminally rejected')
+    if (task.status !== 'negotiating' && task.status !== 'ready') {
+      throw new InvalidTransitionError(task.status, 'rejected', 'only a negotiating (or rejected-back-to-ready) task can be terminally rejected')
     }
     this.store.updateTask(this.missionId, taskId, { status: 'rejected', last_error: reason })
     this.releaseSlot(task)
