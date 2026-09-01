@@ -30,6 +30,7 @@ import type {
 } from './types.js'
 import { faultFromEnvelopeCode } from './error-envelope.js'
 import type { WorkerErrorEnvelope } from './error-envelope.js'
+import { failureSignature, EARLY_EXIT_DEFAULT_THRESHOLD } from './failure-evidence.js'
 import { RATE_LIMIT_BACKOFF_BASE_MS, RATE_LIMIT_BACKOFF_MAX_MS } from './types.js'
 
 export interface FaultInfo {
@@ -57,6 +58,12 @@ export interface TaskMachineOptions {
   verify?: TaskVerifyFn
   /** 任务主键命名空间（store 复合键：mission::id；生产必传，测试单 mission 可缺省）。 */
   missionId?: string
+  /**
+   * 信息增量式止损灰度门（early exit，默认关）：
+   * 连续 threshold 次「与上次完全同证据」的硬失败（同故障+同错误签名，无新信息）→
+   * 不等 attempts 烧满直接转人工（experiments 'early-exit'）。
+   */
+  earlyExit?: { isEnabled(): boolean; threshold?: number }
 }
 
 interface FaultSignals {
@@ -133,6 +140,8 @@ export class TaskMachine {
   private readonly rng: () => number
   private readonly verify: TaskVerifyFn
   private readonly missionId: string
+  private readonly earlyExitEnabled: () => boolean
+  private readonly earlyExitThreshold: number
 
   constructor(store: PodStore, options: TaskMachineOptions = {}) {
     this.store = store
@@ -140,6 +149,9 @@ export class TaskMachine {
     this.clock = options.clock ?? (() => Date.now())
     this.rng = options.rng ?? Math.random
     this.verify = options.verify ?? defaultVerify
+    // 灰度缺省关：不注入 earlyExit 或 isEnabled()=false 时行为与旧版完全一致
+    this.earlyExitEnabled = () => options.earlyExit?.isEnabled() ?? false
+    this.earlyExitThreshold = Math.max(options.earlyExit?.threshold ?? EARLY_EXIT_DEFAULT_THRESHOLD, 2)
   }
 
   private getTask(taskId: string): Task {
@@ -384,7 +396,7 @@ export class TaskMachine {
     this.emit(this.getTask(task.id), 'task_escalated', { reason, failures })
   }
 
-  /** 统一失败落点：attempts/soft 计数、退避、升级判定、slot 状态。 */
+  /** 统一失败落点：attempts/soft 计数、退避、升级判定、slot 状态、证据指纹（early exit）。 */
   private applyFailure(
     task: Task,
     kind: FaultKind,
@@ -395,15 +407,34 @@ export class TaskMachine {
     const attempts = options.soft ? task.attempts : task.attempts + 1
     const softAttempts = task.soft_attempts + 1
     const nextRetryAt = kind === 'rate_limited' ? now + rateLimitBackoff(softAttempts, this.rng) : now
-    const escalated = !options.soft && !options.auth && attempts >= 3
+
+    // 信息增量维度（调研 §1.3-4：watchdog 只按时间触发，没有「是否还在产生新信息」维度）。
+    // 软失败（429/need_clarify）与凭据失败不参与：消息模板化/语义不同，签名恒等会误触发；
+    // 它们也不清空硬失败的证据链（429 是瞬态，跨过它仍算连续同证据）。
+    const comparable = !options.soft && !options.auth
+    const signature = failureSignature(kind, message)
+    const noNewEvidence =
+      comparable && task.last_failure_signature === signature ? (task.no_new_evidence ?? 0) + 1 : 0
+
+    // early exit（experiments 'early-exit' 灰度，默认关=行为与旧版一致）：
+    // 连续 threshold 轮完全同证据（默认 2 → 第 2 轮与第 1 轮同签名即止损，不烧第 3 轮）。
+    // attempts>=3 兜底在前，故阈值的有效意义就是「省下最后一轮全价重试」。
+    const earlyExit =
+      comparable && noNewEvidence >= this.earlyExitThreshold - 1 && this.earlyExitEnabled() && attempts < 3
+    const escalated = (!options.soft && !options.auth && attempts >= 3) || earlyExit
+    const lastError = earlyExit
+      ? `early exit: ${noNewEvidence + 1} consecutive failures with identical evidence (no new information) — ${message}`
+      : message
+
     this.store.updateTask(task.id, {
       status: escalated ? 'escalated' : 'blocked',
       fault: kind,
-      last_error: message,
+      last_error: lastError,
       attempts,
       soft_attempts: softAttempts,
       next_retry_at: kind === 'auth_expired' ? undefined : nextRetryAt,
       escalated_at: escalated ? now : undefined,
+      ...(comparable ? { last_failure_signature: signature, no_new_evidence: noNewEvidence } : {}),
     })
     if (options.auth && task.owner_slot_id !== undefined) {
       this.store.updateSlot(task.owner_slot_id, { status: 'error' })
@@ -415,7 +446,9 @@ export class TaskMachine {
     this.emit(this.getTask(task.id), escalated ? 'task_escalated' : 'task_blocked', {
       fault: kind,
       attempts,
-      message,
+      message: lastError,
+      no_new_evidence: comparable ? noNewEvidence : 0,
+      early_exit: earlyExit,
     })
   }
 

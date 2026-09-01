@@ -269,7 +269,14 @@ export class MissionOrchestrator {
     this.approvals = new ApprovalEngine(this.store, { clock: this.clock })
     this.ledger = new Ledger(this.store, { clock: this.clock })
     this.missionMachine = new MissionMachine(this.store, this.approvals, missionId, { clock: this.clock })
-    this.taskMachine = new TaskMachine(this.store, { clock: this.clock, verify: deps.verify, missionId })
+    this.taskMachine = new TaskMachine(this.store, {
+      clock: this.clock,
+      verify: deps.verify,
+      missionId,
+      // 信息增量式止损（early exit）灰度门：experiments 'early-exit'，默认关（fail-closed）。
+      // 连续两轮完全同证据的硬失败 → 不烧最后一轮全价重试，直接转人工。
+      earlyExit: { isEnabled: () => this.experiments.isEnabled('early-exit') },
+    })
     this.watchdog = new Watchdog({ clock: this.clock })
   }
 

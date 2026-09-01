@@ -158,6 +158,9 @@ export interface Task {
   soft_attempts: number
   fault?: FaultKind
   last_error?: string
+  /** 信息增量式止损：上次失败的证据签名（failure-evidence.ts）与连续同证据次数。 */
+  last_failure_signature?: string
+  no_new_evidence?: number
   /** 429 指数退避后的最早重试时刻（epoch ms）。 */
   next_retry_at?: number
   commit_sha?: string
