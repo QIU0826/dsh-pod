@@ -121,3 +121,46 @@ describe('Q 版娘化形象', () => {
     expect(svg).not.toContain('dsh-av-chibi')
   })
 })
+
+describe('Q 版娘化小尺寸降级（审计 P2：<28px 只渲染头部可读层）', () => {
+  const CHIBI_IDS = ['claude', 'gpt', 'codex', 'opencode', 'ark', 'dsh'] as const
+
+  it('小尺寸（<28px）只保留头发+脸+五官，丢弃身体/四肢/腿/道具/星', () => {
+    for (const id of CHIBI_IDS) {
+      const svg = renderToStaticMarkup(Avatar(id, 'idle', 20, false))
+      // 头部可读层在
+      for (const part of ['chi-head', 'chi-hair', 'chi-face']) {
+        expect(svg, `${id} 保留 ${part}`).toContain(part)
+      }
+      // 整身噪音层被丢弃
+      for (const part of ['chi-body', 'chi-arm-l', 'chi-arm-r', 'chi-leg-l', 'chi-leg-r', 'chi-prop', 'chi-star']) {
+        expect(svg, `${id} 丢弃 ${part}`).not.toContain(part)
+      }
+    }
+  })
+
+  it('小尺寸下 dsh 的尾巴也被丢弃（同属噪音层）', () => {
+    const svg = renderToStaticMarkup(Avatar('dsh', 'idle', 18, false))
+    expect(svg).not.toContain('chi-tail')
+  })
+
+  it('大尺寸（≥28px）仍渲染整身', () => {
+    for (const id of CHIBI_IDS) {
+      const svg = renderToStaticMarkup(Avatar(id, 'idle', 32, false))
+      for (const part of ['chi-body', 'chi-arm-l', 'chi-leg-l']) {
+        expect(svg, `${id} 整身含 ${part}`).toContain(part)
+      }
+    }
+  })
+
+  it('阈值边界：28px 整身，27px 降级为头部', () => {
+    expect(renderToStaticMarkup(Avatar('claude', 'idle', 28, false))).toContain('chi-body')
+    expect(renderToStaticMarkup(Avatar('claude', 'idle', 27, false))).not.toContain('chi-body')
+  })
+
+  it('经典动物小尺寸不受影响（不参与降级）', () => {
+    const svg = renderToStaticMarkup(Avatar('cat', 'idle', 18, false))
+    expect(svg).toContain('<polygon') // 经典动物是几何拼接，仍完整渲染
+    expect(svg).not.toContain('dsh-av-chibi')
+  })
+})

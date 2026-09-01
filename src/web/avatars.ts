@@ -224,6 +224,26 @@ export function isChibi(id: string | undefined | null): boolean {
   return id in CHIBI_ART
 }
 
+/** Q 版娘化小尺寸降级阈值：<28px 时只渲染头部可读层，丢弃身体/四肢/道具/星。 */
+export const CHIBI_HEAD_ONLY_THRESHOLD = 28
+
+/**
+ * 从 Q 版娘化 SVG 抽取「头部可读层」（chi-hair / chi-head / chi-hair-f / chi-face），
+ * 按原始层序拼接。小尺寸下整身 14 层会堆成视觉噪音——尾巴/腿/身体/手臂/道具/星在
+ * 18~26px 下只剩散点，反而淹没了「头发颜色 = 角色识别色」这个最可读的特征。
+ *
+ * 注意：`class="chi-hair"` 与 `class="chi-hair-f"` 是不同 class，regex 精确匹配引号
+ * 边界，不会互相误命中；chi-face 是 `<g>` 容器（非自闭合），单独用跨行 regex 抽取。
+ */
+function chibiHeadArt(art: string): string {
+  const pick = (cls: string): string =>
+    art.match(new RegExp(`<[^>]+class="${cls}"[^>]*\\/?>`, 'g'))?.join('\n') ?? ''
+  const face = art.match(/<g class="chi-face">[\s\S]*?<\/g>/)?.[0] ?? ''
+  return [pick('chi-hair'), pick('chi-head'), pick('chi-hair-f'), face]
+    .filter((s) => s.length > 0)
+    .join('\n')
+}
+
 /** 可选形象（点选词表）。 */
 export const AVATAR_OPTIONS: Array<{ id: string; label: string }> = [
   // 经典动物
@@ -278,10 +298,13 @@ export function avatarAccent(status: string | undefined): string {
 
 /** Agent 虚拟形象（随 slot 状态做动作 + 状态色）。 */
 export function Avatar(animal: string | undefined | null, status: string | undefined, size = 28, frame = true): ReactElement {
-  const art = ART[animal ?? ''] ?? ART.cat
+  const chibi = isChibi(animal)
+  const fullArt = ART[animal ?? ''] ?? ART.cat
+  // 小尺寸降级：Q 版娘化只渲染头部可读层（审计 P2：18~26px 下整身 14 层是噪音）。
+  // fullArt 在 chibi 分支必已定义（chibi id 全部落在 ART），守卫仅为类型收窄。
+  const art = chibi && size < CHIBI_HEAD_ONLY_THRESHOLD && fullArt !== undefined ? chibiHeadArt(fullArt) : fullArt
   const accent = avatarAccent(status)
   const active = status !== 'idle' && status !== undefined && status !== null && status !== 'done'
-  const chibi = isChibi(animal)
   const classes = ['dsh-av']
   if (chibi) classes.push('dsh-av-chibi')
   classes.push(avatarMotion(status))
