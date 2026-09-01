@@ -169,6 +169,19 @@ describe('CodexHeadlessBackend（FakeSpawner 集成）', () => {
     expect((await backend.detect()).authed).toBe(false)
   })
 
+  it('detect：login 状态在 stderr（非 TTY 实证）→ 合并两路仍判已登录（回归：双 harness E2E 2026-09-01）', async () => {
+    const backend = new CodexHeadlessBackend({
+      detectRunner: {
+        run: async (_cmd, args) => {
+          if (args[0] === '--version') return { code: 0, stdout: 'codex-cli 0.148.0-alpha.9', stderr: '' }
+          return { code: 0, stdout: '', stderr: 'Logged in using an API key - sk-****' }
+        },
+      },
+    })
+    const detected = await backend.detect()
+    expect(detected.authed).toBe(true) // 旧实现只测 stdout → 误判未登录
+  })
+
   it('start 新线程（transient 档）：参数含 --json/-s read-only/-C worktree；流回放产出进度+usage+thread', async () => {
     const captured: string[][] = []
     const events = [

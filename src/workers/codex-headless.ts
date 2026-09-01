@@ -158,7 +158,11 @@ export class CodexHeadlessBackend implements WorkerBackend {
       return { installed: false, authed: false, models: [], session_tiers: ['transient'], error: 'codex not installed' }
     }
     const auth = await this.detectRunner.run(this.binary, ['login', 'status'])
-    const authed = /logged in/i.test(auth.stdout) && !/not logged in/i.test(auth.stdout)
+    // 非 TTY 环境下 codex CLI 把 login 状态写到 stderr（实测 2026-09-01：execFile 直跑
+    // stdout 为空、stderr 为 "Logged in using an API key"）——必须合并两路检测，
+    // 否则永远判「codex not logged in」→ 协商必拒（真 bug，双 harness E2E 实证）。
+    const combined = `${auth.stdout ?? ''}\n${auth.stderr ?? ''}`
+    const authed = /logged in/i.test(combined) && !/not logged in/i.test(combined)
     return {
       installed: true,
       authed,
