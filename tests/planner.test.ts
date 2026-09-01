@@ -7,7 +7,9 @@ import {
   MAX_PLAN_TASKS,
   PlanProposalSchema,
   REPLAN_LIMIT,
+  bestConsultSlot,
   buildCapabilityFeedback,
+  buildConsultPrompt,
   buildPlannerSpec,
   classifyPlanErrors,
   extractPlanProposal,
@@ -183,5 +185,36 @@ describe('classifyPlanErrors（P1 feedback 环：语义 vs 结构分类）', () 
     expect(fb).toContain('T-2 需求 [运维]')
     expect(fb).toContain('S-1（implementer）：编码')
     expect(fb).toContain('名册实际能力')
+  })
+})
+
+describe('feedback 环 v2（consult 咨询）', () => {
+  it('bestConsultSlot：交集最大者优先；交集为 0 也返回 id 最小的槽位（边界交 LLM 判断）', () => {
+    const gaps = [{ taskId: 'T-2', tags: ['运维'] }]
+    const slots = [
+      { id: 'S-2', role: 'reviewer', capabilities: ['审查'] },
+      { id: 'S-1', role: 'implementer', capabilities: ['编码', '运维'] },
+      { id: 'S-P', role: 'planner', capabilities: ['规划'] },
+    ]
+    expect(bestConsultSlot(gaps, slots)!.id).toBe('S-1') // 交集 1 最大
+    // 全部交集 0：返回 id 升序最小（边界交 LLM 判断）
+    expect(bestConsultSlot(gaps, [{ id: 'S-1', role: 'implementer', capabilities: ['编码'] }, { id: 'S-P', role: 'planner', capabilities: ['规划'] }])!.id).toBe('S-1')
+    // 无槽位 / 空 gaps → undefined（回落 v1）
+    expect(bestConsultSlot(gaps, [])).toBeUndefined()
+    expect(bestConsultSlot([], slots)).toBeUndefined()
+  })
+
+  it('buildConsultPrompt：含缺口标签、目标槽位能力与截断的任务规格', () => {
+    const prompt = buildConsultPrompt(
+      [{ taskId: 'T-2', tags: ['运维'] }],
+      { title: '实现部署脚本', spec: 'x'.repeat(3000) },
+      { id: 'S-1', role: 'implementer', capabilities: ['编码'] },
+    )
+    expect(prompt).toContain('T-2 需求 [运维]')
+    expect(prompt).toContain('S-1')
+    expect(prompt).toContain('编码')
+    expect(prompt).toContain('执行侧约束建议')
+    expect(prompt).toContain('x'.repeat(1500)) // spec 截断到 MAX_CONSULT_SPEC_CHARS
+    expect(prompt).not.toContain('x'.repeat(1600))
   })
 })

@@ -246,6 +246,8 @@ vendor 验签失败/时间窗过期/缺凭据一律 401 fail-closed；非 loopba
 | 审批模式 2/3 经 experiments 灰度接入（Berd-E） | ✅ | `launch approvalMode` 校验：模式 2（交接确认，跨 agent 派活前弹卡）/ 模式 3（全自动，质量门通过即 done）需对应 `approval-mode-2`/`approval-mode-3` 开关开启；默认模式 1 行为不变；dispatch 卡经 `pod_approve` 分支裁决 |
 | 记忆子系统 2.8.1（CR-07 / NOOA 借鉴） | ✅ | `src/core/memory.ts`：MemoryStore（`~/.dsh/pod/memory.json` 原子写）+ 类型化图谱（supports/contradicts/derived-from）+ 三工具 `pod_mem_write/query/correct` + 后台 reflection（合并/补边/剪枝，接入 maintenanceTick） |
 | 记忆运行时注入 top-k（P1-4 深化①，2026-09-01） | ✅ | 派发注入从「importance≥3 硬门 + 标签」升级为 `src/core/memory-rank.ts` 的 **BM25 关键词相关性**（ASCII 词 + CJK bigram 分词，候选池内 IDF，tag 命中与 importance 作加权；门槛=查询词重叠 / tag 命中 / importance≥4）。任务文本（title+spec+skill_tags）做查询——低重要度强相关的记忆越过旧硬门入选且排前 |
+| feedback 环 v2（Berd-E 灰度 `feedback-consult`） | ✅ | 语义类拒绝（能力缺口）时**真咨询最匹配槽位的 worker** 执行侧约束（`claude --print` 一次性调用，`bestConsultSlot` + `buildConsultPrompt` 纯函数；结果裁 500 字符写回 spec），咨询失败/无槽位/未注入回落 v1 名册反馈（事件 `feedback_mode: consult|roster`）。实测 32.3s 返回高质量建议。**开启**：`~/.dsh/pod/experiments.json` 加 `"feedback-consult": true` |
+| P2-4 压缩实验结论（2026-09-01） | ⛔ | 叙事性技术文本平均压缩率仅 **9%**（保持分 9.0 但远低于 40% 门槛）——已近信息密度上限，**不做接入**（`scripts/compress-eval.mjs` 可复现，负向结论完整留存） |
 | 记忆收益验收（方案书 258 行） | ✅ | `scripts/memory-eval.mjs`：同一任务集（项目特定经验）记忆组 vs 基线组 + LLM 自评三维。真实 Ark 运行：三维均值记忆 4.667 vs 基线 4.000（**+0.667**，准确性 +1.00）；负向记录：知识型问题平局（记忆价值在经验复用非百科）。Debrief 见 reports/memory-eval/ |
 | Ledger→路由权重（历史成功率，2.7 节） | ✅ | `dispatcher.routeTask` 增 `slotSuccess` 因子：能力 > 负载 > 单任务成本 > 历史成功率（降序），无数据视为中性 0.5 不劣化；orchestrator 按槽位统计 done/(done+blocked+escalated) 注入 |
 | 并行执行强化（双路+，4.3） | ✅ | `LaunchInput.parallel`（默认 2，clamp 1-8，pod_launch 可传）+ `run()` 用 `dispatchBatch` 每轮填满 maxParallel 而非单路派 1 即等；依赖链仍串行不破坏拓扑；FakeBackend 增 delayMs/并发峰值验证 peakActive |

@@ -9,7 +9,7 @@
 
 import { homedir } from 'node:os'
 import { join, sep } from 'node:path'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { ApprovalEngine } from './core/approvals.js'
 import { ApplyPatch, execGitRunner, type ApplyResult } from './core/apply-patch.js'
@@ -602,6 +602,9 @@ export class PodService {
       experiments: this.experiments,
       // N2 记忆运行时注入：派发时按槽位/团队拉相关记录（有界、指针式），worker 无需 pod_mem_* 工具
       memoryQuery: (q) => this.memory.query(q as Parameters<MemoryStore['query']>[0]),
+      // P1 feedback 环 v2（experiments 'feedback-consult' 灰度）：语义类拒绝时真咨询
+      // 最匹配槽位的 claude worker 执行侧约束。有界（10s 超时），失败回落 v1 名册反馈。
+      consult: (prompt) => this.consultClaude(prompt),
       diffProvider: async (task) => {
         const parts: string[] = []
         for (const targetId of task.depends_on) {
@@ -628,6 +631,44 @@ export class PodService {
         const mission = this.store.getMission(missionId)
         this.writePlanFile(missionId, goalTitle(mission?.goal ?? ''), plan, sourceTaskId)
       },
+    })
+  }
+
+  /**
+   * feedback v2 的 claude 咨询实现（组装层，core 不直接 spawn）：
+   * 一次性 headless 调用（--print，max-turns 4 + 禁工具——咨询是纯语言回答，工具调用
+   * 会烧 turns 导致 "Reached max turns" 退出，实测 2026-09-01），60s 超时（实测 ~32s，
+   * 留余量）；失败返回 ok:false（编排器回落 v1）。
+   * 凭据/模型走 claude CLI 自身登录态（与 worker 同一信任面），不注入 env。
+   */
+  private async consultClaude(prompt: string): Promise<{ ok: boolean; text: string }> {
+    return new Promise((resolve) => {
+      const child = spawn('claude', ['--print', '--max-turns', '4', '--allowedTools', 'none'], {
+        cwd: this.dataDir,
+        shell: process.platform === 'win32',
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      })
+      let stdout = ''
+      let stderr = ''
+      const timer = setTimeout(() => {
+        try { child.kill('SIGTERM') } catch { /* 已退出 */ }
+        resolve({ ok: false, text: '' })
+      }, 60_000)
+      child.stdout.on('data', (c: Buffer) => { stdout += c.toString('utf8') })
+      child.stderr.on('data', (c: Buffer) => { stderr += c.toString('utf8') })
+      child.on('error', () => { clearTimeout(timer); resolve({ ok: false, text: '' }) })
+      child.on('close', (code) => {
+        clearTimeout(timer)
+        if (code !== 0) {
+          console.error('[dsh-pod] consult failed (exit ' + code + '): ' + stderr.trim().slice(0, 200))
+          resolve({ ok: false, text: '' })
+          return
+        }
+        resolve({ ok: true, text: stdout.trim() })
+      })
+      child.stdin.write(prompt)
+      child.stdin.end()
     })
   }
 

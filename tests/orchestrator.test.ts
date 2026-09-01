@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -205,7 +205,11 @@ function makeOrchestrator(
   fixture: Fixture,
   script: Record<string, { progress?: WorkerProgressEvent[]; completion?: WorkerCompletion; next?: WorkerCompletion; hang?: boolean; delayMs?: number }>,
   missionId = 'M-1',
-  deps: { memoryQuery?: (q: { owner_slot_id?: string; importance_min?: number; limit?: number }) => Array<{ id: string; type: string; importance: number; tags: string[]; content_ref: string }> } = {},
+  deps: {
+    memoryQuery?: (q: { owner_slot_id?: string; importance_min?: number; limit?: number }) => Array<{ id: string; type: string; importance: number; tags: string[]; content_ref: string }>
+    consult?: (prompt: string) => Promise<{ ok: boolean; text: string }>
+    experiments?: { isEnabled: (key: string) => boolean }
+  } = {},
 ) {
   const backends: Record<string, FakeBackend> = {
     claude: new FakeBackend('claude', script),
@@ -226,6 +230,8 @@ function makeOrchestrator(
       mismatch: false,
     }),
     ...(deps.memoryQuery !== undefined ? { memoryQuery: deps.memoryQuery } : {}),
+    ...(deps.consult !== undefined ? { consult: deps.consult } : {}),
+    ...(deps.experiments !== undefined ? { experiments: deps.experiments } : {}),
   })
 }
 
@@ -1295,6 +1301,67 @@ describe('P1 规划层（goal → DAG 智能分解，AgentScope DAGPlanExecutor 
     const ev = fixture.store.listEvents('M-1').find((e) => e.kind === 'plan_rejected')!
     expect((ev.payload.semantic as string[]).some((s) => s.includes('capability gap'))).toBe(true)
     expect(ev.payload.feedback_applied).toBe(true)
+  })
+
+  it('feedback v2（灰度 feedback-consult）：语义拒绝 → 真咨询最匹配槽位 worker，咨询结果写回 spec', async () => {
+    const gapPlan = [
+      { id: 'T-1', title: '实现', spec: 's', type: 'implement' as const, skill_tags: ['运维'], depends_on: [] },
+    ]
+    const consult = vi.fn(async (prompt: string) => {
+      // 断言 prompt 带缺口标签与目标槽位能力（交集为 0 也咨询最接近的槽位，id 升序 → S-1）
+      expect(prompt).toContain('运维')
+      expect(prompt).toContain('S-1')
+      expect(prompt).toContain('编码')
+      expect(prompt).toContain('任务规格')
+      return { ok: true, text: '可用脚本绕过：运维类需求可用 claude 自带工具链完成，无需新增槽位' }
+    })
+    const orch = makeOrchestrator(fixture, { 'P-1': { completion: planDone('P-1', gapPlan) } }, 'M-1', {
+      consult,
+      experiments: { isEnabled: (key) => key === 'feedback-consult' },
+    })
+    orch.launch(launchInput({ cwd: fixture.repo, slots: plannerRoster }))
+    orch.createPlannerTask('目标')
+    await orch.run()
+    expect(consult).toHaveBeenCalledTimes(1)
+    const p1 = fixture.store.getTask('P-1')!
+    expect(p1.spec).toContain('上次提案被拒的反馈（LLM 咨询·执行侧约束）')
+    expect(p1.spec).toContain('可用脚本绕过')
+    const ev = fixture.store.listEvents('M-1').find((e) => e.kind === 'plan_rejected')!
+    expect(ev.payload.feedback_mode).toBe('consult')
+  })
+
+  it('feedback v2：咨询失败（ok=false）→ 回落 v1 名册反馈（feedback_mode=roster）', async () => {
+    const gapPlan = [
+      { id: 'T-1', title: '实现', spec: 's', type: 'implement' as const, skill_tags: ['运维'], depends_on: [] },
+    ]
+    const consult = vi.fn(async () => ({ ok: false, text: '' }))
+    const orch = makeOrchestrator(fixture, { 'P-1': { completion: planDone('P-1', gapPlan) } }, 'M-1', {
+      consult,
+      experiments: { isEnabled: (key) => key === 'feedback-consult' },
+    })
+    orch.launch(launchInput({ cwd: fixture.repo, slots: plannerRoster }))
+    orch.createPlannerTask('目标')
+    await orch.run()
+    expect(consult).toHaveBeenCalledTimes(1)
+    const p1 = fixture.store.getTask('P-1')!
+    expect(p1.spec).toContain('上次提案被拒的反馈（执行侧约束）') // v1 标题
+    expect(p1.spec).toContain('名册实际能力')
+    const ev = fixture.store.listEvents('M-1').find((e) => e.kind === 'plan_rejected')!
+    expect(ev.payload.feedback_mode).toBe('roster')
+  })
+
+  it('feedback v2：灰度关（默认）→ 不走咨询，行为与 v1 一致', async () => {
+    const gapPlan = [
+      { id: 'T-1', title: '实现', spec: 's', type: 'implement' as const, skill_tags: ['运维'], depends_on: [] },
+    ]
+    const consult = vi.fn(async () => ({ ok: true, text: '不应被调用' }))
+    const orch = makeOrchestrator(fixture, { 'P-1': { completion: planDone('P-1', gapPlan) } }, 'M-1', { consult })
+    orch.launch(launchInput({ cwd: fixture.repo, slots: plannerRoster }))
+    orch.createPlannerTask('目标')
+    await orch.run()
+    expect(consult).not.toHaveBeenCalled()
+    const p1 = fixture.store.getTask('P-1')!
+    expect(p1.spec).toContain('上次提案被拒的反馈（执行侧约束）')
   })
 
   it('结构类拒绝（自依赖）→ 不写回反馈，plan_rejected 标注 structural（P1 feedback 环）', async () => {

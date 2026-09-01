@@ -266,3 +266,52 @@ export function buildCapabilityFeedback(
     roster,
   ].join('\n')
 }
+
+// ── P1 feedback 环 v2：语义类拒绝时真咨询相关 worker（experiments 'feedback-consult' 灰度）──
+
+/** 咨询反馈注入上限（有界：咨询结果是建议不是全文）。 */
+export const MAX_CONSULT_FEEDBACK_CHARS = 500
+
+/** 单个咨询 prompt 携带的任务 spec 上限（防把整个 spec 塞进咨询烧 token）。 */
+export const MAX_CONSULT_SPEC_CHARS = 1_500
+
+/**
+ * 找最适合咨询的槽位：capabilities 与缺口标签交集最大者（超出声明标签的边界由 LLM 判断，
+ * 所以交集为 0 也允许咨询最接近的槽位）；无任何槽位 → undefined（回落 v1 确定性反馈）。
+ * 确定性：交集大小降序 → id 升序。
+ */
+export function bestConsultSlot(
+  gaps: Array<{ taskId: string; tags: string[] }>,
+  slots: Array<Pick<AgentSlot, 'id' | 'role' | 'capabilities'>>,
+): Pick<AgentSlot, 'id' | 'role' | 'capabilities'> | undefined {
+  if (gaps.length === 0 || slots.length === 0) return undefined
+  const need = new Set<string>()
+  for (const g of gaps) for (const t of g.tags) need.add(t)
+  const scored = slots
+    .map((s) => ({ s, hit: s.capabilities.filter((c) => need.has(c)).length }))
+    .sort((a, b) => b.hit - a.hit || (a.s.id < b.s.id ? -1 : 1))
+  return scored[0]!.s
+}
+
+/**
+ * 咨询 prompt（纯函数）：把「缺口任务 + 需求标签 + 目标槽位能力」交 worker 判断执行侧
+ * 约束——worker 可能知道声明标签之外的可行路径（v1 名册反馈只能回「无覆盖」）。
+ */
+export function buildConsultPrompt(
+  gaps: Array<{ taskId: string; tags: string[] }>,
+  task: { title: string; spec: string },
+  slot: Pick<AgentSlot, 'id' | 'role' | 'capabilities'>,
+): string {
+  const gapLines = gaps.map((g) => `- ${g.taskId} 需求 [${g.tags.join('、')}]`).join('\n')
+  return [
+    '你是 dsh-pod 的员工（' + slot.id + '，' + slot.role + '，声明能力：' + (slot.capabilities.join('、') || '未声明') + '）。',
+    '编排器的规划提案因能力缺口被拒绝，名册没有槽位声明覆盖以下需求：',
+    gapLines,
+    '请以你的实际经验给出该任务的**执行侧约束建议**（不超过 200 字）：',
+    '1) 是否其实可以做？用什么既有路径/工具/变通实现；2) 若确实做不了，说明缺什么、怎么改任务可行。',
+    '不要调用任何工具，直接给出文字回答。',
+    '',
+    '任务标题：' + task.title,
+    '任务规格（截断）：' + task.spec.slice(0, MAX_CONSULT_SPEC_CHARS),
+  ].join('\n')
+}

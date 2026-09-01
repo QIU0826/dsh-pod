@@ -27,7 +27,7 @@ import { teamOwnerId } from './memory.js'
 import { rankMemories } from './memory-rank.js'
 import { Ledger } from './ledger.js'
 import { MissionMachine } from './mission.js'
-import { PLAN_TASK_SKILL, REPLAN_LIMIT, buildCapabilityFeedback, buildPlannerSpec, classifyPlanErrors, extractPlanProposal, hasPlannerSlot, validatePlanProposal } from './planner.js'
+import { PLAN_TASK_SKILL, REPLAN_LIMIT, MAX_CONSULT_FEEDBACK_CHARS, bestConsultSlot, buildCapabilityFeedback, buildConsultPrompt, buildPlannerSpec, classifyPlanErrors, extractPlanProposal, hasPlannerSlot, validatePlanProposal } from './planner.js'
 import { buildRecentWindow, needsAutoReset, resetThresholdFor, sessionCtxUsage } from './session-tiers.js'
 import type { PodStore } from './store.js'
 import { classifyFault, TaskMachine, type TaskVerifyFn } from './task-machine.js'
@@ -150,6 +150,13 @@ export interface OrchestratorDeps {
    * 相关记录注入 worker prompt（有界、指针式）。缺省不注入（测试/无记忆宿主）。
    */
   memoryQuery?: (q: MemoryQueryLike) => MemoryRecordLike[]
+  /**
+   * P1 feedback 环 v2 的 LLM 咨询通道（experiments 'feedback-consult' 灰度，默认关）：
+   * 规划提案语义类拒绝（能力缺口）时，真咨询相关 worker 的执行侧约束（超出声明标签），
+   * 而非 v1 的确定性名册反馈。组装层注入（core 不读 process.env）；未注入 / 咨询失败 /
+   * 无匹配槽位 → 回落 v1。有界：文本裁到 MAX_CONSULT_FEEDBACK_CHARS 再注入。
+   */
+  consult?: (prompt: string) => Promise<{ ok: boolean; text: string }>
 }
 
 /** 记忆查询最小结构（避免硬依赖 MemoryStore 全类型；返回值含 UI 需要的展示字段）。 */
@@ -247,6 +254,7 @@ export class MissionOrchestrator {
   private readonly pauseMarkers = new Set<string>()
   private readonly credentialHint: ((vendor: Vendor) => boolean) | undefined
   private readonly memoryQuery: ((q: MemoryQueryLike) => MemoryRecordLike[]) | undefined
+  private readonly consult: ((prompt: string) => Promise<{ ok: boolean; text: string }>) | undefined
   private readonly wakeLatch: WakeLatch = { fired: false }
   private stopRequested = false
   /** 本次 stopRequested 的语义（summarize 据此区分 paused/budget_exceeded/aborted）。 */
@@ -268,6 +276,7 @@ export class MissionOrchestrator {
     this.credentialHint = deps.credentialHint
     this.onPlanExpanded = deps.onPlanExpanded
     this.memoryQuery = deps.memoryQuery
+    this.consult = deps.consult
     this.experiments = deps.experiments ?? { isEnabled: () => false }
     this.approvals = new ApprovalEngine(this.store, { clock: this.clock })
     this.ledger = new Ledger(this.store, { clock: this.clock })
@@ -1166,14 +1175,27 @@ export class MissionOrchestrator {
           if (validation === undefined || !validation.ok) {
             const errors = validation === undefined ? ['report.plan missing or malformed'] : validation.errors
             const cls = validation === undefined ? undefined : classifyPlanErrors(validation.errors)
-            // P1 Worker feedback 轻量环：语义类拒绝（能力缺口）→ 把执行侧约束写回失败任务
+            // P1 Worker feedback 环：语义类拒绝（能力缺口）→ 把执行侧约束写回失败任务
             // spec，自动重试即带反馈（此前 silent_failure 按原 spec 无反馈重试，同样错误反复发生）。
             // 结构类拒绝（id/环/依赖/规模）不写回——纯形状问题，直接重试即可，无需反馈。
+            // v2（灰度 'feedback-consult'）：真咨询相关 worker 的执行侧约束；回落 v1 名册反馈。
             let feedbackApplied = false
+            let feedbackMode: 'consult' | 'roster' | undefined
             if (cls !== undefined && cls.semantic.length > 0) {
-              const feedback = buildCapabilityFeedback(cls.capabilityGaps, this.store.listSlots(this.missionId))
-              this.store.updateTask(this.missionId, taskId, { spec: `${task.spec}\n\n## 上次提案被拒的反馈（执行侧约束）\n${feedback}` })
-              feedbackApplied = true
+              const consultEnabled = this.experiments.isEnabled('feedback-consult')
+              const consulted = consultEnabled ? await this.consultPlannerFeedback(cls.capabilityGaps, task) : undefined
+              if (consulted !== undefined) {
+                this.store.updateTask(this.missionId, taskId, {
+                  spec: `${task.spec}\n\n## 上次提案被拒的反馈（LLM 咨询·执行侧约束）\n${consulted}`,
+                })
+                feedbackApplied = true
+                feedbackMode = 'consult'
+              } else {
+                const feedback = buildCapabilityFeedback(cls.capabilityGaps, this.store.listSlots(this.missionId))
+                this.store.updateTask(this.missionId, taskId, { spec: `${task.spec}\n\n## 上次提案被拒的反馈（执行侧约束）\n${feedback}` })
+                feedbackApplied = true
+                feedbackMode = 'roster'
+              }
             }
             this.taskMachine.fail(taskId, { kind: 'silent_failure', message: `plan proposal rejected: ${errors.join('; ').slice(0, 400)}` })
             this.store.appendEvent(this.missionId, {
@@ -1182,7 +1204,7 @@ export class MissionOrchestrator {
               ts: this.clock(),
               kind: 'plan_rejected',
               task_id: taskId,
-              payload: { errors, semantic: cls?.semantic ?? [], structural: cls?.structural ?? [], feedback_applied: feedbackApplied },
+              payload: { errors, semantic: cls?.semantic ?? [], structural: cls?.structural ?? [], feedback_applied: feedbackApplied, feedback_mode: feedbackMode },
             })
             break
           }
@@ -1417,6 +1439,25 @@ export class MissionOrchestrator {
       payload: { reason: replan?.reason ?? null, replans_remaining: this.replanRemaining() },
     })
     return task!
+  }
+
+  /**
+   * P1 feedback 环 v2：语义类拒绝（能力缺口）时真咨询最匹配槽位的 worker 执行侧约束。
+   * 返回注入文本；回落条件（返回 undefined → 调用方走 v1 名册反馈）：
+   *   - consult 未注入 / 咨询失败（ok=false）/ 返回空文本 / 名册无任何槽位。
+   * 有界：结果裁到 MAX_CONSULT_FEEDBACK_CHARS（咨询是建议不是全文）。
+   */
+  private async consultPlannerFeedback(
+    gaps: Array<{ taskId: string; tags: string[] }>,
+    task: Task,
+  ): Promise<string | undefined> {
+    if (this.consult === undefined) return undefined
+    const slot = bestConsultSlot(gaps, this.store.listSlots(this.missionId))
+    if (slot === undefined) return undefined
+    const prompt = buildConsultPrompt(gaps, { title: task.title, spec: task.spec }, slot)
+    const res = await this.consult(prompt)
+    if (!res.ok || res.text.trim().length === 0) return undefined
+    return clip(res.text, MAX_CONSULT_FEEDBACK_CHARS)
   }
 
   /**
