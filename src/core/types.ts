@@ -3,6 +3,8 @@
  * 全部为纯类型与常量，禁止任何运行时副作用。
  */
 
+import type { WorkerErrorEnvelope } from './error-envelope.js'
+
 export type Vendor = 'dsh' | 'claude' | 'codex' | 'ark' | 'opencode'
 
 /** 会话生命周期三档（方案书 3.2 节 / D2）。 */
@@ -437,6 +439,11 @@ export interface WorkerCompletion {
   signal?: string
   /** 失败时的底层报错尾随（如 CLI stderr 的 API 401 文本），供 UI 直达根因。 */
   error_detail?: string
+  /**
+   * 结构化错误信封（P2-2）：给机器短码、给人留全文。
+   * 存在时编排器按 `error_code` 确定性分流，不再对 error_detail 做正则嗅探。
+   */
+  error_envelope?: WorkerErrorEnvelope
 }
 
 export interface WorkerBackend {

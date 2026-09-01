@@ -30,6 +30,8 @@ import type {
 } from '../core/types.js'
 import { execCommandRunner } from './preflight.js'
 import { renderReportPromptFragment } from '../core/report-schema.js'
+import { makeEnvelope } from '../core/error-envelope.js'
+import type { WorkerErrorEnvelope } from '../core/error-envelope.js'
 
 export type StreamJsonEvent = Record<string, unknown> & { type?: string }
 
@@ -124,6 +126,35 @@ export function classifyClaudeExit(
   if (timedOut || signal !== null) return null // 超时/被杀由 watchdog 层显式分类
   if (code !== null && code !== 0) return 'crash'
   return null
+}
+
+/**
+ * 从 claude 已结构化的信号构造错误信封（P2-2：给机器短码、给人留全文）。
+ *
+ * 优先级：`result.apiErrorStatus`（厂商结构化字段）> api_retry 尾记录 > 退出码。
+ * 只有结构化字段全缺时才看重试文本（有界兜底），stderr 12 行彻底退出判定链路。
+ */
+export function claudeErrorEnvelope(
+  resultEvent: StreamJsonEvent | undefined,
+  lastRetry: { error?: string } | undefined,
+  exit: { code: number | null; timedOut: boolean; spawnFailed?: boolean },
+): WorkerErrorEnvelope | undefined {
+  const info = resultEvent === undefined ? { isError: false, apiStatus: undefined, message: undefined } : resultErrorInfo(resultEvent)
+  if (info.apiStatus === 429) return makeEnvelope('RATE_LIMIT_429', true, info.message)
+  if (info.apiStatus === 401 || info.apiStatus === 403) return makeEnvelope(`AUTH_${info.apiStatus}`, false, info.message)
+  // 404 = 模型/接口配置不存在，重试无意义（与凭据过期同类处置：停重试转人工）
+  if (info.apiStatus === 404) return makeEnvelope('AUTH_CONFIG_404', false, '模型或接口配置不存在（检查 ANTHROPIC_BASE_URL 与模型名）')
+  if (lastRetry !== undefined) {
+    const text = lastRetry.error ?? ''
+    if (/401|403|unauthorized|auth|credential/i.test(text)) return makeEnvelope('AUTH_401', false, text)
+    if (/429|rate limit|too many requests/i.test(text)) return makeEnvelope('RATE_LIMIT_429', true, text)
+    return makeEnvelope('CRASH', true, text)
+  }
+  if (info.isError) return makeEnvelope('CRASH', true, info.message)
+  if (exit.spawnFailed === true) return makeEnvelope('CRASH_SPAWN', false, 'worker 进程启动失败（二进制缺失或权限不足）')
+  if (exit.timedOut) return makeEnvelope('WALL_CLOCK_TIMEOUT', false, undefined)
+  if (exit.code !== null && exit.code !== 0) return makeEnvelope('CRASH', true, `exit ${exit.code}`)
+  return undefined
 }
 
 /**
@@ -517,7 +548,14 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
     }
     const exit = await spawned.exited
     const parsedLines = lines.map(parseStreamJsonLine)
-    const resultEvent = parsedLines.reverse().find((e) => e?.type === 'result')
+    // 用副本反转取「最后一条」：原代码两次 reverse() 原地反转再反转回来互相抵消，
+    // 一旦中间插入新的取数就会静默取错方向。ES2022 无 findLast，故显式副本。
+    const resultEvent = [...parsedLines].reverse().find((e) => e?.type === 'result')
+    // stdout 的最后一条 api_retry/错误类 system 事件 = 真实根因（401 等）。同样用副本反转，
+    // 不在 parsedLines 上原地 reverse（原地反转会污染后续取数方向）。
+    const lastRetry = [...parsedLines].reverse().find((e) => e?.type === 'system' && (e as { subtype?: string }).subtype === 'api_retry') as
+      | { attempt?: number; max_retries?: number; error?: string }
+      | undefined
     // 失败根因（审计实证：API 401 曾只见 exit 1）：优先 stdout 的 api_retry 尾记录，
     // 其次 stderr 尾随；成功时不附
     const stderrDetail = spawned.stderrTail.length > 0 && resultEvent === undefined
@@ -527,14 +565,13 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
     const errorInfo = resultEvent === undefined ? { isError: false } : resultErrorInfo(resultEvent)
     // spawn 失败显式归为 failed(crash)：不标则 code=null 走不到任何故障分支，会被误判 done
     const fault = exit.spawnFailed ? 'crash' : classifyClaudeExit(exit.code, exit.signal, exit.timedOut, resultEvent)
+    // P2-2 结构化错误信封：给机器短码（编排器按 error_code 确定性分流，替换 stderr 正则嗅探），
+    // 给人留全文（hint 只进 UI/审计，不进 LLM 上下文）。成功时 undefined。
+    const envelope = claudeErrorEnvelope(resultEvent, lastRetry, exit)
     const text = resultEvent === undefined ? '' : (extractResultText(resultEvent) ?? '')
     const report = extractReport(text)
     const exitKind: WorkerCompletion['exit'] =
       exit.spawnFailed ? 'failed' : errorInfo.isError && fault === null ? 'failed' : fault === 'rate_limited' ? 'rate_limited' : exit.timedOut ? 'timeout' : fault !== null ? 'failed' : 'done'
-    // stdout 的最后一条 api_retry/错误类 system 事件 = 真实根因（401 等）
-    const lastRetry = parsedLines.reverse().find((e) => e?.type === 'system' && (e as { subtype?: string }).subtype === 'api_retry') as
-      | { attempt?: number; max_retries?: number; error?: string }
-      | undefined
     let errorDetail: string | undefined
     if (exitKind !== 'done') {
       if (lastRetry !== undefined) {
@@ -554,6 +591,7 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
         exit_code: exit.code ?? undefined,
         signal: exit.signal ?? undefined,
         ...(errorDetail !== undefined ? { error_detail: errorDetail } : {}),
+        ...(envelope !== undefined ? { error_envelope: envelope } : {}),
       },
     }
   }

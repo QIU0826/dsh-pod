@@ -6,6 +6,7 @@ import {
   buildTaskPrompt,
   buildTaskPromptSegments,
   classifyClaudeExit,
+  claudeErrorEnvelope,
   extractReport,
   extractUsage,
   parseStreamJsonLine,
@@ -149,6 +150,55 @@ describe('classifyClaudeExit（退出码 → 故障分类，3.4 节故障表）'
   })
   it('与 classifyFault 的 429/凭据特征兼容', () => {
     expect(classifyFault({ exit: 'failed', exitCode: 1, stderrTail: '429 Too Many Requests' })).toBe('rate_limited')
+  })
+})
+
+describe('claudeErrorEnvelope（结构化错误信封构造，P2-2）', () => {
+  const exit = { code: 1, timedOut: false, spawnFailed: false }
+  it('result.apiErrorStatus 429 → RATE_LIMIT_429 可重试', () => {
+    const e = claudeErrorEnvelope({ type: 'result', is_error: true, api_error_status: 429 } as never, undefined, exit)
+    expect(e).toMatchObject({ error_code: 'RATE_LIMIT_429', retriable: true })
+  })
+  it('result.apiErrorStatus 401/403 → AUTH_xxx 不重试', () => {
+    expect(claudeErrorEnvelope({ type: 'result', api_error_status: 401 } as never, undefined, exit)?.error_code).toBe('AUTH_401')
+    expect(claudeErrorEnvelope({ type: 'result', api_error_status: 403 } as never, undefined, exit)?.error_code).toBe('AUTH_403')
+    expect(claudeErrorEnvelope({ type: 'result', api_error_status: 401 } as never, undefined, exit)?.retriable).toBe(false)
+  })
+  it('result.apiErrorStatus 404 → AUTH_CONFIG_404 不重试（配置类，重试无意义）', () => {
+    const e = claudeErrorEnvelope({ type: 'result', is_error: true, api_error_status: 404 } as never, undefined, exit)
+    expect(e?.error_code).toBe('AUTH_CONFIG_404')
+    expect(e?.retriable).toBe(false)
+  })
+  it('api_retry 尾记录 401 文本 → AUTH_401 不重试', () => {
+    const e = claudeErrorEnvelope(undefined, { error: '401 Unauthorized: credential revoked' }, exit)
+    expect(e?.error_code).toBe('AUTH_401')
+    expect(e?.retriable).toBe(false)
+  })
+  it('api_retry 尾记录 429 文本 → RATE_LIMIT_429 可重试', () => {
+    const e = claudeErrorEnvelope(undefined, { error: '429 rate limit exceeded' }, exit)
+    expect(e?.error_code).toBe('RATE_LIMIT_429')
+    expect(e?.retriable).toBe(true)
+  })
+  it('result.is_error 但无结构化码 → CRASH 可重试', () => {
+    const e = claudeErrorEnvelope({ type: 'result', is_error: true } as never, undefined, exit)
+    expect(e?.error_code).toBe('CRASH')
+    expect(e?.retriable).toBe(true)
+  })
+  it('spawnFailed → CRASH_SPAWN 不重试', () => {
+    const e = claudeErrorEnvelope(undefined, undefined, { code: null, timedOut: false, spawnFailed: true })
+    expect(e?.error_code).toBe('CRASH_SPAWN')
+    expect(e?.retriable).toBe(false)
+  })
+  it('超时 → WALL_CLOCK_TIMEOUT 不重试', () => {
+    const e = claudeErrorEnvelope(undefined, undefined, { code: null, timedOut: true, spawnFailed: false })
+    expect(e?.error_code).toBe('WALL_CLOCK_TIMEOUT')
+  })
+  it('非零退出码 → CRASH', () => {
+    expect(claudeErrorEnvelope(undefined, undefined, exit)?.error_code).toBe('CRASH')
+  })
+  it('干净成功（无错误信号、码 0）→ undefined', () => {
+    expect(claudeErrorEnvelope(undefined, undefined, { code: 0, timedOut: false, spawnFailed: false })).toBeUndefined()
+    expect(claudeErrorEnvelope({ type: 'result', is_error: false } as never, undefined, { code: 0, timedOut: false, spawnFailed: false })).toBeUndefined()
   })
 })
 

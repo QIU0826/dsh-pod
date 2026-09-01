@@ -273,6 +273,15 @@ describe('故障分类器 classifyFault（worker 原始信号 → FaultKind）',
   it('正常完成 → null', () => {
     expect(classifyFault({ exit: 'done', exitCode: 0 })).toBe(null)
   })
+  it('结构化信封优先于 stderr 正则（短码确定性分流）', () => {
+    // 即便 stderr 里是限流文案，信封的 AUTH 短码也应胜出
+    expect(classifyFault({ exit: 'failed', exitCode: 1, stderrTail: '429 Too Many Requests', envelope: { error_code: 'AUTH_401', retriable: false } })).toBe('auth_expired')
+    expect(classifyFault({ exit: 'failed', exitCode: 1, stderrTail: 'credential expired', envelope: { error_code: 'RATE_LIMIT_429', retriable: true } })).toBe('rate_limited')
+  })
+  it('信封短码未知 → 回落到 stderr 正则（fail-closed）', () => {
+    expect(classifyFault({ exit: 'failed', exitCode: 1, stderrTail: '429 Too Many Requests', envelope: { error_code: 'MARTIAN_9000', retriable: false } })).toBe('rate_limited')
+    expect(classifyFault({ exit: 'failed', exitCode: 1, envelope: { error_code: 'MARTIAN_9000', retriable: false } })).toBe('crash')
+  })
 })
 
 describe('Canvas 事件流', () => {

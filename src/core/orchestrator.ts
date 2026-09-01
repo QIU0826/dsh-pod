@@ -1195,7 +1195,9 @@ export class MissionOrchestrator {
         break
       case 'failed': {
         const fault: FaultKind =
-          completion.fault ?? classifyFault({ exit: 'failed', exitCode: completion.exit_code }) ?? 'crash'
+          completion.fault ??
+          classifyFault({ exit: 'failed', exitCode: completion.exit_code, envelope: completion.error_envelope }) ??
+          'crash'
         // 凭据实测失效 → 该 vendor 的协商健康缓存立即作废（下一轮协商重探，不再误派）
         if (fault === 'auth_expired' && slot !== undefined) this.vendorHealth.delete(slot.vendor)
         const detail = completion.error_detail !== undefined ? `: ${completion.error_detail}` : ''

@@ -28,6 +28,8 @@ import type {
   Task,
   TaskStatus,
 } from './types.js'
+import { faultFromEnvelopeCode } from './error-envelope.js'
+import type { WorkerErrorEnvelope } from './error-envelope.js'
 import { RATE_LIMIT_BACKOFF_BASE_MS, RATE_LIMIT_BACKOFF_MAX_MS } from './types.js'
 
 export interface FaultInfo {
@@ -61,6 +63,11 @@ interface FaultSignals {
   exit?: 'done' | 'failed' | 'killed' | 'timeout' | 'rate_limited'
   exitCode?: number
   stderrTail?: string
+  /**
+   * 结构化错误信封（P2-2）：存在且短码可映射时**优先**用它做确定性分流，
+   * 不再对 stderr 自然语言做正则嗅探（措辞一变就漂）。
+   */
+  envelope?: WorkerErrorEnvelope
 }
 
 /** 凭据过期特征（3.4 节故障表：preflight 式 auth 探测）。 */
@@ -69,8 +76,18 @@ const AUTH_EXPIRED_PATTERN = /auth|credential|expired|unauthorized|not logged in
 /** 429 特征（输出或退出码）。 */
 const RATE_LIMIT_PATTERN = /429|rate limit|too many requests/i
 
-/** worker 原始信号 → FaultKind（429 与凭据过期可自动判定，其余由调用方显式给出）。 */
+/**
+ * worker 原始信号 → FaultKind（429 与凭据过期可自动判定，其余由调用方显式给出）。
+ *
+ * 优先级：**结构化信封 > 退出码 > stderr 正则**。
+ * 信封是 worker 已结构化持有的信号（claude result.is_error / api_retry、codex ERROR 行），
+ * 判定确定；stderr 正则只是厂商没给结构化信号时的兜底（fail-closed：未知短码回落这里）。
+ */
 export function classifyFault(signals: FaultSignals): FaultKind | null {
+  if (signals.envelope !== undefined) {
+    const fromCode = faultFromEnvelopeCode(signals.envelope.error_code)
+    if (fromCode !== null) return fromCode
+  }
   if (signals.exit === 'rate_limited' || RATE_LIMIT_PATTERN.test(signals.stderrTail ?? '')) {
     return 'rate_limited'
   }
