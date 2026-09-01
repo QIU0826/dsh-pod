@@ -60,6 +60,12 @@ function DirectoryPicker(props: { current: string; onPick: (path: string) => voi
           data !== null && data.home.length > 0
             ? createElement('button', { className: 'dsh-btn sm', type: 'button', onClick: () => load(data.home), title: data.home }, '⌂ 主目录')
             : null),
+        // 静默截断会让用户以为「这个文件夹下没有我要的目录」——必须如实告知
+        data !== null && data.truncated
+          ? createElement('div', { className: 'dsh-task-callout warn' },
+              Icon('alertTriangle', 13),
+              `目录过多，仅列出前 ${data.entries.length} 项（共 ${data.total} 项）。若找不到目标，请手动输入完整路径。`)
+          : null,
         error !== null
           ? createElement('div', { className: 'dsh-task-callout err' }, Icon('alertTriangle', 13), `无法读取：${error}`)
           : createElement('div', { className: 'dsh-dirlist' },

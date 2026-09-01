@@ -24,6 +24,10 @@ export interface BrowseResult {
   roots: string[] | null
   /** 用户主目录（前端「主目录」快捷入口）。 */
   home: string
+  /** 过滤后、截断前的子目录总数（与 entries.length 不等即表示被截断）。 */
+  total: number
+  /** entries 是否因超过 MAX_ENTRIES 被截断——静默截断会让用户以为看到的是全部。 */
+  truncated: boolean
 }
 
 function listDrives(): string[] {
@@ -40,9 +44,10 @@ export function browseDirectories(rawPath: string): BrowseResult {
   const home = homedir()
   if (rawPath.trim().length === 0) {
     if (process.platform === 'win32') {
-      return { path: '', parent: null, entries: [], roots: listDrives(), home }
+      return { path: '', parent: null, entries: [], roots: listDrives(), home, total: 0, truncated: false }
     }
-    return { path: '/', parent: null, entries: childDirs('/'), roots: null, home }
+    const rootDirs = childDirs('/')
+    return { path: '/', parent: null, entries: rootDirs.entries, roots: null, home, total: rootDirs.total, truncated: rootDirs.truncated }
   }
   const path = rawPath.trim()
   if (process.platform === 'win32' && !/^[A-Za-z]:[\\/]/.test(path)) {
@@ -52,25 +57,40 @@ export function browseDirectories(rawPath: string): BrowseResult {
   if (!existsSync(path)) throw new Error(`path not found: ${path}`)
   if (!statSync(path).isDirectory()) throw new Error(`not a directory: ${path}`)
   const parent = dirname(path)
+  const dirs = childDirs(path)
   return {
     path,
     // Windows 盘根（C:\）的 dirname 还是自身 → 上一层是盘符列表（''）
     parent: parent === path ? '' : parent,
-    entries: childDirs(path),
+    entries: dirs.entries,
     roots: null,
     home,
+    total: dirs.total,
+    truncated: dirs.truncated,
   }
 }
 
-function childDirs(path: string): string[] {
+/**
+ * 列子目录。返回总数而非静默截断——排序后截前 N 个意味着排在后面的目录彻底不可见，
+ * 用户只会以为「这个文件夹下没有我要的目录」。
+ */
+function childDirs(path: string): { entries: string[]; total: number; truncated: boolean } {
   const dirents = readdirSync(path, { withFileTypes: true })
   // 只隐藏 $ 系统目录（$RECYCLE.BIN 等）；点开头目录保留——否则 .zcode 这类
   // 工作区路径下的仓库永远点不到（P2 实测踩坑）
-  return dirents
+  const all = dirents
     .filter((d) => d.isDirectory() && !d.isSymbolicLink() && !d.name.startsWith('$'))
     .map((d) => d.name)
     .sort((a, b) => a.localeCompare(b, 'zh-CN'))
-    .slice(0, MAX_ENTRIES)
+  return capEntries(all)
+}
+
+/**
+ * 截断 + 元数据（纯函数，抽出来好离线测边界）。排序后截前 N 个意味着排在后面的目录
+ * 彻底不可见——所以必须把 total/truncated 一并带出去，前端才能提示「还有更多」。
+ */
+export function capEntries(all: string[]): { entries: string[]; total: number; truncated: boolean } {
+  return { entries: all.slice(0, MAX_ENTRIES), total: all.length, truncated: all.length > MAX_ENTRIES }
 }
 
 /** 供路由层拼接子目录绝对路径（Windows 分隔符归一）。 */

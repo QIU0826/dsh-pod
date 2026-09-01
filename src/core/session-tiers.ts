@@ -11,22 +11,17 @@
 
 import type { PodStore } from './store.js'
 import type { AgentSlot, SessionTier, Vendor } from './types.js'
-import { CONTENT_DENSITY_REVIEW, CTX_RESET_REVIEW_THRESHOLD_PCT, CTX_RESET_THRESHOLD_PCT } from './types.js'
+import { CONTENT_DENSITY_REVIEW, CTX_RESET_REVIEW_THRESHOLD_PCT, CTX_RESET_THRESHOLD_PCT, DEFAULT_SESSION_TIERS } from './types.js'
 
-/** 默认档位（2.3 节⑤ / O7）。 */
+/**
+ * 默认档位（2.3 节⑤ / O7）。
+ *
+ * 此前这里是与 DEFAULT_SESSION_TIERS 常量**重复的一份 switch**——两份相同的映射，
+ * 改一处忘另一处就会静默漂移（本项目已有的教训：README 标 ✅ 但代码未实现）。
+ * 现在改为从常量派生，只保留一个事实源。
+ */
 export function tierDefaults(vendor: Vendor): SessionTier {
-  switch (vendor) {
-    case 'claude':
-      return 'per-mission'
-    case 'codex':
-      return 'transient'
-    case 'dsh':
-      return 'transient'
-    case 'ark':
-      return 'transient'
-    case 'opencode':
-      return 'transient'
-  }
+  return DEFAULT_SESSION_TIERS[vendor]
 }
 
 /** 上下文占用估算（tokens_in+out / 窗口大小，封顶 100%）。 */

@@ -1,10 +1,24 @@
-import { describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { MemoryStore, TEAM_OWNER_PREFIX, isTeamOwner, teamOwnerId } from '../src/core/memory.js'
 
+// 临时目录必须建在系统 tmp，不能建在源码树里：清理写在各测试末尾，一旦断言先失败
+// 或 Windows 下 rmSync 偶发 EPERM（全套并行时实测会漏），残留目录就会污染 git status。
+// 兜底：统一登记，afterAll 无条件再清一遍。
+const made: string[] = []
+function tempDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'pod-mem-'))
+  made.push(dir)
+  return dir
+}
+afterAll(() => {
+  for (const dir of made) rmSync(dir, { recursive: true, force: true })
+})
+
 function makeStore() {
-  const dir = mkdtempSync(join(import.meta.dirname, '.mem-'))
+  const dir = tempDir()
   const store = new MemoryStore({ filePath: join(dir, 'memory.json'), clock: () => 1_700_000_000_000 })
   store.open()
   return { store, dir }
@@ -78,7 +92,7 @@ describe('记忆子系统 2.8.1（MemoryStore，主动策展 + 图谱 + reflecti
   })
 
   it('持久化：重开后跨实例读取（memory.json 磁盘事实源）', () => {
-    const dir = mkdtempSync(join(import.meta.dirname, '.mem-'))
+    const dir = tempDir()
     const s1 = new MemoryStore({ filePath: join(dir, 'memory.json'), clock: () => 1 })
     s1.open()
     const rec = s1.write({ owner_slot_id: 'S-1', type: 'lesson', content_ref: '经验' })
@@ -92,7 +106,7 @@ describe('记忆子系统 2.8.1（MemoryStore，主动策展 + 图谱 + reflecti
   })
 
   it('runReflection：合并重复 + 自动补 supports 边 + 剪枝过时低重要记录', () => {
-    const dir = mkdtempSync(join(import.meta.dirname, '.mem-'))
+    const dir = tempDir()
     let t = 1_800_000_000_000
     const clock = () => (t += 1000)
     const store = new MemoryStore({ filePath: join(dir, 'memory.json'), clock })
@@ -115,7 +129,7 @@ describe('记忆子系统 2.8.1（MemoryStore，主动策展 + 图谱 + reflecti
   })
 
   it('runReflection 合并方向：同键保留 updated_ts 最新者（H4 回归——方向反了会系统性淘汰新记忆）', () => {
-    const dir = mkdtempSync(join(import.meta.dirname, '.mem-'))
+    const dir = tempDir()
     let t = 1_800_000_000_000
     const clock = () => (t += 1000)
     const store = new MemoryStore({ filePath: join(dir, 'memory.json'), clock })

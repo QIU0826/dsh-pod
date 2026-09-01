@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { browseDirectories } from '../src/core/fs-browse.js'
+import { browseDirectories, capEntries } from '../src/core/fs-browse.js'
 
 function makeSandbox(): string {
   return mkdtempSync(join(tmpdir(), 'pod-fs-browse-'))
@@ -68,10 +68,28 @@ describe('browseDirectories（设置页目录点选器数据源）', () => {
   })
 
   it('条目数上限 300（超长列表截断，防 UI 爆炸）', () => {
+    const names = Array.from({ length: 305 }, (_, i) => `d${String(i).padStart(3, '0')}`)
+    expect(capEntries(names).entries.length).toBe(300)
+  })
+
+  it('截断必须上报（total + truncated），不能静默——用户会以为看到的是全部', () => {
+    const names = Array.from({ length: 305 }, (_, i) => `d${String(i).padStart(3, '0')}`)
+    const r = capEntries(names)
+    expect(r.entries.length).toBe(300)
+    expect(r.total).toBe(305)
+    expect(r.truncated).toBe(true)
+  })
+
+  it('未超限时 truncated=false 且 total 等于实际条目数（不误报）', () => {
     const box = makeSandbox()
     try {
-      for (let i = 0; i < 305; i += 1) mkdirSync(join(box, `d${String(i).padStart(3, '0')}`))
-      expect(browseDirectories(box).entries.length).toBe(300)
+      for (const name of ['beta', 'alpha']) mkdirSync(join(box, name))
+      writeFileSync(join(box, 'file.txt'), 'x')
+      const r = browseDirectories(box)
+      expect(r.truncated).toBe(false)
+      // total 是过滤后（只目录、非 $ 开头）的总数，不含文件
+      expect(r.total).toBe(2)
+      expect(r.entries.length).toBe(2)
     } finally {
       rmSync(box, { recursive: true, force: true })
     }

@@ -141,6 +141,10 @@ export interface BrowseResponse {
   entries: string[]
   roots: string[] | null
   home: string
+  /** 过滤后、截断前的子目录总数。 */
+  total: number
+  /** entries 是否因超过上限被截断（否则用户会以为列表已完整）。 */
+  truncated: boolean
 }
 
 export async function fetchBrowse(path: string): Promise<BrowseResponse> {
