@@ -118,5 +118,5 @@ P2：web 拆分 ✅ / AGENTS.md ✅ / justfile ✅ / IM adapter ✅ / MCP Gatewa
 | P5 | 会话删除 / 重命名 | 无 `deleteMission`，会话只增不减 |
 | P5 | `fs-browse` 300 条上限无截断提示 | 用户会误以为目录不全 |
 | P5 | `missionArchive` 全量事件无上限 | 长会话归档响应体膨胀 |
-| P3 | `docs/adapters.md` 的 ACP 表述 | ACP 已于 2025-08 并入 A2A（Linux Foundation），预留措辞需更新 |
+| P3 | `docs/adapters.md` 的 ACP 表述 | **已澄清（2026-09-01）**：此处 ACP = Zed 的 Agent Client Protocol（编辑器↔编码 agent），未被并入 A2A——并入 A2A 的是 IBM 的 Agent Communication Protocol（同名陷阱）。adapter 预留措辞保留，已加消歧义指针（[消歧义-ACP-2026-09-01.md](消歧义-ACP-2026-09-01.md)）。本条原审计结论（「ACP 已并入 A2A，需更新措辞」）**错误，已撤回** |
 | P6 | 方案书未追加本轮 CR 记录 | 按方案书纪律「变更以设计变更记录追加文末」 |

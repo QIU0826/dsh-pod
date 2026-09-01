@@ -43,9 +43,15 @@ export interface WorkerProtocol {
 
 ## 5. ACP 接入（v0.3 方向，预留）
 
+> ⚠️ 这里的 ACP 指 **Zed 的 Agent Client Protocol（编辑器 ↔ 编码 agent）**，不是 IBM 的
+> Agent Communication Protocol（后者 2025-08 已并入 A2A，见 [消歧义-ACP-2026-09-01.md](消歧义-ACP-2026-09-01.md)）。
+
 - ACP（Agent Client Protocol）：`family: "acp"`；会话层握手/流式工具调用照 ACP 规范。
 - 编排层已抽象的部分：diff 注入（`diffProvider`）、最小上下文审查（`review spec`）、质量门（`verify`）均为接口注入，ACP 后端可无缝复用。
 - 限制如实记录：ACP 客户端进程生命周期与 usage 审计依赖具体实现，接入时逐项核对能力位。
+- 重估（2026-09-01）：ACP Registry 已有 `@zed-industries/claude-code-acp` / `codex-acp` /
+  opencode 等现成 adapter（Zed / JetBrains 内置），编辑器内驾驶舱是「现成通道、宿主侧接线项」，
+  无真实场景需求前不排期。
 
 ## 6. 边界
 
