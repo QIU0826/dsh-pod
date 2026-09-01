@@ -538,6 +538,25 @@ describe('N2 记忆运行时注入（CR-07-4：相关 + 有界 + 指针式）', 
     await orch.run()
     expect(fixture.backends.claude!.started[0]!.task.spec).not.toContain('相关记忆')
   })
+
+  it('P1-4 深化①：相关性优先于重要度——importance=2 的相关记忆越过旧 importance≥3 硬门入选且排在前', async () => {
+    const orch = makeOrchestrator(fixture, {}, 'M-1', {
+      // 旧启发式（importance≥3 硬门 + tag/importance 排序）只会注入高重要度但无关的周报模板，
+      // 低重要度强相关的 token bucket 记忆被硬门滤掉；新检索让相关性做主
+      memoryQuery: () => [
+        { id: 'mem-irrelevant', type: 'lesson', importance: 5, tags: ['文档'], content_ref: '周报模板：每周五汇总本周提交' },
+        { id: 'mem-relevant', type: 'lesson', importance: 2, tags: ['限流'], content_ref: 'token bucket 防 429：bucket 容量=速率×突发窗口' },
+      ],
+    })
+    orch.launch(launchInput({ cwd: fixture.repo }))
+    orch.createTasks([{ id: 'T-1', title: '实现 rate limiter', spec: '用 token bucket 防止 429，可配速率', type: 'implement', skill_tags: ['编码'] }])
+    await orch.run()
+    const spec = fixture.backends.claude!.started[0]!.task.spec
+    const relevantAt = spec.indexOf('token bucket 防 429')
+    const irrelevantAt = spec.indexOf('周报模板')
+    expect(relevantAt).toBeGreaterThanOrEqual(0) // 相关记忆入选（旧代码被 importance≥3 硬门滤掉）
+    expect(relevantAt).toBeLessThan(irrelevantAt) // 且排在无关但高重要度的记录之前
+  })
 })
 
 describe('P0-5 交接投递（planDelivery 接线：重派按矩阵注入交接）', () => {

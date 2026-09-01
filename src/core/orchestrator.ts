@@ -24,6 +24,7 @@ import { buildHandoff, planDelivery, type DeliveryAction } from './handoff.js'
 import { buildTwoLevelDiff } from './diff-hunks.js'
 import { appendTaskFact, resetSummaryFromStore } from './reset-ledger.js'
 import { teamOwnerId } from './memory.js'
+import { rankMemories } from './memory-rank.js'
 import { Ledger } from './ledger.js'
 import { MissionMachine } from './mission.js'
 import { PLAN_TASK_SKILL, REPLAN_LIMIT, buildCapabilityFeedback, buildPlannerSpec, classifyPlanErrors, extractPlanProposal, hasPlannerSlot, validatePlanProposal } from './planner.js'
@@ -169,6 +170,8 @@ export interface MemoryRecordLike {
 
 /** N2 记忆注入上限：单次派发最多注入的记录数（防上下文膨胀，token 敏感）。 */
 export const MAX_MEMORY_INJECT = 6
+/** 记忆检索候选池上限（每 owner）：放宽后由 BM25 相关性裁决，不再 importance 硬门。 */
+export const MEMORY_CANDIDATE_POOL = 32
 /** 单条记忆 content_ref 注入长度上限（指针式：给到能定位即可，不全文）。 */
 export const MAX_MEMORY_REF_CHARS = 160
 
@@ -1417,30 +1420,30 @@ export class MissionOrchestrator {
   }
 
   /**
-   * N2 记忆运行时注入（CR-07-4）：按槽位 + 团队(team:<mission>) 拉相关记忆，
-   * 排序（标签命中任务 skill_tags 优先 → 重要度降序），去重、有界（MAX_MEMORY_INJECT），
-   * 指针式注入 content_ref（非原始对话）。无 memoryQuery / 无记录 → 不注入（零开销）。
+   * N2 记忆运行时注入（CR-07-4）：按槽位 + 团队(team:<mission>) 拉记忆，
+   * top-k 排序（P1-4 深化①：BM25 关键词相关性 + tag 命中 + importance 加权，
+   * 见 memory-rank.ts——取代旧的「importance≥3 硬门 + tag 命中」启发式，重要但不
+   * 相关的记录不再挤掉真正相关的），去重、有界（MAX_MEMORY_INJECT），指针式注入
+   * content_ref（非原始对话）。无 memoryQuery / 无记录 → 不注入（零开销）。
    */
   private injectRelevantMemory(slotId: string, task: Task, spec: string): { spec: string; injected: boolean } {
     if (this.memoryQuery === undefined) return { spec, injected: false }
-    const records = [
-      ...(this.memoryQuery({ owner_slot_id: slotId, importance_min: 3, limit: 4 }) ?? []),
-      ...(this.memoryQuery({ owner_slot_id: teamOwnerId(this.missionId), importance_min: 3, limit: 4 }) ?? []),
-    ]
-    if (records.length === 0) return { spec, injected: false }
-    const taskTags = new Set(task.skill_tags ?? [])
+    // 候选池放宽：去掉 importance 硬门、扩到 MEMORY_CANDIDATE_POOL——相关性裁决交给 rankMemories
     const seen = new Set<string>()
-    const picked: MemoryRecordLike[] = []
-    for (const r of [...records].sort((a, b) => {
-      const aHit = (a.tags ?? []).some((t) => taskTags.has(t)) ? 1 : 0
-      const bHit = (b.tags ?? []).some((t) => taskTags.has(t)) ? 1 : 0
-      return bHit - aHit || b.importance - a.importance
-    })) {
+    const pool: MemoryRecordLike[] = []
+    for (const r of [
+      ...(this.memoryQuery({ owner_slot_id: slotId, limit: MEMORY_CANDIDATE_POOL }) ?? []),
+      ...(this.memoryQuery({ owner_slot_id: teamOwnerId(this.missionId), limit: MEMORY_CANDIDATE_POOL }) ?? []),
+    ]) {
       if (seen.has(r.id)) continue
       seen.add(r.id)
-      picked.push(r)
-      if (picked.length >= MAX_MEMORY_INJECT) break
+      pool.push(r)
     }
+    const picked = rankMemories(
+      pool,
+      { title: task.title, spec: task.spec, skill_tags: task.skill_tags },
+      MAX_MEMORY_INJECT,
+    )
     if (picked.length === 0) return { spec, injected: false }
     const block = picked
       .map((r) => `- [${r.type}·${r.importance}]${(r.tags ?? []).length > 0 ? ` #${r.tags.join(',')}` : ''} → ${clip(r.content_ref, MAX_MEMORY_REF_CHARS)}`)
