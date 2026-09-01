@@ -213,13 +213,19 @@ POD_SATELLITE_URL=http://<卫星机>:3950 POD_SATELLITE_VENDOR=claude POD_SATELL
 ### 外部协作通道 webhook（Berd-H，CR-31）
 
 ```bash
+# 通用通道（裸 {text}，loopback 默认可信；本地联调用）
 node scripts/channel-http-server.mjs               # 默认 127.0.0.1:3960
-# 入站指令 -> 映射 pod_* 工具面；出站仅白名单信号（代码/diff/凭据不出会话）
 curl -X POST -H "content-type: application/json" -d '{"text":"看板状态"}' http://127.0.0.1:3960/inbound
-curl -X POST -H "content-type: application/json" -d '{"text":"批准 A-1 合并"}' http://127.0.0.1:3960/inbound
+
+# Slack / 飞书 webhook（vendor 验签主鉴权 + 挑战握手 + 重放去重；真挂 IM 用这个）
+POD_SLACK_SIGNING_SECRET=<secret> node scripts/im-http-server.mjs   # Slack HMAC-SHA256 验签
+POD_LARK_ENCRYPT_KEY=<key> POD_LARK_VERIFICATION_TOKEN=<token> node scripts/im-http-server.mjs  # 飞书加密
+POD_LARK_VERIFICATION_TOKEN=<token> node scripts/im-http-server.mjs # 飞书明文（token 为唯一入站鉴权）
+# webhook URL 填 http://127.0.0.1:3960/webhook/slack 或 /webhook/lark
 ```
 
 支持指令：状态/暂停/恢复/中止/批准 A-n/驳回 A-n/给 S-n 指令：…；审批动作仍走 `pod_approve` 门（不绕过状态机）。
+vendor 验签失败/时间窗过期/缺凭据一律 401 fail-closed；非 loopback 且无 `POD_IM_TOKEN` 拒绝启动。
 
 ### Cron 定时触发（AgentScope-J，CR-34）
 
@@ -254,7 +260,7 @@ curl -X POST -H "content-type: application/json" -d '{"text":"批准 A-1 合并"
 |---|---|---|
 | MCP 双向暴露（方案书 594/797 行，CR-28 + CR-29） | ✅ stdio + Streamable HTTP | `src/mcp-server.ts`（pod_* 工具面 9 个映射 MCP tools，审批仍走三代码入口）；stdio：`scripts/mcp-bridge.mjs`（`claude mcp add pod -- node <path>/scripts/mcp-bridge.mjs`）；远程：`scripts/mcp-http-server.mjs`（默认 127.0.0.1:3947，POD_MCP_TOKEN 可选 Bearer，非 loopback 无 token 拒绝启动） |
 | 多机 Satellite（方案书 594 行，CR-30） | ✅ 已实现 | `src/workers/remote-backend.ts`（RemoteBackend，protocol.family='remote'）+ `src/workers/satellite-server.ts`（卫星端点 /detect /start /events /kill /health + StubBackend）+ `scripts/satellite-worker.mjs`；[docs/satellite.md](docs/satellite.md)（多机真机部署仍属部署关注） |
-| 外部协作通道（Berd-H / AgentScope-J，CR-31） | ⚠️ 库已备，**服务面未接线** | `src/core/channel.ts`（parseInstruction + handleChannelCommand + sanitizeOutboundSignal；审批不绕过门、凭据不出会话）+ `src/core/channel-im.ts`（Slack / 飞书 vendor adapter：HMAC 验签 + 时间窗防重放 + 飞书明文模式 verification token 鉴权 + 事件 id 重放去重 + 挑战握手 + 出站净化，16 例单测）。**尚未接入任何 HTTP 端点/服务装配**（`scripts/channel-http-server.mjs` 未引用它）——接线属后续计划 |
+| 外部协作通道（Berd-H / AgentScope-J，CR-31） | ✅ 已接线（vendor 验签链路） | `src/core/channel.ts`（parseInstruction + handleChannelCommand + sanitizeOutboundSignal；审批不绕过门、凭据不出会话）+ `src/core/channel-im.ts`（Slack / 飞书 vendor adapter：HMAC 验签 + 时间窗防重放 + 飞书明文模式 verification token 鉴权 + 事件 id 重放去重 + 挑战握手 + 出站净化）+ `src/im-http.ts`（webhook HTTP 交付层：`POST /webhook/{slack,lark}` 读原始 body 验签，fail-closed；`scripts/im-http-server.mjs` 装配，`POD_SLACK_SIGNING_SECRET`/`POD_LARK_*` 注入凭据）。出站 bot 回帖未接（缺省仅 stderr 打印 + ack） |
 | MCP Gateway（AgentScope-J） | ⚠️ 库已备，**服务面未接线** | `src/core/mcp-gateway.ts`——Pod 作为 MCP **客户端**聚合多个下游 server（与「Pod 暴露为 server」互补）：工具名 `serverId__toolName` 命名空间隔离（serverId 非法即构造失败）、写类工具过审批门（**未接线审批钩子时 gated 工具一律拒绝**，fail-closed）、输出截断防灌爆上下文、调用审计；13 例单测。**尚未接入 PodService/编排层**——接线属后续计划 |
 | 任务生命周期状态机（A2A 对齐） | ✅ 已实现 | `task-machine.ts`：ready→negotiating→accepted→dispatched/running⇄paused→done/blocked/rejected/escalated。协商是真实裁决（vendor 健康探测 + 预算构成接受基础，TTL 缓存；谢绝换人 failover；全员谢绝→rejected 转人工）；任务级暂停/恢复不消费 attempts；18 例生命周期单测 |
 | A2A 对外协议面 | ✅ 已实现 | `GET /.well-known/agent-card`（名册即技能表）+ `POST /a2a/sendMessage`（消息→mission 受理，回 A2A Task 快照）+ `POST /a2a/sendMessageStream`（SSE：status/artifact 增量至终态）+ JSON-RPC `POST /a2a`（message/send / message/stream）；映射纯函数 `src/core/a2a.ts`（loopback-only，凭据不出协议面，未知事件不编造）；14 例单测 |

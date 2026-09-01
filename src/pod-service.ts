@@ -175,13 +175,17 @@ export class PodService {
     // CR-34：Cron 定时触发（AgentScope-J）——target 适配自身 pod_* 工具面（同一套，审批门不绕过）；
     // jobs 从 <dataDir>/cron.json 加载，缺省无 job = 默认关（Berd-H 显式启用纪律）。
     this.cron = new CronScheduler({ clock: this.clock })
-    this.cron.setTarget(this.asChannelTarget())
+    this.cron.setTarget(this.channelTarget())
     this.cronJobsFile = join(this.dataDir, 'cron.json')
     this.reloadCronJobs()
   }
 
-  /** ChannelTarget 适配：Cron/外部通道与 pod_* 工具面共用同一套动作（审批走同一 approve 门）。 */
-  private asChannelTarget(): ChannelTarget {
+  /**
+   * ChannelTarget 适配：Cron/外部 IM 通道与 pod_* 工具面共用同一套动作（审批走同一 approve 门）。
+   * `source` 是审批/拒绝记录里的操作者标签（'cron' 定时触发 / 'channel' 外部 IM 通道），
+   * 用于审计溯源（谁放行的这次合并）。
+   */
+  channelTarget(source: string = 'cron'): ChannelTarget {
     return {
       status: () => {
         const s = this.status()
@@ -198,10 +202,10 @@ export class PodService {
         return { mission_id: m.id, status: m.status }
       },
       approve: async (id, note) => {
-        const r = await this.approve(id, 'cron', note === undefined ? undefined : { merge_note: note })
+        const r = await this.approve(id, source, note === undefined ? undefined : { merge_note: note })
         return r.ok ? { ok: true } : { ok: false, message: r.message }
       },
-      deny: (id, reason) => this.deny(id, 'cron', reason),
+      deny: (id, reason) => this.deny(id, source, reason),
       steer: (slotId, instruction) => this.steer(slotId, instruction),
       pause: () => this.pauseMission(),
       resume: () => this.resumeMission(),
@@ -236,7 +240,7 @@ export class PodService {
     }
     this.cronMtimeMs = mtime
     this.cron = new CronScheduler({ clock: this.clock })
-    this.cron.setTarget(this.asChannelTarget())
+    this.cron.setTarget(this.channelTarget())
     for (const job of jobs) this.cron.register(job)
   }
 
