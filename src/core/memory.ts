@@ -16,8 +16,9 @@
  *   - 不自动摘要会话日志（违背本设计）；蒸馏/剪枝输入是主动策展记录。
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { dirname } from 'node:path'
+import { atomicWrite, sweepStaleTmp } from './atomic-write.js'
 import type Database from 'better-sqlite3'
 import { MemoryRecord, MemoryRelation, MemoryType } from './types.js'
 
@@ -139,7 +140,10 @@ export class JsonMemoryPersistence implements MemoryPersistence {
   }
 
   open(): void {
-    mkdirSync(dirname(this.filePath), { recursive: true })
+    const dir = dirname(this.filePath)
+    mkdirSync(dir, { recursive: true })
+    // 扫掉崩溃进程遗留的 tmp 残骸（只删 pid 已死的），与 store.json 同源处置
+    sweepStaleTmp(dir, '.memory.tmp-')
   }
 
   load(): MemoryData | undefined {
@@ -159,10 +163,8 @@ export class JsonMemoryPersistence implements MemoryPersistence {
   }
 
   save(data: MemoryData): void {
-    const tmp = join(dirname(this.filePath), `.memory.tmp-${process.pid}`)
-    writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8')
-    if (existsSync(this.filePath)) renameSync(this.filePath, `${this.filePath}.bak`)
-    renameSync(tmp, this.filePath)
+    // 与 store.json 同源的原子写内核：rename 失败（Windows EPERM）时清掉 tmp 残骸再重抛
+    atomicWrite(this.filePath, JSON.stringify(data, null, 2), { backupPath: `${this.filePath}.bak` })
   }
 
   close(): void {}

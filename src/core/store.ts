@@ -9,16 +9,13 @@
  */
 
 import {
-  closeSync,
   existsSync,
-  fsyncSync,
   mkdirSync,
-  openSync,
   readFileSync,
   renameSync,
-  writeFileSync,
 } from 'node:fs'
 import { join } from 'node:path'
+import { atomicWrite, sweepStaleTmp } from './atomic-write.js'
 import { DuplicateIdError, NotFoundError, StoreCorruptError } from './errors.js'
 import type {
   AgentSlot,
@@ -186,6 +183,8 @@ export class JsonStore implements PodStore {
 
   open(): void {
     mkdirSync(this.rootDir, { recursive: true })
+    // 先扫掉崩溃进程遗留的 tmp 残骸（只删 pid 已死的），再走正常开库路径
+    sweepStaleTmp(this.rootDir, 'store.json.tmp-')
     if (!existsSync(this.mainPath)) {
       // 崩溃窗口恢复：persist() 在「main→bak」与「tmp→main」两次 rename 之间中断时，
       // 磁盘上 main 缺失而 .bak 完好——先回读 .bak 再决定开空库，绝不静默清库。
@@ -251,27 +250,15 @@ export class JsonStore implements PodStore {
     }
   }
 
-  /** 原子写：tmp(fsync 尽力而为) → 旧主文件转 .bak → tmp 转正。任何一步崩溃都可从 .bak 恢复。 */
+  /**
+   * 原子写：tmp(fsync 尽力而为) → 旧主文件转 .bak → tmp 转正。任何一步崩溃都可从 .bak 恢复。
+   *
+   * rename 失败（Windows EPERM 实测可复现）时 `atomicWrite` 会先清掉 tmp 残骸再重抛——
+   * 落盘失败必须上抛，但绝不留 `store.json.tmp-<pid>` 在数据目录里。
+   */
   private persist(): void {
     if (this.data === undefined) throw new Error('store not opened')
-    const tmpPath = join(this.rootDir, `store.json.tmp-${process.pid}`)
-    writeFileSync(tmpPath, JSON.stringify(this.data))
-    // fsync 只是掉电持久性提示：沙箱/部分文件系统返回 EPERM 属于正常情况，
-    // 写入正确性与崩溃恢复由 tmp→bak→rename 原子序列保证，故失败仅降级不阻断。
-    try {
-      const fd = openSync(tmpPath, 'r')
-      try {
-        fsyncSync(fd)
-      } finally {
-        closeSync(fd)
-      }
-    } catch {
-      // best effort: durability hint rejected, atomicity unaffected
-    }
-    if (existsSync(this.mainPath)) {
-      renameSync(this.mainPath, this.backupPath)
-    }
-    renameSync(tmpPath, this.mainPath)
+    atomicWrite(this.mainPath, JSON.stringify(this.data), { backupPath: this.backupPath, fsync: true })
   }
 
   private requireData(): StoreData {
