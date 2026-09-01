@@ -19,6 +19,7 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { atomicWrite, sweepStaleTmp } from './atomic-write.js'
+import { resolveConflicts } from './memory-conflict.js'
 import type Database from 'better-sqlite3'
 import { MemoryRecord, MemoryRelation, MemoryType } from './types.js'
 
@@ -79,6 +80,10 @@ export interface MemoryQuery {
 
 export interface ReflectionResult {
   merged: number
+  /** P1-4 深化②：自动裁决的 contradicts 边数（同话题多版本收口）。 */
+  conflictsResolved: number
+  /** P1-4 深化②：因冲突降 importance 退活跃注入位的记录数。 */
+  demoted: number
   supportsLinked: number
   pruned: number
 }
@@ -384,8 +389,12 @@ export class MemoryStore {
   /**
    * 后台 reflection pass（复用 maintenanceTick 基础设施）：
    *   1) 合并同 owner+type+content_ref 的重复记录（保留最新，其余并入其历史）；
-   *   2) 自动补 supports 边（同 owner 且共享 ≥2 标签的记录对）；
-   *   3) 剪枝 importance<pruneMin 且 updated 早于 cutOff 且无任何边的过时记录。
+   *   2) 冲突收口（P1-4 深化②，Mem0 方法论）：同 owner+type+标签重叠+内容相似 →
+   *      contradicts 边（旧→新）+ 旧记录降 importance 退出活跃注入位（不删除数据）；
+   *      **必须先于 supports pass**——否则同话题对先被 supports 边标记为已裁决，
+   *      冲突收口永不触发；
+   *   3) 自动补 supports 边（同 owner 且共享 ≥2 标签的记录对）；
+   *   4) 剪枝 importance<pruneMin 且 updated 早于 cutOff 且无任何边的过时记录。
    * 输入 = 主动写入的策展记录（非原始对话转录）；不做自动摘要（CR-07-4）。
    */
   runReflection(opts: { pruneMinImportance?: number; staleMaxMs?: number; autoLinkMinSharedTags?: number } = {}): ReflectionResult {
@@ -395,6 +404,8 @@ export class MemoryStore {
     const minShared = opts.autoLinkMinSharedTags ?? 2
     const now = this.clock()
     let merged = 0
+    let conflictsResolved = 0
+    let demoted = 0
     let supportsLinked = 0
     const ids = Object.keys(data.records)
     // 1) 合并重复：同 owner+type+content_ref，保留 updated_ts 最新者
@@ -418,8 +429,26 @@ export class MemoryStore {
         merged++
       }
     }
-    // 2) 自动补 supports 边（同 owner + 共享 ≥2 标签）
+    // 2) 冲突收口（P1-4 深化②）：纯函数裁决 → 落地 contradicts 边 + 旧者降级 + 历史留痕
     const recs = Object.values(data.records)
+    const { edgesToAdd, demotions, candidates } = resolveConflicts(recs, data.edges, { minSharedTags: minShared })
+    for (let k = 0; k < edgesToAdd.length; k++) {
+      const e = edgesToAdd[k]!
+      data.edges.push({ id: `MC-${now}-${k}`, from_record: e.from_record, to_record: e.to_record, relation: 'contradicts', ts: now })
+      conflictsResolved++
+    }
+    for (const d of demotions) {
+      const rec = data.records[d.id]
+      if (rec !== undefined && rec.importance > d.importance) {
+        rec.importance = d.importance
+        rec.updated_ts = now
+        const hist = data.history[d.id] ?? (data.history[d.id] = [])
+        const target = candidates.find((c) => c.oldId === d.id)
+        hist.push({ ts: now, by: 'reflection', patch: { _conflicted_into: target?.newId, importance: d.importance } })
+        demoted++
+      }
+    }
+    // 3) 自动补 supports 边（同 owner + 共享 ≥2 标签；已有任意边则跳过——含上一步 contradicts）
     for (let i = 0; i < recs.length; i++) {
       for (let j = i + 1; j < recs.length; j++) {
         const a = recs[i]!
@@ -436,7 +465,7 @@ export class MemoryStore {
         }
       }
     }
-    // 3) 剪枝：importance < pruneMin 且超过 staleMax 未更新且无边
+    // 4) 剪枝：importance < pruneMin 且超过 staleMax 未更新且无边
     let pruned = 0
     for (const id of Object.keys(data.records)) {
       const rec = data.records[id]!
@@ -449,7 +478,7 @@ export class MemoryStore {
       }
     }
     this.persist()
-    return { merged, supportsLinked, pruned }
+    return { merged, conflictsResolved, demoted, supportsLinked, pruned }
   }
 
   flush(): void {
