@@ -199,7 +199,22 @@ export async function verifyTaskArtifacts(
     if (!exists(logPath)) {
       // 精确路径未命中 → basename 模糊匹配（out/ 下按文件名查找），容忍提示词措辞差异（CR-06-12）
       const basename = rawPath.split(/[\\/]/).pop() ?? rawPath
-      const found = findFileByBasename(options.repoDir, basename)
+      let found = findFileByBasename(options.repoDir, basename)
+      if (!found) {
+        // 鲁棒回退（E2E 实证 2026-09-01）：模型常在 test_evidence 写「叙述+路径」混合
+        // （如「7/7 通过，见 out/task-T-1.testlog」），无括号时 rawPath=整句、路径解析失败
+        // ——真实 testlog 文件存在却被误判 test_log_exists。从原文提取任何路径样式片段
+        // （*.testlog/*.log/*.txt 或 out/ 相对路径）逐一按 basename 定位。仍要求日志文件
+        // 真实存在于固定目录（纪律不弱化：有日志文件=确实跑了测试）。
+        const pathFragments = report.test_evidence.match(/[\w@./\\-]+\.(?:testlog|log|txt)|out\/[\w@./\\-]+/g)
+        for (const frag of pathFragments ?? []) {
+          const b = frag.split(/[\\/]/).pop() ?? frag
+          if (findFileByBasename(options.repoDir, b)) {
+            found = true
+            break
+          }
+        }
+      }
       if (!found) {
         failures.push({ check: 'test_log_exists', detail: `test log not found: ${rawPath}` })
       }

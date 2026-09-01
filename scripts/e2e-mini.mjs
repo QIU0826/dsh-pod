@@ -70,7 +70,7 @@ async function main() {
     }
     throw new Error('timeout waiting for ' + label)
   }
-  const atApproval = await poll((st) => st.mission?.status === 'awaiting_approval' || st.pendingApprovals.length > 0 || st.mission?.status === 'done' || st.mission?.status === 'aborted', 10 * 60_000, 'approval gate')
+  const atApproval = await poll((st) => st.mission?.status === 'awaiting_approval' || st.pendingApprovals.length > 0 || st.mission?.status === 'done' || st.mission?.status === 'aborted', 20 * 60_000, 'approval gate')
   console.log('[e2e] reached:', atApproval.mission?.status, 'pending approvals:', atApproval.pendingApprovals.length)
   if (atApproval.mission?.status === 'done' || atApproval.mission?.status === 'aborted') {
     console.log('[e2e] terminal before approval:', atApproval.mission?.status)

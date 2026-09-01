@@ -240,6 +240,27 @@ describe.runIf(gitAvailable)('verifyTaskArtifacts × 真实 git 仓库', () => {
     expect(existsSync(join(repo, 'out', 't.log'))).toBe(true)
   })
 
+  it('test_evidence 为「叙述+路径」混合文本 → 鲁棒提取路径仍能找到日志（E2E 实证 2026-09-01）', async () => {
+    mkdirSync(join(repo, 'out'))
+    writeFileSync(join(repo, 'out', 'task-T-1.testlog'), '7/7 ✓')
+    // 模型常写「7/7 通过，见 out/task-T-1.testlog」——无括号、路径夹在叙述里
+    const verdict = await verifyTaskArtifacts(
+      { git: execGitClient(), repoDir: repo },
+      makeTask(),
+      doneReport({ commit_sha: headSha(), test_evidence: '7/7 通过，测试输出见 out/task-T-1.testlog' }),
+    )
+    expect(verdict.ok).toBe(true)
+
+    // 对照：完全无路径线索的叙述 → 仍失败（纪律不弱化：必须有日志文件证据）
+    const noPath = await verifyTaskArtifacts(
+      { git: execGitClient(), repoDir: repo },
+      makeTask(),
+      doneReport({ commit_sha: headSha(), test_evidence: '7/7 通过，全部用例正确' }),
+    )
+    expect(noPath.ok).toBe(false)
+    expect(noPath.failures.some((f) => f.check === 'test_log_exists')).toBe(true)
+  })
+
   it('review 任务 test_evidence 是说明性文本 → 不强制日志文件存在（CR-32）', async () => {
     // 审查报告的 test_evidence 引用测试输出文本（非真实路径），不应被当作必须存在的日志文件
     const verdict = await verifyTaskArtifacts(
