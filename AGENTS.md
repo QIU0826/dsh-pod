@@ -1,7 +1,7 @@
 # AGENTS.md — dsh-pod（Pod 鲸群）开发约定
 
 > 给 AI agent / 新开发者的仓库速览。完整产品文档见 README.md，
-> 设计与变更史以开工基线 [DSH-Pod-项目方案书-v2.0.md](../../DSH-Pod-项目方案书-v2.0.md) 为准（含 CR-01~08）。
+> 设计与变更史以开工基线 [DSH-Pod-项目方案书-v2.0.md](../DSH-Pod-项目方案书-v2.0.md) 为准（含 CR-01~45）。
 
 ## 一句话
 

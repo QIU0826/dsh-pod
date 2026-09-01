@@ -1,7 +1,7 @@
 # dsh-pod（Pod 鲸群）
 
 [![CI](https://github.com/QIU0826/dsh-pod/actions/workflows/ci.yml/badge.svg)](https://github.com/QIU0826/dsh-pod/actions/workflows/ci.yml)
-![tests](https://img.shields.io/badge/tests-727%20passed-brightgreen)
+![tests](https://img.shields.io/badge/tests-743%20passed-brightgreen)
 ![version](https://img.shields.io/badge/version-v0.3.0--alpha.1-blue)
 ![node](https://img.shields.io/badge/node-22%2B-green)
 
@@ -9,7 +9,7 @@
 > 把本机已登录的 DSH / Claude Code / Codex 组成一个团队，各干各擅长的活、互相交接任务，
 > 全程可视化，关键动作由人把关。驾驶舱是产品本体；多 agent 是按需启用的引擎。
 
-开工基线：[DSH-Pod-项目方案书-v2.0.md](../../DSH-Pod-项目方案书-v2.0.md)（含 CR-01 设计变更记录）
+开工基线：[DSH-Pod-项目方案书-v2.0.md](../DSH-Pod-项目方案书-v2.0.md)（含 CR-01~45 设计变更记录）
 
 ## 当前状态（v0.1.0 MVP 发布候选）
 
