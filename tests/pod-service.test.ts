@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { JsonStore } from '../src/core/store.js'
-import { PodService, defaultPlan, EVENT_TAIL_LIMIT } from '../src/pod-service.js'
+import { PodService, defaultPlan, EVENT_TAIL_LIMIT, capEventsByBytes, MISSION_ARCHIVE_EVENTS_MAX_BYTES } from '../src/pod-service.js'
 
 /**
  * PodService 宿主侧闭环测试：commander 自动创建接线 + maintenanceTick 透传 + 默认任务链。
@@ -232,5 +232,43 @@ describe('eventsTail 分页游标（HTTP 轮询路径：超限不丢、同毫秒
   it('afterId 失效（事件已不在窗口）→ 回退 ts 语义，不静默返回空', () => {
     seed(4, (i) => SEED_TS + i)
     expect(service.eventsTail(SEED_TS + 1, 'ghost-id').events.map((e) => e.id)).toEqual(['e2', 'e3'])
+  })
+})
+
+describe('capEventsByBytes：missionArchive 事件尾部字节截断（条数有界≠字节有界）', () => {
+  const ev = (id: string, payloadLen: number): { id: string; payload: string } => ({
+    id,
+    payload: 'x'.repeat(payloadLen),
+  })
+
+  it('累计字节超预算 → 只保留最近的一批，返回时间正序', () => {
+    const events = [ev('e0', 50), ev('e1', 50), ev('e2', 50)]
+    // 每条约 50 字节 payload + JSON 包装；预算放 150 字节，只够最近的 2 条
+    const kept = capEventsByBytes(events, 150)
+    expect(kept.map((e) => e.id)).toEqual(['e1', 'e2'])
+  })
+
+  it('单条事件自身超预算 → 仍保留最近一条，不返回空', () => {
+    const events = [ev('e0', 10_000), ev('e1', 10)]
+    const kept = capEventsByBytes(events, 100)
+    expect(kept.map((e) => e.id)).toEqual(['e1'])
+  })
+
+  it('空输入 → 空输出；预算覆盖全部 → 原样返回', () => {
+    expect(capEventsByBytes([], 100)).toEqual([])
+    const events = [ev('e0', 5), ev('e1', 5)]
+    expect(capEventsByBytes(events, 10_000).map((e) => e.id)).toEqual(['e0', 'e1'])
+  })
+
+  it('大 payload 事件流（500 条 × 8KB）被字节预算压回，实际输出远小于条数上限', () => {
+    const big = Array.from({ length: 500 }, (_, i) => ev(`e${i}`, 8 * 1024))
+    const kept = capEventsByBytes(big, MISSION_ARCHIVE_EVENTS_MAX_BYTES)
+    // 256KB 预算 / 每条约 8KB → 至多 32 条，远小于 500
+    expect(kept.length).toBeGreaterThan(0)
+    expect(kept.length).toBeLessThanOrEqual(33)
+    const totalBytes = kept.reduce((sum, e) => sum + Buffer.byteLength(JSON.stringify(e), 'utf8'), 0)
+    expect(totalBytes).toBeLessThanOrEqual(MISSION_ARCHIVE_EVENTS_MAX_BYTES)
+    // 保留的是最近的事件（尾部），时间正序
+    expect(kept[kept.length - 1]!.id).toBe('e499')
   })
 })

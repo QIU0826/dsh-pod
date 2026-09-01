@@ -61,6 +61,31 @@ export const REFLECTION_INTERVAL_MS = 60_000
  */
 export const EVENT_TAIL_LIMIT = 200
 
+/**
+ * missionArchive 事件尾部的字节预算（历史会话回看端点，按需调用非轮询）。
+ * 此前 `slice(-500)` 条数有界但字节无界——task_context 等 payload 单条可达 8KB，
+ * 极端 500 条 ≈ 4MB/次。这里把「最近的事件」的累计序列化字节压进预算内。
+ */
+export const MISSION_ARCHIVE_EVENTS_MAX_BYTES = 256 * 1024
+
+/**
+ * 按字节截断事件流尾部：从最近的事件往前累加序列化字节，超预算即停。
+ * 始终保留最近一条（即使单条事件自身就超预算），避免返回空。
+ * 返回按时间正序（oldest → newest），与 `slice(-N)` 语义对齐。
+ */
+export function capEventsByBytes<T>(events: T[], maxBytes: number): T[] {
+  const kept: T[] = []
+  let bytes = 0
+  for (let i = events.length - 1; i >= 0; i--) {
+    const size = Buffer.byteLength(JSON.stringify(events[i]), 'utf8')
+    // 最近一条无条件保留；其后的事件若会让累计字节超预算则停止
+    if (kept.length > 0 && bytes + size > maxBytes) break
+    kept.push(events[i]!)
+    bytes += size
+  }
+  return kept.reverse()
+}
+
 /** 事件流对客户端暴露的形状（只留客户端需要的字段，抹掉内部字段）。 */
 export interface EventTailItem {
   id: string
@@ -859,7 +884,7 @@ export class PodService {
         by_stage: summary.byStage,
         by_attempt: summary.byAttempt,
       },
-      events: this.store.listEvents(missionId).slice(-500),
+      events: capEventsByBytes(this.store.listEvents(missionId), MISSION_ARCHIVE_EVENTS_MAX_BYTES),
     }
   }
 

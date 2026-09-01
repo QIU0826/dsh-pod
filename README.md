@@ -1,7 +1,7 @@
 # dsh-pod（Pod 鲸群）
 
 [![CI](https://github.com/QIU0826/dsh-pod/actions/workflows/ci.yml/badge.svg)](https://github.com/QIU0826/dsh-pod/actions/workflows/ci.yml)
-![tests](https://img.shields.io/badge/tests-480%20passed-brightgreen)
+![tests](https://img.shields.io/badge/tests-727%20passed-brightgreen)
 ![version](https://img.shields.io/badge/version-v0.3.0--alpha.1-blue)
 ![node](https://img.shields.io/badge/node-22%2B-green)
 
@@ -46,8 +46,97 @@ node dist/standalone-server.js --host 0.0.0.0 --token <t>  # 非 loopback 监听
 npm run serve                                       # = build + 起服务
 ```
 
-- 复用 `/api/dsh-pod/*` 全部 12 条路由（loopback-only 默认）；Commander 自动编排需 DSH 宿主，独立模式走 HTTP API 手动派发/审批（P2 决策见 docs/STANDALONE-PLAN.md）
+- 复用 `/api/dsh-pod/*` 全部路由（loopback-only 默认，完整清单见下方「HTTP API 面」）；Commander 自动编排需 DSH 宿主，独立模式走 HTTP API 手动派发/审批（P2 决策见 docs/STANDALONE-PLAN.md）
 - `dist/standalone.js` 为 UI bundle（react 全量内联），由 server 静态托管；壳页内嵌于 `src/web/standalone-shell.ts`
+
+## HTTP API 面（loopback-only 默认，非 loopback 一律 403）
+
+> 独立控制台（standalone）与 DSH 插件共用同一路由族。带 body 的写接口强制 `application/json`
+> （CSRF 防线，P1）；所有响应 `cache-control: no-store`。
+
+### 会话 / 编排
+
+| 方法与路径 | 说明 |
+|---|---|
+| `GET /api/dsh-pod/ping` | 健康检查（版本 + 运行时状态） |
+| `GET /api/dsh-pod/status` | 看板快照：mission / tasks / slots / 审批卡 / 账本双列（tokens + equiv_usd） |
+| `POST /api/dsh-pod/launch` | 启动 mission（`name/goal/cwd/slots/budget_usd/budget_tokens/parallel/tenets/plan`） |
+| `POST /api/dsh-pod/steer` | 给槽位发指令（`slot_id` + `instruction`） |
+| `POST /api/dsh-pod/abort` | 中止 mission（`reason`） |
+| `POST /api/dsh-pod/pause` / `/resume` | 暂停 / 恢复 mission（非法状态迁移 → 409） |
+| `POST /api/dsh-pod/dispatch` | 手动模式派单（绕开 LLM 编排） |
+| `POST /api/dsh-pod/resolve` | 人工裁决 escalated 任务（`task_id` + `outcome: done\|blocked`） |
+| `POST /api/dsh-pod/plan` | `action=list\|add\|replan`（任务计划增删 / 重规划） |
+
+### 审批
+
+| 方法与路径 | 说明 |
+|---|---|
+| `POST /api/dsh-pod/approve` | 批准合并（可带 `edited` 编辑参数、`remember_rule` 免弹卡规则） |
+| `POST /api/dsh-pod/deny` | 驳回（`approval_id` + `reason`） |
+| `GET /api/dsh-pod/approvals/detail?id=` | 审批详情 + 可读 diff（白名单根内） |
+
+### 事件流
+
+| 方法与路径 | 说明 |
+|---|---|
+| `GET /api/dsh-pod/events` | 事件流尾部：`after`（ts 游标）/ `after_id`（id 精确游标，同毫秒不丢）+ `cursor` / `has_more` 分页续读 |
+| `GET /api/dsh-pod/events/stream` | SSE：先 replay buffered history 再 1s 增量轮询，客户端按 `id` 去重 |
+
+### 会话中心（mission 历史 = 会话）
+
+| 方法与路径 | 说明 |
+|---|---|
+| `GET /api/dsh-pod/missions` | 会话列表（按创建时间倒序，含状态/预算/token/任务/槽位/最新事件） |
+| `GET /api/dsh-pod/missions/detail?id=` | 单个会话归档快照（对话流/任务/槽位/审批/账本） |
+| `POST /api/dsh-pod/missions/rename` | 重命名会话（`id` + `name`） |
+| `DELETE /api/dsh-pod/missions?id=` | 删除会话（**仅终态**：活跃 → 409 `MISSION_ACTIVE`，先 abort 再删；级联清空归属数据 + worktree + 数据目录） |
+
+### 规则（审批「记住规则」）
+
+| 方法与路径 | 说明 |
+|---|---|
+| `GET /api/dsh-pod/rules` | 列出规则 |
+| `POST /api/dsh-pod/rules` | 记住规则（`tool` + `decision: allow\|deny\|ask`） |
+| `DELETE /api/dsh-pod/rules?id=` | 撤销规则（不存在 → 404） |
+
+### 任务级操作
+
+| 方法与路径 | 说明 |
+|---|---|
+| `POST /api/dsh-pod/task/pause` / `/task/resume` | 任务级暂停 / 恢复（不消费 attempts） |
+| `POST /api/dsh-pod/reassign` | 任务换人（`task_id` + `to_slot_id` + `reason`，交接四件套落盘） |
+
+### 记忆（2.8.1）
+
+| 方法与路径 | 说明 |
+|---|---|
+| `GET /api/dsh-pod/memory` | 查询记忆（`owner/type/tags/importance_min/relation/relates_to/limit`） |
+| `POST /api/dsh-pod/memory` | 写入记忆（`owner_slot_id` + `type`） |
+| `POST /api/dsh-pod/memory/correct` | 纠正记忆（保留变更历史，**不可删除**——可审计优先） |
+
+### 定时任务（Cron）
+
+| 方法与路径 | 说明 |
+|---|---|
+| `GET /api/dsh-pod/cron` | 列出 job + 下次触发时间 |
+| `POST /api/dsh-pod/cron` | 保存 `jobs`（热加载） |
+
+### 文件系统（只读）
+
+| 方法与路径 | 说明 |
+|---|---|
+| `GET /api/dsh-pod/fs/browse?path=` | 只读目录浏览（设置页选仓库） |
+| `GET /api/dsh-pod/assets?path=` | 白名单资产读取（worktree 根集合内，穿越/符号链接逃逸 → 403） |
+
+### 联邦 / A2A 对外面（v0.3）
+
+| 方法与路径 | 说明 |
+|---|---|
+| `GET /.well-known/agent-card` | Agent Card 发现端点（名册即技能表） |
+| `POST /a2a/sendMessage` | 非流式：消息 → mission 受理 → A2A Task 快照 |
+| `POST /a2a/sendMessageStream` | 流式 SSE：快照 + status/artifact 增量至终态 |
+| `POST /a2a` | JSON-RPC（`message/send` \| `message/stream`） |
 
 ## 开发
 

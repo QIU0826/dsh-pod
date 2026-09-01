@@ -83,6 +83,24 @@ describe('会话中心：mission 历史与归档（P2）', () => {
     expect(service.missionArchive('M-nope')).toBeUndefined()
   })
 
+  it('missionArchive：大 payload 事件流按字节截断（条数 500 有界 ≠ 字节有界）', () => {
+    seedMission({ id: 'M-1' })
+    // 500 条 × 8KB payload：旧实现 slice(-500) 会整包返回 ≈ 4MB，现在应被字节预算压回
+    for (let i = 0; i < 500; i += 1) {
+      store.appendEvent('M-1', {
+        id: `ev-${i}`, mission_id: 'M-1', ts: clockNow + i, kind: 'worker_progress',
+        payload: { context: 'x'.repeat(8 * 1024) },
+      } as PodEvent)
+    }
+    const archive = service.missionArchive('M-1')!
+    expect(archive.events.length).toBeGreaterThan(0)
+    expect(archive.events.length).toBeLessThan(500)
+    const totalBytes = archive.events.reduce((sum, e) => sum + Buffer.byteLength(JSON.stringify(e), 'utf8'), 0)
+    expect(totalBytes).toBeLessThanOrEqual(256 * 1024)
+    // 保留的是最近的事件（尾部）
+    expect(archive.events[archive.events.length - 1]!.id).toBe('ev-499')
+  })
+
   it('approvalDetail：diff 在白名单根内可读；根外/超大降级为 null', () => {
     const repo = join(root, 'repo')
     mkdirSync(repo, { recursive: true })
