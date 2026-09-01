@@ -19,8 +19,28 @@ import { makePodRoutes } from '../routes.js'
 import { ClaudeHeadlessBackend } from '../workers/claude-headless.js'
 import { CodexHeadlessBackend, codexBinaryCandidates } from '../workers/codex-headless.js'
 import { OpenCodeHeadlessBackend, opencodeBinaryCandidates } from '../workers/opencode-headless.js'
+import { ArkBackend } from '../workers/ark-headless.js'
 import { DemoBackend } from '../workers/demo-backend.js'
 import { STANDALONE_SHELL_HTML } from '../web/standalone-shell.js'
+import { execFileSync } from 'node:child_process'
+import { homedir } from 'node:os'
+
+/**
+ * ark 后端装配（与 pod-service 默认一致；2026-09-01 补齐 standalone 缺失）：
+ * ARK_API_KEY 环境变量或 ~/.claude/settings.json 的 ARK_API_KEY；无 key 返回 undefined。
+ */
+function makeArkBackend(): ArkBackend | undefined {
+  const envKey = process.env.ARK_API_KEY
+  if (envKey !== undefined && envKey.length > 0) return new ArkBackend({ apiKey: envKey })
+  try {
+    const settingsPath = join(homedir(), '.claude', 'settings.json')
+    if (!existsSync(settingsPath)) return undefined
+    const raw = execFileSync(process.execPath, ['-e', `const s=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));process.stdout.write(String(s.ARK_API_KEY||''))`, settingsPath], { encoding: 'utf8', timeout: 5000, windowsHide: true })
+    return raw.length > 0 ? new ArkBackend({ apiKey: raw }) : undefined
+  } catch {
+    return undefined
+  }
+}
 
 export interface StandaloneOptions {
   /** 监听端口（默认 3930；0 = 随机，listenStandalone 会回填实际端口）。 */
@@ -113,6 +133,7 @@ export function createStandaloneServer(options: StandaloneOptions = {}): Standal
   const staticDir = options.staticDir ?? defaultStaticDir()
   const runtime = createPodRuntime(options.dataDir)
   const opencodeBin = options.opencodeBin ?? opencodeBinaryCandidates(process.platform).find((c) => existsSync(c))
+  const arkBackend = makeArkBackend()
   const service = new PodService({
     store: runtime.store,
     memory: runtime.memory,
@@ -124,6 +145,8 @@ export function createStandaloneServer(options: StandaloneOptions = {}): Standal
           claude: new ClaudeHeadlessBackend({ allowedTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep'] }),
           codex: new CodexHeadlessBackend({ binary: codexBinaryCandidates(process.platform).find((c) => existsSync(c)) ?? 'codex' }),
           opencode: new OpenCodeHeadlessBackend({ binary: opencodeBin ?? 'opencode' }),
+          // ark：补 standalone 缺失（v5 实证「no backend registered for vendor ark」）
+          ...(arkBackend !== undefined ? { ark: arkBackend } : {}),
         },
   })
   const routes = makePodRoutes(() => service)
