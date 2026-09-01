@@ -75,6 +75,18 @@ describe("ArkBackend（火山方舟 Agent Plan）", () => {
     })
     expect(exit).toMatchObject({ exit: "failed", fault: "mismatch" })
   })
+
+  it("start：fetch 抛异常 → fault=crash 且 error_detail 透传（诚实化 D7，不再吞错误）", async () => {
+    const backend = new ArkBackend({
+      apiKey: "ark-x",
+      fetchImpl: fakeFetch(async () => { throw new TypeError("network reset") }),
+    })
+    const exit = await new Promise<unknown>((resolve) => {
+      void backend.start(makeSlot(), makeTask(), "C:/w", { onExit: resolve })
+    })
+    expect(exit).toMatchObject({ exit: "failed", fault: "crash" })
+    expect((exit as { error_detail?: string }).error_detail).toContain("network reset")
+  })
 })
 
   it("complete()：裸调用返回文本（评分/问答类，不要求 MISSION_REPORT）", async () => {

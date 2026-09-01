@@ -1,13 +1,17 @@
 /**
- * 真实 E2E 最小链路（2026-09-01，凭据恢复后）——ark worker 单任务 mission。
+ * 真实 E2E 最小链路（2026-09-01，凭据恢复后）——claude 后端单任务 mission。
  *
  * 目的：凭据恢复后的全链路确认——launch → 协商 → 派发 → 真实 LLM 写码 → verifier
  * 质量门 → 审批卡 → approve 合并 → mission done。此前真实 E2E 一直被凭据阻塞
  * （08-30 记录：引擎/编排/流式链路正确，等有效凭据即可跑通），本脚本是那个收尾。
  *
+ * 为什么用 claude 而非 ark：ark 是 agent-plan 端点（对话/规划型），extractReport
+ * 提取不到 MISSION_REPORT（实测 mismatch）——只适合文本问答，不适合写码 worker；
+ * claude headless（DeepSeek 配置）已被 memory-eval-code 实证可真实写码（8/8 done）。
+ *
  * 用法（先 build）：
- *   node scripts/e2e-ark-mini.mjs [--repo <path>]
- * 需要 ARK_API_KEY（环境变量或 ~/.claude/settings.json）；目标仓库必须存在。
+ *   node scripts/e2e-mini.mjs [--repo <path>]
+ * 需要 claude 后端可用（~/.claude/settings.json DeepSeek 配置）；目标仓库必须存在。
  * 幂等：mission id 含时间戳；数据目录用临时目录（不污染 ~/.dsh/pod）。
  */
 
@@ -16,18 +20,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createPodRuntime } from '../dist/core/pod-runtime.js'
 import { PodService } from '../dist/pod-service.js'
-import { ArkBackend } from '../dist/workers/ark-headless.js'
-import { readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
-
-function arkKey() {
-  const env = process.env.ARK_API_KEY
-  if (env !== undefined && env.length > 0) return env
-  try {
-    const settings = JSON.parse(readFileSync(join(homedir(), '.claude', 'settings.json'), 'utf8'))
-    return settings.ARK_API_KEY ?? ''
-  } catch { return '' }
-}
+import { ClaudeHeadlessBackend } from '../dist/workers/claude-headless.js'
 
 function arg(name, fallback) {
   const i = process.argv.indexOf(name)
@@ -35,8 +28,6 @@ function arg(name, fallback) {
 }
 
 async function main() {
-  const key = arkKey()
-  if (key.length === 0) { console.error('[e2e] ARK_API_KEY missing'); process.exit(2) }
   const repo = arg('--repo', join(process.cwd(), '..', 'pod-demo-repo'))
   console.log('[e2e] repo:', repo)
 
@@ -48,17 +39,19 @@ async function main() {
     approvals: runtime.approvals,
     ledger: runtime.ledger,
     dataDir,
-    backends: { ark: new ArkBackend({ apiKey: key }) },
+    backends: {
+      claude: new ClaudeHeadlessBackend({ allowedTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep'] }),
+    },
   })
 
   const mission = service.launch({
-    name: 'e2e-ark-' + Date.now().toString(36),
+    name: 'e2e-' + Date.now().toString(36),
     goal: '在 src/util.ts 新增并导出函数 isEven(n: number): boolean（纯函数），补对应测试与 example.md 示例，测试通过后 commit（message 含 task-T-1）并输出 MISSION_REPORT',
     cwd: repo,
     budgetUsd: 0.5,
     approvalMode: 1,
     slots: [
-      { id: 'S-1', vendor: 'ark', role: 'implementer', capabilities: ['编码', '测试'], model: 'deepseek-v4-flash' },
+      { id: 'S-1', vendor: 'claude', role: 'implementer', capabilities: ['编码', '测试'], model: 'deepseek-v4-pro' },
     ],
   })
   console.log('[e2e] launched:', mission.id, mission.status)

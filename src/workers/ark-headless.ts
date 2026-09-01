@@ -144,13 +144,16 @@ export class ArkBackend implements WorkerBackend {
         artifacts: report.files_changed ?? [],
       })
     } catch (error) {
+      // 诚实化（D7）：fetch 异常吞掉会让编排器只见「worker failed (exit ?)」零诊断
+      // （08-31 E2E 实证）——异常信息透传到 error/error_detail，与 claude-headless 对齐。
+      const message = error instanceof Error ? error.message : String(error)
       opts.callbacks?.onExit?.({
         exit: 'failed',
         usage: { tokens_in: 0, tokens_out: 0, source: 'unavailable' as UsageSource },
         artifacts: [],
         fault: 'crash',
+        error_detail: message,
       })
-      void error
     }
     void opts.startedAt
   }
