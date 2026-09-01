@@ -15,7 +15,7 @@ import {
 } from '../src/workers/claude-headless.js'
 import { buildClaudeArgs, ClaudeHeadlessBackend } from '../src/workers/claude-headless.js'
 import { classifyFault } from '../src/core/task-machine.js'
-import type { MissionReport, Task } from '../src/core/types.js'
+import type { AgentSlot, MissionReport, Task } from '../src/core/types.js'
 
 const now = 1_700_000_000_000
 
@@ -476,7 +476,7 @@ describe('ClaudeHeadlessBackend.start（FakeSpawner 集成）', () => {
         return spawned
       },
     })
-    const handle = await backend.start(slot, makeTask(), 'W', {
+    const handle = await backend.start(slot, makeTask(), '', {
       onProgress: (e) => {
         progress.push(e.kind)
       },
@@ -531,5 +531,103 @@ describe('buildClaudeArgs 注入面收口（P1：--model/--resume/--session-id �
     expect(() => buildClaudeArgs({ prompt: 'p', cwd: 'C:\w', sessionTier: 'per-mission', sessionRef: 's|id' })).toThrow(/unsafe argv/)
     expect(() => buildClaudeArgs({ prompt: 'p', cwd: 'C:\w', sessionTier: 'per-mission', newSessionId: '%PATH%' })).toThrow(/unsafe argv/)
     expect(() => buildClaudeArgs({ prompt: 'p', cwd: 'C:\w', sessionTier: 'transient', model: 'deepseek-v4-pro' })).not.toThrow()
+  })
+})
+
+describe('commit_sha 权威校正（E2E 实证 2026-09-01：模型手填 sha 19% 不一致）', () => {
+  it('报告 sha 在 worktree 不可解析 → 以 worktree HEAD 覆盖（保守：仅写码类 done）', async () => {
+    const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { execFileSync } = await import('node:child_process')
+    const dir = mkdtempSync(join(tmpdir(), 'pod-sha-correction-'))
+    try {
+      execFileSync('git', ['init', '-q', dir])
+      execFileSync('git', ['-C', dir, 'config', 'user.email', 't@t'])
+      execFileSync('git', ['-C', dir, 'config', 'user.name', 't'])
+      writeFileSync(join(dir, 'a.ts'), 'x')
+      execFileSync('git', ['-C', dir, 'add', '.'])
+      execFileSync('git', ['-C', dir, 'commit', '-qm', 'task-T-1: real commit'])
+      const realHead = execFileSync('git', ['-C', dir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+      const fakeReport = '完成。```json{"task_id":"T-3","task_type":"implement","status":"done","summary":"s","files_changed":["a.ts"],"commit_sha":"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef","test_command":"npm test","test_result":"not_run","decisions":[],"blockers":[],"questions":[]}```'
+      const events = ['{"type":"result","is_error":false,"result":' + JSON.stringify(fakeReport) + ',"session_id":"s","usage":{"input_tokens":1,"output_tokens":1}}']
+      let captured: { report?: MissionReport } | undefined
+      const backend = new ClaudeHeadlessBackend({
+        clock: () => now,
+        spawner: () => {
+          let sink: (line: string) => void = () => {}
+          const spawned = {
+            child: { pid: 1 } as never,
+            stderrTail: [],
+            onLine() {},
+            writeStdin() {},
+            exited: Promise.resolve({ code: 0, signal: null, timedOut: false }),
+          }
+          Object.defineProperty(spawned, 'onLine', {
+            set(fn: (line: string) => void) {
+              sink = fn
+              for (const line of events) fn(line)
+            },
+            get() {
+              return sink
+            },
+          })
+          return spawned
+        },
+      })
+      const slot: AgentSlot = { id: 'S-1', mission_id: 'M-1', vendor: 'claude', role: 'implementer', capabilities: ['编码'], model: 'deepseek-v4-pro', effort: 'medium', session_tier: 'transient', status: 'idle', tokens_in: 0, tokens_out: 0, ctx_usage_pct: 0, window_tokens: 200_000 }
+      await backend.start(slot, makeTask(), dir, { onExit: (c) => { captured = c } })
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      expect(captured?.report?.commit_sha).toBe(realHead) // 编造 sha 被真实 HEAD 覆盖
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('报告 sha 可解析 → 保持原值（不画蛇添足）', async () => {
+    const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { execFileSync } = await import('node:child_process')
+    const dir = mkdtempSync(join(tmpdir(), 'pod-sha-keep-'))
+    try {
+      execFileSync('git', ['init', '-q', dir])
+      execFileSync('git', ['-C', dir, 'config', 'user.email', 't@t'])
+      execFileSync('git', ['-C', dir, 'config', 'user.name', 't'])
+      writeFileSync(join(dir, 'a.ts'), 'x')
+      execFileSync('git', ['-C', dir, 'add', '.'])
+      execFileSync('git', ['-C', dir, 'commit', '-qm', 'task-T-1: real commit'])
+      const realHead = execFileSync('git', ['-C', dir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+      const okReport = '完成。```json{"task_id":"T-3","task_type":"implement","status":"done","summary":"s","files_changed":["a.ts"],"commit_sha":"' + realHead + '","test_command":"npm test","test_result":"not_run","decisions":[],"blockers":[],"questions":[]}```'
+      const events = ['{"type":"result","is_error":false,"result":' + JSON.stringify(okReport) + ',"session_id":"s","usage":{"input_tokens":1,"output_tokens":1}}']
+      let captured: { report?: MissionReport } | undefined
+      const backend = new ClaudeHeadlessBackend({
+        clock: () => now,
+        spawner: () => {
+          let sink: (line: string) => void = () => {}
+          const spawned = {
+            child: { pid: 1 } as never,
+            stderrTail: [],
+            onLine() {},
+            writeStdin() {},
+            exited: Promise.resolve({ code: 0, signal: null, timedOut: false }),
+          }
+          Object.defineProperty(spawned, 'onLine', {
+            set(fn: (line: string) => void) {
+              sink = fn
+              for (const line of events) fn(line)
+            },
+            get() {
+              return sink
+            },
+          })
+          return spawned
+        },
+      })
+      const slot: AgentSlot = { id: 'S-1', mission_id: 'M-1', vendor: 'claude', role: 'implementer', capabilities: ['编码'], model: 'deepseek-v4-pro', effort: 'medium', session_tier: 'transient', status: 'idle', tokens_in: 0, tokens_out: 0, ctx_usage_pct: 0, window_tokens: 200_000 }
+      await backend.start(slot, makeTask(), dir, { onExit: (c) => { captured = c } })
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      expect(captured?.report?.commit_sha).toBe(realHead)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

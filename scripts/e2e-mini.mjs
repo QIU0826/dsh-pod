@@ -46,12 +46,15 @@ async function main() {
 
   const mission = service.launch({
     name: 'e2e-' + Date.now().toString(36),
-    goal: '在 src/util.ts 新增并导出函数 isEven(n: number): boolean（纯函数），补对应测试与 example.md 示例，测试通过后 commit（message 含 task-T-1）并输出 MISSION_REPORT',
+    goal: '在 src/util.ts 新增并导出函数 isEven(n: number): boolean（纯函数），补对应测试（tests/isEven.test.ts）与 example.md 示例；运行测试并把测试输出保存为 out/task-T-1.testlog，MISSION_REPORT 的 test_evidence 字段必须注明输出路径（如 out/task-T-1.testlog）；测试通过后 git commit（message 含 task-T-1），MISSION_REPORT 的 commit_sha 填真实 commit hash',
     cwd: repo,
     budgetUsd: 0.5,
     approvalMode: 1,
     slots: [
       { id: 'S-1', vendor: 'claude', role: 'implementer', capabilities: ['编码', '测试'], model: 'deepseek-v4-pro' },
+      // 默认两步链（CR-06-5：实现 + 独立 review）需要审查者槽位——只配 implementer
+      // 时 review 无人可派 → escalated「no routable slot」，mission 停在 running 不 done
+      { id: 'S-2', vendor: 'claude', role: 'reviewer', capabilities: ['审查', '编码'], model: 'deepseek-v4-pro' },
     ],
   })
   console.log('[e2e] launched:', mission.id, mission.status)

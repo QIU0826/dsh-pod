@@ -13,7 +13,9 @@
  * Windows 专项：claude 以 .cmd 分发 → win32 下 spawn 必须 shell:true（本机实证 ENOENT）。
  */
 
-import { spawn, type ChildProcess } from 'node:child_process'
+import { execFile as execFileCb, spawn, type ChildProcess } from 'node:child_process'
+import { promisify } from 'node:util'
+const execFileAsync = promisify(execFileCb)
 import { killTree } from './kill-tree.js'
 import { assertSafeArgvToken } from './argv-guard.js'
 import { randomUUID } from 'node:crypto'
@@ -445,7 +447,7 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
     const spawned = this.spawnClaude(args, worktree, env)
     spawned.writeStdin(prompt)
     const handle: WorkerHandle = { pid: spawned.child.pid }
-    const session = this.collect(slot, task, spawned, callbacks)
+    const session = this.collect(slot, task, worktree, spawned, callbacks)
     session.then(({ sessionRef, completion }) => {
       handle.session_ref = sessionRef
       callbacks.onExit?.(completion)
@@ -532,6 +534,7 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
   private async collect(
     slot: AgentSlot,
     task: Task,
+    worktree: string,
     spawned: SpawnedClaude,
     callbacks: {
       onProgress?(event: WorkerProgressEvent): void
@@ -570,6 +573,27 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
     const envelope = claudeErrorEnvelope(resultEvent, lastRetry, exit)
     const text = resultEvent === undefined ? '' : (extractResultText(resultEvent) ?? '')
     const report = extractReport(text)
+    // commit_sha 权威校正（E2E 实证 2026-09-01）：模型在 MISSION_REPORT 里手填的
+    // commit_sha 与真实 commit 不一致率 ≈19%（16 个写码任务 3 个错）——verifier 按
+    // fail-closed 会把「真实成功」判成 silent_failure。保守校正：仅当报告存在、任务为
+    // 写码类、status=done 且报告 sha 在 worktree 无法解析时，以 worktree HEAD 真实
+    // sha 覆盖——绝不从无到有补 sha（无 sha 保持原判，防谎报 done 绕过 fail-plausible）。
+    if (report !== undefined && report.status === 'done' && (task.type === 'implement' || task.type === 'test') && typeof report.commit_sha === 'string' && report.commit_sha.length > 0 && worktree.length > 0) {
+      try {
+        await execFileAsync('git', ['-C', worktree, 'rev-parse', '--verify', '--quiet', `${report.commit_sha}^{commit}`], { timeout: 5000, windowsHide: true })
+      } catch {
+        try {
+          const head = await execFileAsync('git', ['-C', worktree, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 5000, windowsHide: true })
+          const headSha = head.stdout.trim()
+          if (/^[0-9a-f]{40}$/.test(headSha) && headSha !== report.commit_sha) {
+            console.warn(`[claude-headless] report commit_sha 不可解析（${report.commit_sha}），以 worktree HEAD 校正为 ${headSha}`)
+            report.commit_sha = headSha
+          }
+        } catch {
+          // HEAD 也取不到（worktree 异常）：保持原值，交 verifier fail-closed
+        }
+      }
+    }
     const exitKind: WorkerCompletion['exit'] =
       exit.spawnFailed ? 'failed' : errorInfo.isError && fault === null ? 'failed' : fault === 'rate_limited' ? 'rate_limited' : exit.timedOut ? 'timeout' : fault !== null ? 'failed' : 'done'
     let errorDetail: string | undefined
