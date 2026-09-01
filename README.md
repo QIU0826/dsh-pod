@@ -1,7 +1,7 @@
 # dsh-pod（Pod 鲸群）
 
 [![CI](https://github.com/QIU0826/dsh-pod/actions/workflows/ci.yml/badge.svg)](https://github.com/QIU0826/dsh-pod/actions/workflows/ci.yml)
-![tests](https://img.shields.io/badge/tests-743%20passed-brightgreen)
+![tests](https://img.shields.io/badge/tests-818%20passed-brightgreen)
 ![version](https://img.shields.io/badge/version-v0.3.0--alpha.1-blue)
 ![node](https://img.shields.io/badge/node-22%2B-green)
 
@@ -245,6 +245,7 @@ vendor 验签失败/时间窗过期/缺凭据一律 401 fail-closed；非 loopba
 |---|---|---|
 | 审批模式 2/3 经 experiments 灰度接入（Berd-E） | ✅ | `launch approvalMode` 校验：模式 2（交接确认，跨 agent 派活前弹卡）/ 模式 3（全自动，质量门通过即 done）需对应 `approval-mode-2`/`approval-mode-3` 开关开启；默认模式 1 行为不变；dispatch 卡经 `pod_approve` 分支裁决 |
 | 记忆子系统 2.8.1（CR-07 / NOOA 借鉴） | ✅ | `src/core/memory.ts`：MemoryStore（`~/.dsh/pod/memory.json` 原子写）+ 类型化图谱（supports/contradicts/derived-from）+ 三工具 `pod_mem_write/query/correct` + 后台 reflection（合并/补边/剪枝，接入 maintenanceTick） |
+| 记忆运行时注入 top-k（P1-4 深化①，2026-09-01） | ✅ | 派发注入从「importance≥3 硬门 + 标签」升级为 `src/core/memory-rank.ts` 的 **BM25 关键词相关性**（ASCII 词 + CJK bigram 分词，候选池内 IDF，tag 命中与 importance 作加权；门槛=查询词重叠 / tag 命中 / importance≥4）。任务文本（title+spec+skill_tags）做查询——低重要度强相关的记忆越过旧硬门入选且排前 |
 | 记忆收益验收（方案书 258 行） | ✅ | `scripts/memory-eval.mjs`：同一任务集（项目特定经验）记忆组 vs 基线组 + LLM 自评三维。真实 Ark 运行：三维均值记忆 4.667 vs 基线 4.000（**+0.667**，准确性 +1.00）；负向记录：知识型问题平局（记忆价值在经验复用非百科）。Debrief 见 reports/memory-eval/ |
 | Ledger→路由权重（历史成功率，2.7 节） | ✅ | `dispatcher.routeTask` 增 `slotSuccess` 因子：能力 > 负载 > 单任务成本 > 历史成功率（降序），无数据视为中性 0.5 不劣化；orchestrator 按槽位统计 done/(done+blocked+escalated) 注入 |
 | 并行执行强化（双路+，4.3） | ✅ | `LaunchInput.parallel`（默认 2，clamp 1-8，pod_launch 可传）+ `run()` 用 `dispatchBatch` 每轮填满 maxParallel 而非单路派 1 即等；依赖链仍串行不破坏拓扑；FakeBackend 增 delayMs/并发峰值验证 peakActive |
