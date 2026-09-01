@@ -65,6 +65,12 @@ export interface PodStore {
   getActiveMission(): Mission | undefined
   createMission(mission: Mission): void
   updateMission(id: string, patch: Partial<Mission>): void
+  /**
+   * 删除整条 mission 及其全部归属数据（slots/tasks/handoffs/ledger/reset_entries/
+   * approvals/events 按 mission_id 级联）。规则与 memory 等 mission 无关的知识层
+   * 不在此列（知识层跨会话沉淀，2.8.1）。不存在抛 NotFoundError。
+   */
+  deleteMission(id: string): void
   getSlot(id: string): AgentSlot | undefined
   listSlots(missionId: string): AgentSlot[]
   createSlot(slot: AgentSlot): void
@@ -302,6 +308,26 @@ export class JsonStore implements PodStore {
     const existing = data.missions[id]
     if (existing === undefined) throw new NotFoundError('mission', id)
     data.missions[id] = { ...existing, ...patch, id, updated_at: this.clock() }
+    this.persist()
+  }
+
+  deleteMission(id: string): void {
+    const data = this.requireData()
+    if (data.missions[id] === undefined) throw new NotFoundError('mission', id)
+    delete data.missions[id]
+    delete data.events[id]
+    for (const key of Object.keys(data.slots)) {
+      if (data.slots[key]!.mission_id === id) delete data.slots[key]
+    }
+    for (const key of Object.keys(data.tasks)) {
+      if (data.tasks[key]!.mission_id === id) delete data.tasks[key]
+    }
+    data.handoffs = data.handoffs.filter((h) => h.mission_id !== id)
+    data.ledger = data.ledger.filter((e) => e.mission_id !== id)
+    data.resetEntries = data.resetEntries.filter((e) => e.mission_id !== id)
+    for (const key of Object.keys(data.approvals)) {
+      if (data.approvals[key]!.mission_id === id) delete data.approvals[key]
+    }
     this.persist()
   }
 

@@ -11,6 +11,7 @@ import {
   fetchMissionArchive,
   fetchMissions,
   fetchStatus,
+  deleteMission,
   postAbort,
   postApprove,
   postDeny,
@@ -20,6 +21,7 @@ import {
   fetchAssetText,
   postPlan,
   postReassign,
+  postRenameMission,
   postTaskPause,
   postTaskResume,
   postResolve,
@@ -257,6 +259,28 @@ export function PodPanel(): ReactElement {
     setView(target)
   }
 
+  /** 删除历史会话（仅终态）：二次确认 + 成功后刷新列表并归位选中态。 */
+  const handleDeleteMission = (id: string): void => {
+    const target = missions.find((m) => m.id === id)
+    if (target !== undefined && target.active) {
+      setError('当前会话仍在运行，先中止再删除')
+      return
+    }
+    if (!window.confirm(`删除会话「${target?.goal ?? id}」？\n\n将清空该会话的全部任务、审批、账本、事件与 worktree，且不可恢复。`)) return
+    void runAction(async () => {
+      await deleteMission(id)
+      if (selectedSessionId === id) setSelectedSessionId(null)
+    })
+  }
+
+  /** 重命名会话：prompt 取新名（预填当前名）。 */
+  const handleRenameMission = (id: string): void => {
+    const target = missions.find((m) => m.id === id)
+    const name = window.prompt('新的会话名：', target?.name ?? '')
+    if (name === null || name.trim().length === 0) return
+    void runAction(() => postRenameMission(id, name.trim()))
+  }
+
   /**
    * 导航项。图标下方带短标签——此前是纯图标，只能靠悬浮提示（触屏无法悬浮，
    * 自动化脚本也会因为 textContent 为空而漏掉），新用户基本发现不了。
@@ -335,6 +359,8 @@ export function PodPanel(): ReactElement {
               onSelect: (id) => setSelectedSessionId(id),
               onOpen: openSession,
               onNew: handleNewSession,
+              onRename: handleRenameMission,
+              onDelete: handleDeleteMission,
             })
           : view === 'chat'
             ? createElement(ChatView, {

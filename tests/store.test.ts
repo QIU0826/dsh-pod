@@ -222,6 +222,78 @@ describe('JsonStore mutations', () => {
   })
 })
 
+describe('JsonStore deleteMission（会话删除：按 mission_id 级联清空）', () => {
+  function seed(store: JsonStore): void {
+    store.createMission(makeMission({ id: 'M-1', status: 'done' }))
+    store.createMission(makeMission({ id: 'M-2', status: 'done' }))
+    for (const mid of ['M-1', 'M-2']) {
+      store.createSlot({
+        id: `S-${mid}`, mission_id: mid, vendor: 'claude', role: 'implementer', capabilities: ['编码'],
+        model: 'deepseek-v4-pro', effort: 'medium', session_tier: 'per-mission', status: 'idle',
+        tokens_in: 0, tokens_out: 0, ctx_usage_pct: 0, window_tokens: 200_000,
+      })
+      store.createTask({
+        id: `T-${mid}`, mission_id: mid, title: 't', spec: 's', skill_tags: ['编码'], type: 'implement',
+        depends_on: [], status: 'done', attempts: 0, soft_attempts: 0,
+        max_wall_clock_ms: 3600_000, created_at: clockNow, updated_at: clockNow, owner_slot_id: `S-${mid}`,
+      })
+      store.addHandoff({
+        id: `H-${mid}`, mission_id: mid, from_slot: `S-${mid}`, to_slot: `S-${mid}`, task_id: `T-${mid}`,
+        mode: 'queue', ts: clockNow,
+        payload: { intent: { brief: 'b', constraints: [], acceptance: 'a' }, artifacts: { spec: 's', context_files: [] }, state: { tried: [], blockers: [] }, expected_output: 'e', verify: [] },
+      })
+      store.addLedgerEntry({
+        mission_id: mid, slot_id: `S-${mid}`, model: 'deepseek-v4-pro', ts: clockNow,
+        tokens_in: 10, tokens_out: 5, equiv_usd: 0.01, price_table_version: 'v1', price_known: true, usage_source: 'measured',
+      })
+      store.addResetEntry({
+        id: `RE-${mid}`, mission_id: mid, slot_id: `S-${mid}`, type: 'fact', content: 'done', status: 'active', ts: clockNow,
+      })
+      store.createApproval({
+        id: `A-${mid}`, mission_id: mid, status: 'pending', created_at: clockNow,
+        patch: { slot_id: `S-${mid}`, worktree_path: `C:\\w\\${mid}`, summary: 'merge' },
+      })
+      store.appendEvent(mid, { id: `E-${mid}`, mission_id: mid, ts: clockNow, kind: 'test', payload: {} })
+    }
+  }
+
+  it('级联删除 mission 及其全部归属，其他 mission 数据不受影响', () => {
+    const store = makeStore()
+    store.open()
+    seed(store)
+    store.flush()
+    store.deleteMission('M-1')
+    expect(store.getMission('M-1')).toBeUndefined()
+    expect(store.getMission('M-2')).toBeDefined()
+    expect(store.listSlots('M-1')).toEqual([])
+    expect(store.listTasks('M-1')).toEqual([])
+    expect(store.listHandoffs('M-1')).toEqual([])
+    expect(store.listLedger('M-1')).toEqual([])
+    expect(store.listResetEntries('M-1')).toEqual([])
+    expect(store.listApprovals('M-1')).toEqual([])
+    expect(store.listEvents('M-1')).toEqual([])
+    // 相邻 mission 的每类集合都原样保留（无越界删除）
+    expect(store.listSlots('M-2')).toHaveLength(1)
+    expect(store.listTasks('M-2')).toHaveLength(1)
+    expect(store.listHandoffs('M-2')).toHaveLength(1)
+    expect(store.listLedger('M-2')).toHaveLength(1)
+    expect(store.listResetEntries('M-2')).toHaveLength(1)
+    expect(store.listApprovals('M-2')).toHaveLength(1)
+    expect(store.listEvents('M-2')).toHaveLength(1)
+    // 跨重启：删除持久化（磁盘唯一事实源）
+    const reopened = makeStore()
+    reopened.open()
+    expect(reopened.getMission('M-1')).toBeUndefined()
+    expect(reopened.getMission('M-2')).toBeDefined()
+  })
+
+  it('删除不存在的 mission 抛 NotFoundError', () => {
+    const store = makeStore()
+    store.open()
+    expect(() => store.deleteMission('nope')).toThrowError(NotFoundError)
+  })
+})
+
 describe('崩溃窗口恢复（P0：主文件缺失时回读 .bak，绝不静默开空库）', () => {
   it('persist 两次 rename 之间中断（main 缺失、bak 完好）→ open 从 .bak 恢复', () => {
     const dir = mkdtempSync(join(tmpdir(), 'pod-bak-'))

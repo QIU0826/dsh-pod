@@ -10,13 +10,13 @@
 import { homedir } from 'node:os'
 import { join, sep } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { ApprovalEngine } from './core/approvals.js'
 import { ApplyPatch, execGitRunner, type ApplyResult } from './core/apply-patch.js'
 import { BackendsLock } from './core/backends-lock.js'
 import { Experiments } from './core/experiments.js'
 import { MemoryStore, type ReflectionResult } from './core/memory.js'
-import { PodError } from './core/errors.js'
+import { PodError, NotFoundError } from './core/errors.js'
 import { Ledger } from './core/ledger.js'
 import { Notifier } from './core/notifier.js'
 import { MissionOrchestrator, type LaunchInput, type PlanTaskInput, type RunSummary } from './core/orchestrator.js'
@@ -860,6 +860,66 @@ export class PodService {
         by_attempt: summary.byAttempt,
       },
       events: this.store.listEvents(missionId).slice(-500),
+    }
+  }
+
+  /**
+   * 删除历史会话（仅终态）。级联清空 mission 归属数据 + 数据目录（plan.md 等）
+   * + best-effort worktree 移除。活跃/非终态会话拒绝（在途状态删除会留僵尸；
+   * 先 abort 再删）。memory 知识层不受影响（跨会话沉淀，2.8.1）。
+   */
+  deleteMission(missionId: string): { ok: true; removed: { missions: number; slots: number; tasks: number; handoffs: number; ledger: number; events: number } } {
+    const mission = this.store.getMission(missionId)
+    if (mission === undefined) throw new NotFoundError('mission', missionId)
+    if (mission.status !== 'done' && mission.status !== 'aborted') {
+      throw new PodError(`会话仍在运行（${mission.status}），请先中止再删除`, 'MISSION_ACTIVE')
+    }
+    if (this.orchestrator !== undefined && this.orchestrator.missionId === missionId) {
+      throw new PodError('当前编排器正在驱动该会话，无法删除', 'MISSION_ACTIVE')
+    }
+    const slots = this.store.listSlots(missionId)
+    const removed = {
+      missions: 1,
+      slots: slots.length,
+      tasks: this.store.listTasks(missionId).length,
+      handoffs: this.store.listHandoffs(missionId).length,
+      ledger: this.store.listLedger(missionId).length,
+      events: this.store.listEvents(missionId).length,
+    }
+    // best-effort：先移除 worktree（真实 git 数据 + .git/worktrees 元数据），失败不阻断 store 删除
+    for (const slot of slots) this.removeWorktree(slot.worktree_path)
+    this.store.deleteMission(missionId)
+    this.removeMissionDir(missionId)
+    return { ok: true, removed }
+  }
+
+  /** 重命名会话（历史会话回看时的可读名）。 */
+  renameMission(missionId: string, name: string): { ok: true } {
+    if (this.store.getMission(missionId) === undefined) throw new NotFoundError('mission', missionId)
+    const trimmed = name.trim()
+    if (trimmed.length === 0) throw new PodError('会话名不能为空', 'INVALID_NAME')
+    this.store.updateMission(missionId, { name: trimmed })
+    return { ok: true }
+  }
+
+  /** best-effort：`git worktree remove --force` 移除 worktree（git 校验真伪，非 worktree 不动）。 */
+  private removeWorktree(path: string | undefined): void {
+    if (path === undefined || path.length === 0 || !existsSync(path)) return
+    try {
+      execFileSync('git', ['worktree', 'remove', '--force', path], { stdio: 'pipe', timeout: 30_000, windowsHide: true })
+    } catch (error) {
+      console.error(`[dsh-pod] worktree remove failed (left in place): ${path}`, error instanceof Error ? error.message : error)
+    }
+  }
+
+  /** 清理 mission 数据目录（~/.dsh/pod/missions/<id>：plan.md 等派生文件）。 */
+  private removeMissionDir(missionId: string): void {
+    const dir = join(this.dataDir, 'missions', missionId)
+    if (!existsSync(dir)) return
+    try {
+      rmSync(dir, { recursive: true, force: true })
+    } catch (error) {
+      console.error(`[dsh-pod] mission dir remove failed (left in place): ${dir}`, error instanceof Error ? error.message : error)
     }
   }
 

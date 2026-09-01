@@ -206,6 +206,38 @@ export class SqliteStore implements PodStore {
     this.upsertJson('missions', id, { ...existing, ...patch, id, updated_at: this.clock() })
   }
 
+  deleteMission(id: string): void {
+    const db = this.requireDb()
+    if (this.getMission(id) === undefined) throw new NotFoundError('mission', id)
+    const slotIds = this.listSlots(id).map((s) => s.id)
+    const taskKeys = this.listTasks(id).map((t) => `${t.mission_id}::${t.id}`)
+    const handoffIds = this.listHandoffs(id).map((h) => h.id)
+    const resetIds = this.listResetEntries(id).map((e) => e.id)
+    const approvalIds = this.listApprovals(id).map((a) => a.id)
+    // ledger 无业务主键（seq 自增），按 data 里的 mission_id 定位行
+    const ledgerRows = db.prepare('SELECT seq, data FROM ledger').all() as Array<{ seq: number; data: string }>
+    const ledgerSeq = ledgerRows
+      .filter((r) => (JSON.parse(r.data) as LedgerEntry).mission_id === id)
+      .map((r) => r.seq)
+    const tx = db.transaction(() => {
+      db.prepare('DELETE FROM missions WHERE id = ?').run(id)
+      db.prepare('DELETE FROM events WHERE mission_id = ?').run(id)
+      const delById = db.prepare('DELETE FROM slots WHERE id = ?')
+      for (const sid of slotIds) delById.run(sid)
+      const delTask = db.prepare('DELETE FROM tasks WHERE id = ?')
+      for (const key of taskKeys) delTask.run(key)
+      const delHandoff = db.prepare('DELETE FROM handoffs WHERE id = ?')
+      for (const hid of handoffIds) delHandoff.run(hid)
+      const delReset = db.prepare('DELETE FROM reset_entries WHERE id = ?')
+      for (const rid of resetIds) delReset.run(rid)
+      const delApproval = db.prepare('DELETE FROM approvals WHERE id = ?')
+      for (const aid of approvalIds) delApproval.run(aid)
+      const delLedger = db.prepare('DELETE FROM ledger WHERE seq = ?')
+      for (const seq of ledgerSeq) delLedger.run(seq)
+    })
+    tx()
+  }
+
   getSlot(id: string): AgentSlot | undefined {
     return this.getJson<AgentSlot>('slots', id)
   }

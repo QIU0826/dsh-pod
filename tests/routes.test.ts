@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { makePodRoutes, validateLaunch, formatSseFrame } from '../src/routes.js'
 import type { PodService } from '../src/pod-service.js'
 import type { ApprovalRule } from '../src/core/types.js'
-import { NotFoundError } from '../src/core/errors.js'
+import { NotFoundError, PodError } from '../src/core/errors.js'
 
 /** 手工构造响应捕获对象。 */
 function captureResponse() {
@@ -475,6 +475,90 @@ describe('/api/dsh-pod/rules（审批规则：列 / 记 / 撤）', () => {
     await route.handler({ url: '/api/dsh-pod/rules?id=R-1', method: 'DELETE', socket: { remoteAddress: '10.0.0.5' } } as unknown as IncomingMessage, res)
     expect(written[0]!.status).toBe(403)
     expect(rules.size).toBe(2)
+  })
+})
+
+describe('DELETE /api/dsh-pod/missions 与 POST /missions/rename（会话删除/重命名接 HTTP）', () => {
+  const MISSION_PATH = '/api/dsh-pod/missions'
+  const RENAME_PATH = '/api/dsh-pod/missions/rename'
+
+  function bodyRequest(url: string, method: string, body: unknown, remoteAddress = '127.0.0.1'): IncomingMessage {
+    return {
+      url, method, socket: { remoteAddress },
+      [Symbol.asyncIterator]() {
+        const chunks = [Buffer.from(JSON.stringify(body))]
+        let index = 0
+        return {
+          next: () =>
+            index < chunks.length
+              ? Promise.resolve({ done: false, value: chunks[index++] })
+              : Promise.resolve({ done: true, value: undefined }),
+        }
+      },
+    } as unknown as IncomingMessage
+  }
+
+  it('DELETE 存在的终态会话 → 200 且服务端 deleteMission 被调用', async () => {
+    const deleted: string[] = []
+    const service = fakeService({
+      deleteMission: (id: string) => { deleted.push(id); return { ok: true, removed: { missions: 1, slots: 1, tasks: 1, handoffs: 0, ledger: 0, events: 1 } } },
+    })
+    const route = makePodRoutes(() => service).find((r) => r.path === MISSION_PATH)!
+    const { res, written } = captureResponse()
+    await route.handler({ url: `${MISSION_PATH}?id=M-1`, method: 'DELETE', socket: { remoteAddress: '127.0.0.1' } } as unknown as IncomingMessage, res)
+    expect(written[0]!.status).toBe(200)
+    expect((written[0]!.body as { ok: boolean }).ok).toBe(true)
+    expect(deleted).toEqual(['M-1'])
+  })
+
+  it('DELETE 活跃会话（MISSION_ACTIVE）→ 409 而非静默成功', async () => {
+    const service = fakeService({
+      deleteMission: () => { throw new PodError('会话仍在运行', 'MISSION_ACTIVE') },
+    })
+    const route = makePodRoutes(() => service).find((r) => r.path === MISSION_PATH)!
+    const { res, written } = captureResponse()
+    await route.handler({ url: `${MISSION_PATH}?id=M-1`, method: 'DELETE', socket: { remoteAddress: '127.0.0.1' } } as unknown as IncomingMessage, res)
+    expect(written[0]!.status).toBe(409)
+    expect((written[0]!.body as { code: string }).code).toBe('MISSION_ACTIVE')
+  })
+
+  it('DELETE 不存在的会话 → 404', async () => {
+    const service = fakeService({
+      deleteMission: () => { throw new NotFoundError('mission', 'nope') },
+    })
+    const route = makePodRoutes(() => service).find((r) => r.path === MISSION_PATH)!
+    const { res, written } = captureResponse()
+    await route.handler({ url: `${MISSION_PATH}?id=nope`, method: 'DELETE', socket: { remoteAddress: '127.0.0.1' } } as unknown as IncomingMessage, res)
+    expect(written[0]!.status).toBe(404)
+  })
+
+  it('DELETE 缺 id → 422；非 loopback → 403', async () => {
+    const route = makePodRoutes(() => fakeService()).find((r) => r.path === MISSION_PATH)!
+    const { res: r1, written: w1 } = captureResponse()
+    await route.handler({ url: MISSION_PATH, method: 'DELETE', socket: { remoteAddress: '127.0.0.1' } } as unknown as IncomingMessage, r1)
+    expect(w1[0]!.status).toBe(422)
+    const { res: r2, written: w2 } = captureResponse()
+    await route.handler({ url: `${MISSION_PATH}?id=M-1`, method: 'DELETE', socket: { remoteAddress: '10.0.0.5' } } as unknown as IncomingMessage, r2)
+    expect(w2[0]!.status).toBe(403)
+  })
+
+  it('POST rename → 200 且服务端 renameMission 被调用', async () => {
+    const calls: Array<{ id: string; name: string }> = []
+    const service = fakeService({
+      renameMission: (id: string, name: string) => { calls.push({ id, name }); return { ok: true } },
+    })
+    const route = makePodRoutes(() => service).find((r) => r.path === RENAME_PATH)!
+    const { res, written } = captureResponse()
+    await route.handler(bodyRequest(RENAME_PATH, 'POST', { id: 'M-1', name: '新名字' }), res)
+    expect(written[0]!.status).toBe(200)
+    expect(calls).toEqual([{ id: 'M-1', name: '新名字' }])
+  })
+
+  it('POST rename 缺 id/name → 422', async () => {
+    const route = makePodRoutes(() => fakeService()).find((r) => r.path === RENAME_PATH)!
+    const { res, written } = captureResponse()
+    await route.handler(bodyRequest(RENAME_PATH, 'POST', { name: 'x' }), res)
+    expect(written[0]!.status).toBe(422)
   })
 })
 

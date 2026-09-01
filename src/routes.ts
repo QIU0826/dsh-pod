@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import type { PodService } from './pod-service.js'
 import { resolveAsset, contentTypeFor } from './core/asset-whitelist.js'
 import { allowsJsonBody } from './core/http-guard.js'
-import { NotFoundError } from './core/errors.js'
+import { NotFoundError, PodError } from './core/errors.js'
 import { browseDirectories } from './core/fs-browse.js'
 import type { PlanTaskInput } from './core/orchestrator.js'
 import { buildAgentCard, internalEventToA2a, isFinalA2aEvent, missionToA2aTask } from './core/a2a.js'
@@ -700,11 +700,77 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
           writeJson(res, 503, { error: 'pod runtime not initialized' })
           return
         }
-        if (req.method !== 'GET') {
+        if (req.method === 'GET') {
+          writeJson(res, 200, { missions: current.missionSummaries() })
+          return
+        }
+        // DELETE：删除历史会话（仅终态）。此前会话只增不减——运行完成的会话无法从
+        // 列表移除，磁盘/事件/账本持续累积。级联清空归属数据 + worktree + 数据目录。
+        if (req.method === 'DELETE') {
+          const url = new URL(req.url ?? '/', 'http://localhost')
+          const id = (url.searchParams.get('id') ?? '').trim()
+          if (id.length === 0) {
+            writeJson(res, 422, { error: 'id is required' })
+            return
+          }
+          try {
+            writeJson(res, 200, current.deleteMission(id))
+          } catch (error) {
+            if (error instanceof NotFoundError) {
+              writeJson(res, 404, { error: error.message })
+              return
+            }
+            if (error instanceof PodError && error.code === 'MISSION_ACTIVE') {
+              writeJson(res, 409, { error: error.message, code: error.code })
+              return
+            }
+            console.error('[dsh-pod] route handler failed:', error)
+            writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
+          }
+          return
+        }
+        writeJson(res, 405, { error: 'method not allowed' })
+      },
+    },
+    {
+      // 重命名会话：会话名此前 launch 即定、不可改，历史回看时只能靠目标文本辨认。
+      kind: 'exact',
+      path: '/api/dsh-pod/missions/rename',
+      handler: async (req, res) => {
+        if (!isLoopback(req)) {
+          writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        const current = service()
+        if (current === undefined) {
+          writeJson(res, 503, { error: 'pod runtime not initialized' })
+          return
+        }
+        if (req.method !== 'POST') {
           writeJson(res, 405, { error: 'method not allowed' })
           return
         }
-        writeJson(res, 200, { missions: current.missionSummaries() })
+        const body = await readJsonBody(req)
+        const id = typeof body?.id === 'string' ? body.id.trim() : ''
+        const name = typeof body?.name === 'string' ? body.name.trim() : ''
+        if (id.length === 0) {
+          writeJson(res, 422, { error: 'id is required' })
+          return
+        }
+        if (name.length === 0) {
+          writeJson(res, 422, { error: 'name is required' })
+          return
+        }
+        try {
+          writeJson(res, 200, current.renameMission(id, name))
+        } catch (error) {
+          if (error instanceof NotFoundError) {
+            writeJson(res, 404, { error: error.message })
+            return
+          }
+          console.error('[dsh-pod] route handler failed:', error)
+          writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
+        }
       },
     },
     {

@@ -15,6 +15,10 @@ export interface SessionsViewProps {
   onSelect: (id: string) => void
   onOpen: (id: string, view: 'chat' | 'board' | 'dag') => void
   onNew: () => void
+  /** 重命名会话（window.prompt 取新名）。 */
+  onRename: (id: string) => void
+  /** 删除会话（仅终态；调用方二次确认）。 */
+  onDelete: (id: string) => void
 }
 
 function StatusPill({ status }: { status: string }): ReactElement {
@@ -23,7 +27,7 @@ function StatusPill({ status }: { status: string }): ReactElement {
 }
 
 export function SessionsView(props: SessionsViewProps): ReactElement {
-  const { missions, selectedId, onSelect, onOpen, onNew } = props
+  const { missions, selectedId, onSelect, onOpen, onNew, onRename, onDelete } = props
   const selected = missions.find((m) => m.id === selectedId) ?? missions[0]
 
   return createElement('div', { className: 'dsh-view' },
@@ -110,6 +114,17 @@ export function SessionsView(props: SessionsViewProps): ReactElement {
                 createElement('button', { className: 'dsh-btn', type: 'button', onClick: () => onOpen(selected.id, 'board') },
                   Icon('kanban', 15), '看板'),
                 createElement('button', { className: 'dsh-btn', type: 'button', onClick: () => onOpen(selected.id, 'dag') },
-                  Icon('network', 15), 'DAG'))))
+                  Icon('network', 15), 'DAG')),
+              createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 } },
+                createElement('button', { className: 'dsh-btn ghost', type: 'button', onClick: () => onRename(selected.id) },
+                  Icon('edit', 15), '重命名'),
+                createElement('button', {
+                  className: 'dsh-btn destructive',
+                  type: 'button',
+                  disabled: selected.active,
+                  title: selected.active ? '当前会话仍在运行，先中止再删除' : '删除该会话及其全部历史（不可恢复）',
+                  onClick: () => onDelete(selected.id),
+                },
+                  Icon('trash', 15), '删除'))))
         : null))
 }

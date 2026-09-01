@@ -152,6 +152,42 @@ describe('SqliteStore 接口（与 JsonStore 同 PodStore 契约）', () => {
     expect(reopened.listEvents('M-1')).toHaveLength(1)
     reopened.close()
   })
+
+  it('deleteMission 级联删除全部归属表（含无主键的 ledger 按 seq），其他 mission 保留', () => {
+    const store = new SqliteStore({ rootDir: root, clock: () => clockNow })
+    store.open()
+    store.createMission(makeMission({ id: 'M-1', status: 'done' }))
+    store.createMission(makeMission({ id: 'M-2', status: 'done' }))
+    for (const mid of ['M-1', 'M-2']) {
+      store.createSlot(makeSlot(`S-${mid}`, mid))
+      store.createTask({ id: `T-${mid}`, mission_id: mid, title: 't', spec: 's', skill_tags: [], type: 'implement', depends_on: [], status: 'done', attempts: 0, soft_attempts: 0, max_wall_clock_ms: 3600_000, created_at: clockNow, updated_at: clockNow })
+      store.addHandoff({ id: `H-${mid}`, mission_id: mid, from_slot: `S-${mid}`, to_slot: `S-${mid}`, task_id: `T-${mid}`, mode: 'queue', ts: clockNow, payload: { intent: { brief: 'b', constraints: [], acceptance: 'a' }, artifacts: { spec: 's', context_files: [] }, state: { tried: [], blockers: [] }, expected_output: 'e', verify: [] } })
+      store.addLedgerEntry({ mission_id: mid, slot_id: `S-${mid}`, model: 'deepseek-v4-pro', ts: clockNow, tokens_in: 10, tokens_out: 5, equiv_usd: 0.01, price_table_version: 'v1', price_known: true, usage_source: 'measured' })
+      store.addResetEntry({ id: `RE-${mid}`, mission_id: mid, slot_id: `S-${mid}`, type: 'fact', content: 'done', status: 'active', ts: clockNow })
+      store.createApproval({ id: `A-${mid}`, mission_id: mid, status: 'pending', created_at: clockNow, patch: { slot_id: `S-${mid}`, worktree_path: `C:\\w\\${mid}`, summary: 'merge' } })
+      store.appendEvent(mid, { id: `E-${mid}`, mission_id: mid, ts: clockNow, kind: 'test', payload: {} })
+    }
+    store.deleteMission('M-1')
+    expect(store.getMission('M-1')).toBeUndefined()
+    expect(store.listSlots('M-1')).toEqual([])
+    expect(store.listTasks('M-1')).toEqual([])
+    expect(store.listHandoffs('M-1')).toEqual([])
+    expect(store.listLedger('M-1')).toEqual([])
+    expect(store.listResetEntries('M-1')).toEqual([])
+    expect(store.listApprovals('M-1')).toEqual([])
+    expect(store.listEvents('M-1')).toEqual([])
+    // 相邻 mission 每类集合原样保留
+    expect(store.getMission('M-2')).toBeDefined()
+    expect(store.listSlots('M-2')).toHaveLength(1)
+    expect(store.listTasks('M-2')).toHaveLength(1)
+    expect(store.listHandoffs('M-2')).toHaveLength(1)
+    expect(store.listLedger('M-2')).toHaveLength(1)
+    expect(store.listResetEntries('M-2')).toHaveLength(1)
+    expect(store.listApprovals('M-2')).toHaveLength(1)
+    expect(store.listEvents('M-2')).toHaveLength(1)
+    expect(() => store.deleteMission('nope')).toThrowError(NotFoundError)
+    store.close()
+  })
 })
 
 describe('存量 store.json → pod.db 迁移（非破坏）', () => {

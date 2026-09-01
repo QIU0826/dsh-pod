@@ -219,6 +219,18 @@ export async function fetchMissionArchive(missionId: string): Promise<MissionArc
   )
 }
 
+/** 删除历史会话（仅终态）：级联清空归属数据 + worktree + 数据目录。活跃会话后端回 409。 */
+export async function deleteMission(missionId: string): Promise<{ ok: boolean; removed: { missions: number; slots: number; tasks: number; handoffs: number; ledger: number; events: number } }> {
+  return readJson<{ ok: boolean; removed: { missions: number; slots: number; tasks: number; handoffs: number; ledger: number; events: number } }>(
+    await fetch(`/api/dsh-pod/missions?id=${encodeURIComponent(missionId)}`, { method: 'DELETE' }),
+  )
+}
+
+/** 重命名会话（历史回看时的可读名）。 */
+export async function postRenameMission(missionId: string, name: string): Promise<{ ok: boolean }> {
+  return postJson('/api/dsh-pod/missions/rename', { id: missionId, name })
+}
+
 /** 审批详情（合并审批页）。 */
 export interface ApprovalDetail {
   id: string
