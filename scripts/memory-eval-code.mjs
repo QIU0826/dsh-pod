@@ -163,6 +163,7 @@ async function main() {
       '写码型记忆收益验收（补齐 258 行「工具型任务待 claude 后端另验」）；claude 后端真实写码（DeepSeek 配置）',
       '同构任务换函数（mod/pow）防记忆内容直接泄露给基线组；记忆注入的是项目风格经验（测试约定/目录/commit 规范）',
       'usage 来自 claude -p 实测（usage_audit 能力位）；NOOA +11.8 是配对基准不可直接移植（CR-07-4）',
+      'commit_sha 以 worker 层权威校正为准（claude-headless 4d45bc3：报告 sha 不可解析时用 worktree HEAD）；2026-09-01 前旧批次（partial-0-2/2-10）有 3 个报告 sha 与真实 commit 不一致（模型手填 19% 错误率实证），不影响 token/wall 统计结论',
     ],
   }
   writeFileSync(join(reportsDir, 'summary.json'), JSON.stringify(summary, null, 2), 'utf8')
