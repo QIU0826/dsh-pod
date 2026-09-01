@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, rmSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import {
@@ -535,8 +535,27 @@ describe('buildClaudeArgs 注入面收口（P1：--model/--resume/--session-id �
 })
 
 describe('commit_sha 权威校正（E2E 实证 2026-09-01：模型手填 sha 19% 不一致）', () => {
+  // 全量并行下 collect 内的 git 调用变慢：轮询等 onExit（不用固定 setTimeout，避免时序竞争）
+  async function waitForExit(get: () => unknown, timeoutMs = 5_000): Promise<void> {
+    const t0 = Date.now()
+    while (get() === undefined && Date.now() - t0 < timeoutMs) {
+      await new Promise((r) => setTimeout(r, 20))
+    }
+  }
+  // Windows 下 git 子进程句柄延迟释放 → rmSync 偶发 EBUSY：重试 + 宽限
+  function safeRm(dir: string): void {
+    for (let i = 0; i < 5; i++) {
+      try {
+        rmSync(dir, { recursive: true, force: true })
+        return
+      } catch {
+        // 句柄未释放，稍候重试
+      }
+    }
+  }
+
   it('报告 sha 在 worktree 不可解析 → 以 worktree HEAD 覆盖（保守：仅写码类 done）', async () => {
-    const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs')
+    const { mkdtempSync, writeFileSync } = await import('node:fs')
     const { tmpdir } = await import('node:os')
     const { execFileSync } = await import('node:child_process')
     const dir = mkdtempSync(join(tmpdir(), 'pod-sha-correction-'))
@@ -576,15 +595,15 @@ describe('commit_sha 权威校正（E2E 实证 2026-09-01：模型手填 sha 19%
       })
       const slot: AgentSlot = { id: 'S-1', mission_id: 'M-1', vendor: 'claude', role: 'implementer', capabilities: ['编码'], model: 'deepseek-v4-pro', effort: 'medium', session_tier: 'transient', status: 'idle', tokens_in: 0, tokens_out: 0, ctx_usage_pct: 0, window_tokens: 200_000 }
       await backend.start(slot, makeTask(), dir, { onExit: (c) => { captured = c } })
-      await new Promise((resolve) => setTimeout(resolve, 100))
+      await waitForExit(() => captured)
       expect(captured?.report?.commit_sha).toBe(realHead) // 编造 sha 被真实 HEAD 覆盖
     } finally {
-      rmSync(dir, { recursive: true, force: true })
+      safeRm(dir)
     }
   })
 
   it('报告 sha 可解析 → 保持原值（不画蛇添足）', async () => {
-    const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs')
+    const { mkdtempSync, writeFileSync } = await import('node:fs')
     const { tmpdir } = await import('node:os')
     const { execFileSync } = await import('node:child_process')
     const dir = mkdtempSync(join(tmpdir(), 'pod-sha-keep-'))
@@ -624,10 +643,10 @@ describe('commit_sha 权威校正（E2E 实证 2026-09-01：模型手填 sha 19%
       })
       const slot: AgentSlot = { id: 'S-1', mission_id: 'M-1', vendor: 'claude', role: 'implementer', capabilities: ['编码'], model: 'deepseek-v4-pro', effort: 'medium', session_tier: 'transient', status: 'idle', tokens_in: 0, tokens_out: 0, ctx_usage_pct: 0, window_tokens: 200_000 }
       await backend.start(slot, makeTask(), dir, { onExit: (c) => { captured = c } })
-      await new Promise((resolve) => setTimeout(resolve, 100))
+      await waitForExit(() => captured)
       expect(captured?.report?.commit_sha).toBe(realHead)
     } finally {
-      rmSync(dir, { recursive: true, force: true })
+      safeRm(dir)
     }
   })
 })
