@@ -79,12 +79,20 @@ async function main() {
     const r = await service.approve(atApproval.pendingApprovals[0].id, 'e2e')
     console.log('[e2e] approve:', JSON.stringify(r))
   }
-  const final = await poll((st) => st.mission?.status === 'done' || st.mission?.status === 'aborted', 5 * 60_000, 'mission terminal')
-  console.log('[e2e] final mission status:', final.mission?.status)
-  const doneTasks = final.tasks.filter((t) => t.status === 'done').length
-  const ok = final.mission?.status === 'done' && doneTasks >= 1
-  console.log('[e2e] tasks:', JSON.stringify(final.tasks.map((t) => ({ id: t.id, status: t.status, attempts: t.attempts, fault: t.fault ?? null }))))
-  console.log('[e2e] VERDICT:', ok ? 'PASS — 真实全链路（协商→派发→写码→质量门→合并→done）闭环' : 'FAIL')
+  // 终态检测直接查 store（E2E 实证 2026-09-01）：status().mission 只对活跃 mission 有效
+  // ——mission done 后 getActiveMission() 返回 undefined，status() 对象里没有 mission 字段，
+  // 用它轮询会永远等不到 done（第 7 轮全链路已 PASS 却报 terminal 超时）。
+  const final = await poll(() => {
+    const m = runtime.store.getMission(mission.id)
+    return m?.status === 'done' || m?.status === 'aborted'
+  }, 5 * 60_000, 'mission terminal')
+  const m = runtime.store.getMission(mission.id)
+  console.log('[e2e] final mission status:', m?.status)
+  const allTasks = runtime.store.listTasks(mission.id)
+  const doneTasks = allTasks.filter((t) => t.status === 'done').length
+  const ok = m?.status === 'done' && doneTasks >= 1
+  console.log('[e2e] tasks:', JSON.stringify(allTasks.map((t) => ({ id: t.id, status: t.status, attempts: t.attempts, fault: t.fault ?? null }))))
+  console.log('[e2e] VERDICT:', ok ? 'PASS — 真实全链路（协商→派发→写码→质量门→审查→审批→合并→done）闭环' : 'FAIL')
 
   runtime.close()
   rmSync(dataDir, { recursive: true, force: true })
