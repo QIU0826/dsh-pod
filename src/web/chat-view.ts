@@ -189,6 +189,8 @@ export interface ChatViewProps {
   ledger: { total_tokens: number; total_equiv_usd: number; tokens_in: number; tokens_out: number }
   /** 按执行阶段（任务类型）的 token 归因（unknown = 无任务归属）。 */
   ledgerByStage: Record<string, { tokens: number; equiv_usd: number; entries: number }>
+  /** 按尝试次数的 token 归因（'0'=首派，'1'/'2'=重试；unknown=老条目）。 */
+  ledgerByAttempt: Record<string, { tokens: number; equiv_usd: number; entries: number }>
   pendingApprovals: Array<{ id: string; summary: string }>
   userMessages: Array<{ id: string; ts: number; text: string }>
   answered: Set<string>
@@ -217,7 +219,7 @@ const SIDE_MIN = 232
 const SIDE_MAX = 480
 
 export function ChatView(props: ChatViewProps): ReactElement {
-  const { live, mission, tasks, slots, events, ledger, ledgerByStage, pendingApprovals, userMessages, answered, settings, selectedSlot, onSelectSlot, onSend, onAnswer, onApprove, onViewApproval, onDispatch, onAbort, onOpenContext, onPause, onResume, canPause, isPaused, onNewSession } = props
+  const { live, mission, tasks, slots, events, ledger, ledgerByStage, ledgerByAttempt, pendingApprovals, userMessages, answered, settings, selectedSlot, onSelectSlot, onSend, onAnswer, onApprove, onViewApproval, onDispatch, onAbort, onOpenContext, onPause, onResume, canPause, isPaused, onNewSession } = props
   const [draft, setDraft] = useState('')
   const [dismissed, setDismissed] = useState<Set<string>>(new Set())
   const [modalChoice, setModalChoice] = useState<'continue' | 'clarify' | 'escalate'>('continue')
@@ -233,6 +235,18 @@ export function ChatView(props: ChatViewProps): ReactElement {
   const noiseFloor = settings.density === 'compact' ? 1 : settings.density === 'standard' ? 2 : 3
   const visible = items.filter((it) => (it.k !== 'sys' && it.k !== 'relay') || it.noise < noiseFloor)
   const openQuestion = items.find((it) => it.k === 'question' && !answered.has(it.key) && !dismissed.has(it.key))
+
+  // 失败路径成本：除 '0'（首派）与 'unknown'（老条目）之外所有 attempts 桶之和。
+  // 有重试才显示，没有则归 null（不渲染一行「重试成本 0」）。
+  const retryCost = (() => {
+    const retries = Object.entries(ledgerByAttempt).filter(([k]) => k !== '0' && k !== 'unknown')
+    if (retries.length === 0) return null
+    return {
+      attempts: retries.reduce((a, [, v]) => a + v.entries, 0),
+      tokens: retries.reduce((a, [, v]) => a + v.tokens, 0),
+      usd: retries.reduce((a, [, v]) => a + v.equiv_usd, 0),
+    }
+  })()
 
   useEffect(() => {
     // scrollIntoView 非标准宿主/测试环境可能缺失（实测 jsdom 下整页崩）：
@@ -483,6 +497,13 @@ export function ChatView(props: ChatViewProps): ReactElement {
               createElement('div', { className: 'dsh-kvrow', key: stage },
                 createElement('span', null, TASK_TYPE_LABEL[stage] ?? stage),
                 createElement('span', { className: 'dsh-mono' }, `${fmtTokens(v.tokens)} · $${v.equiv_usd.toFixed(4)}`))))
+        : null,
+      retryCost !== null
+        ? createElement('div', { style: { marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--line)' }, key: 'retry' },
+            createElement('div', { className: 'dsh-kvrow', style: { marginTop: 0, color: 'var(--ink-3)' } }, createElement('span', null, '重试成本')),
+            createElement('div', { className: 'dsh-kvrow' },
+              createElement('span', null, `${retryCost.attempts} 次失败尝试`),
+              createElement('span', { className: 'dsh-mono', style: { color: 'var(--ink)' } }, `${fmtTokens(retryCost.tokens)} · $${retryCost.usd.toFixed(4)}`)))
         : null),
     createElement('div', null,
       createElement('div', { className: 'dsh-side-title' }, `代理槽位（${slots.length}）`),

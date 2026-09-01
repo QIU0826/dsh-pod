@@ -230,3 +230,47 @@ describe('summary.byStage（阶段归因：review 到底烧了多少）', () => 
     expect(summed).toBe(s.total_tokens)
   })
 })
+
+describe('summary.byAttempt（失败路径单独计数：重试到底烧了多少，与 byStage 正交）', () => {
+  it('首派与重试分桶：attempts=0 进 0 桶，重试进 1/2 桶', () => {
+    ledger.recordUsage('M-1', 'S-1', 'T-1', 'claude-sonnet', 10_000, 5_000, 'measured', undefined, undefined, 0)
+    ledger.recordUsage('M-1', 'S-1', 'T-1', 'claude-sonnet', 10_000, 5_000, 'measured', undefined, undefined, 1)
+    ledger.recordUsage('M-1', 'S-1', 'T-1', 'claude-sonnet', 10_000, 5_000, 'measured', undefined, undefined, 2)
+
+    const s = ledger.summary('M-1')
+    expect(s.byAttempt['0']?.tokens).toBe(15_000)
+    expect(s.byAttempt['1']?.tokens).toBe(15_000)
+    expect(s.byAttempt['2']?.tokens).toBe(15_000)
+    expect(s.byAttempt['0']?.entries).toBe(1)
+  })
+
+  it('重试成本 = 除 0 与 unknown 之外所有桶之和', () => {
+    ledger.recordUsage('M-1', 'S-1', 'T-1', 'claude-sonnet', 10_000, 5_000, 'measured', undefined, undefined, 0)
+    ledger.recordUsage('M-1', 'S-1', 'T-1', 'claude-sonnet', 10_000, 5_000, 'measured', undefined, undefined, 1)
+    ledger.recordUsage('M-1', 'S-1', 'T-1', 'claude-sonnet', 10_000, 5_000, 'measured', undefined, undefined, 2)
+
+    const s = ledger.summary('M-1')
+    const retryTokens = Object.entries(s.byAttempt)
+      .filter(([k]) => k !== '0' && k !== 'unknown')
+      .reduce((acc, [, b]) => acc + b.tokens, 0)
+    expect(retryTokens).toBe(30_000) // 两次重试各 15K
+  })
+
+  it('老条目（无 attempts 字段）→ 归入 unknown，不静默丢账', () => {
+    ledger.recordUsage('M-1', 'S-1', 'T-1', 'claude-sonnet', 10_000, 5_000, 'measured')
+
+    const s = ledger.summary('M-1')
+    expect(s.byAttempt.unknown?.tokens).toBe(15_000)
+    expect(s.byAttempt['0']).toBeUndefined()
+  })
+
+  it('总额守恒：attempts 各桶之和 = total_tokens', () => {
+    ledger.recordUsage('M-1', 'S-1', 'T-1', 'claude-sonnet', 10_000, 5_000, 'measured', undefined, undefined, 0)
+    ledger.recordUsage('M-1', 'S-1', 'T-1', 'claude-sonnet', 10_000, 5_000, 'measured', undefined, undefined, 1)
+    ledger.recordUsage('M-1', 'S-1', 'T-ghost', 'claude-sonnet', 1_000, 500, 'measured')
+
+    const s = ledger.summary('M-1')
+    const summed = Object.values(s.byAttempt).reduce((acc, b) => acc + b.tokens, 0)
+    expect(summed).toBe(s.total_tokens)
+  })
+})

@@ -75,6 +75,8 @@ export class Ledger {
     cacheReadTokens?: number,
     /** prompt cache 写入 token（P0-2，claude result.usage.cache_creation_input_tokens）。 */
     cacheCreationTokens?: number,
+    /** 本次 usage 属于第几次尝试（0=首派，≥1=重试）；失败路径单独计数。 */
+    attempts?: number,
   ): LedgerEntry {
     if (!Number.isFinite(tokensIn) || !Number.isFinite(tokensOut) || tokensIn < 0 || tokensOut < 0) {
       throw new PodError('token usage must be finite non-negative numbers', 'INVALID_USAGE', { tokensIn, tokensOut })
@@ -94,6 +96,7 @@ export class Ledger {
       tokens_out: tokensOut,
       ...(cacheReadTokens !== undefined ? { cache_read_tokens: cacheReadTokens } : {}),
       ...(cacheCreationTokens !== undefined ? { cache_creation_tokens: cacheCreationTokens } : {}),
+      ...(attempts !== undefined ? { attempts } : {}),
       equiv_usd: equivUsd,
       price_table_version: this.priceTable.version,
       price_known: priceKnown,
@@ -176,11 +179,18 @@ export class Ledger {
     byModel: Record<string, { tokens: number; equiv_usd: number; entries: number }>
     /** 按任务类型（= 执行阶段）拆解；查不到任务归入 `unknown`，不静默丢账。 */
     byStage: Record<string, { tokens: number; equiv_usd: number; entries: number }>
+    /**
+     * 按尝试次数拆解（失败路径单独计数，与 byStage 正交）：key 为 attempts 数值的字符串
+     * （'0'=首派，'1'/'2'=重试）。查不到 attempts 的老条目归入 `unknown`。重试成本
+     * = 除 '0' 与 'unknown' 之外所有桶之和，即「失败烧掉的钱」。
+     */
+    byAttempt: Record<string, { tokens: number; equiv_usd: number; entries: number }>
   } {
     const entries = this.store.listLedger(missionId)
     const bySlot: Record<string, { tokens: number; equiv_usd: number; entries: number }> = {}
     const byModel: Record<string, { tokens: number; equiv_usd: number; entries: number }> = {}
     const byStage: Record<string, { tokens: number; equiv_usd: number; entries: number }> = {}
+    const byAttempt: Record<string, { tokens: number; equiv_usd: number; entries: number }> = {}
     // 同一任务会被多次采样（流式/重试），缓存避免重复查 store
     const stageOf = new Map<string, string>()
     let totalTokens = 0
@@ -213,6 +223,14 @@ export class Ledger {
         entries: stageBucket.entries + 1,
       }
 
+      const attemptKey = entry.attempts !== undefined ? String(entry.attempts) : 'unknown'
+      const attemptBucket = byAttempt[attemptKey] ?? { tokens: 0, equiv_usd: 0, entries: 0 }
+      byAttempt[attemptKey] = {
+        tokens: attemptBucket.tokens + tokens,
+        equiv_usd: attemptBucket.equiv_usd + entry.equiv_usd,
+        entries: attemptBucket.entries + 1,
+      }
+
       for (const [key, bucket] of [[entry.slot_id, bySlot], [entry.model, byModel]] as const) {
         const current = bucket[key] ?? { tokens: 0, equiv_usd: 0, entries: 0 }
         bucket[key] = {
@@ -231,6 +249,7 @@ export class Ledger {
       bySlot,
       byModel,
       byStage,
+      byAttempt,
     }
   }
 }

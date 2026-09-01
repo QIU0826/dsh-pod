@@ -753,15 +753,17 @@ export class PodService {
     total_equiv_usd: number
     entries: LedgerEntry[]
     by_stage: Record<string, { tokens: number; equiv_usd: number; entries: number }>
+    by_attempt: Record<string, { tokens: number; equiv_usd: number; entries: number }>
   } {
     const active = this.store.getActiveMission()
-    if (active === undefined) return { total_tokens: 0, total_equiv_usd: 0, entries: [], by_stage: {} }
+    if (active === undefined) return { total_tokens: 0, total_equiv_usd: 0, entries: [], by_stage: {}, by_attempt: {} }
     const summary = new Ledger(this.store).summary(active.id)
     return {
       total_tokens: summary.total_tokens,
       total_equiv_usd: Number(summary.total_equiv_usd.toFixed(6)),
       entries: summary.entries,
       by_stage: summary.byStage,
+      by_attempt: summary.byAttempt,
     }
   }
 
@@ -825,7 +827,7 @@ export class PodService {
     tasks: Array<{ id: string; title: string; type: string; status: string; fault: string | null; attempts: number; owner: string | null; commit: string | null; depends_on: string[]; spec: string }>
     slots: Array<{ id: string; role: string; vendor: string; status: string; ctx_usage_pct: number; avatar: string | null }>
     approvals: Array<{ id: string; status: string; decided_at: number | null; task_id: string | null; summary: string; worktree_path: string; kind: string }>
-    ledger: { total_tokens: number; total_equiv_usd: number; entries: Array<{ model: string; tokens_in: number; tokens_out: number; equiv_usd: number; ts: number }>; by_stage: Record<string, { tokens: number; equiv_usd: number; entries: number }> }
+    ledger: { total_tokens: number; total_equiv_usd: number; entries: Array<{ model: string; tokens_in: number; tokens_out: number; equiv_usd: number; ts: number }>; by_stage: Record<string, { tokens: number; equiv_usd: number; entries: number }>; by_attempt: Record<string, { tokens: number; equiv_usd: number; entries: number }> }
     events: PodEvent[]
   } | undefined {
     const mission = this.store.getMission(missionId)
@@ -833,6 +835,7 @@ export class PodService {
     const entries = this.store.listLedger(missionId)
     const totalTokens = entries.reduce((sum, e) => sum + e.tokens_in + e.tokens_out, 0)
     const totalUsd = entries.reduce((sum, e) => sum + e.equiv_usd, 0)
+    const summary = new Ledger(this.store).summary(missionId)
     return {
       mission: {
         id: mission.id, name: mission.name, goal: mission.goal, status: mission.status,
@@ -853,7 +856,8 @@ export class PodService {
         total_tokens: totalTokens,
         total_equiv_usd: Number(totalUsd.toFixed(6)),
         entries: entries.slice(-50).map((e) => ({ model: e.model, tokens_in: e.tokens_in, tokens_out: e.tokens_out, equiv_usd: e.equiv_usd, ts: e.ts })),
-        by_stage: new Ledger(this.store).summary(missionId).byStage,
+        by_stage: summary.byStage,
+        by_attempt: summary.byAttempt,
       },
       events: this.store.listEvents(missionId).slice(-500),
     }

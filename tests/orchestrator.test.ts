@@ -378,6 +378,9 @@ describe('run 最小可演示链（fake 后端）', () => {
     expect(fixture.store.getTask('T-1')!.status).toBe('done')
     expect(fixture.store.getTask('T-1')!.attempts).toBe(1)
     expect(summary.status).toBe('awaiting_approval')
+    // 失败路径单独计数接线：T-1 两笔 usage 分别带 attempts=0（首派失败）与 1（重试成功）
+    const t1Entries = fixture.store.listLedger('M-1').filter((e) => e.task_id === 'T-1')
+    expect(t1Entries.map((e) => e.attempts).sort()).toEqual([0, 1])
   })
 
   it('连续失败 3 次 → 转人工 escalated', async () => {

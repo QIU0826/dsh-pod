@@ -247,6 +247,8 @@ export interface LedgerEntry {
   ts: number
   tokens_in: number
   tokens_out: number
+  /** 本次 usage 属于第几次尝试（0=首派，≥1=重试）。重试成本 = 失败路径烧掉的钱。 */
+  attempts?: number
   /** prompt cache 命中读 token（P0-2，实测 result.usage.cache_read_input_tokens）。 */
   cache_read_tokens?: number
   /** prompt cache 写入 token（P0-2，实测 result.usage.cache_creation_input_tokens）。 */

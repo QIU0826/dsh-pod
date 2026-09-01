@@ -75,6 +75,8 @@ export interface StatusResponse {
     entries: LedgerEntry[]
     /** 按任务类型（执行阶段）归因：plan/implement/review/…；无任务归属归入 unknown。 */
     by_stage?: Record<string, { tokens: number; equiv_usd: number; entries: number }>
+    /** 按尝试次数归因（失败路径单独计数）：'0'=首派，'1'/'2'=重试；老条目归入 unknown。 */
+    by_attempt?: Record<string, { tokens: number; equiv_usd: number; entries: number }>
   }
   runStatus?: string
   /** 演示模式（--demo）：agent 为脚本演员，不执行真实任务。 */
@@ -206,6 +208,7 @@ export interface MissionArchive {
     total_equiv_usd: number
     entries: Array<{ model: string; tokens_in: number; tokens_out: number; equiv_usd: number; ts: number }>
     by_stage?: Record<string, { tokens: number; equiv_usd: number; entries: number }>
+    by_attempt?: Record<string, { tokens: number; equiv_usd: number; entries: number }>
   }
   events: PodEvent[]
 }

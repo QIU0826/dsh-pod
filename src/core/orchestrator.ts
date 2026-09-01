@@ -1096,6 +1096,7 @@ export class MissionOrchestrator {
           completion.usage.source,
           completion.usage.cache_read_tokens,
           completion.usage.cache_creation_tokens,
+          task.attempts,
         )
       } catch (error) {
         if (error instanceof PodError && error.code === 'BUDGET_EXCEEDED') {
