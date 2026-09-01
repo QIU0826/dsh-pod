@@ -709,7 +709,7 @@ export class PodService {
    * 优先 afterId（事件 id 精确定位，同毫秒事件不丢）；缺省/失效回退 ts 严格比较。
    * （审计 P1 修复：此前 SSE 与轮询只有后者修了同毫秒丢事件，此处是漏掉的对称路径。）
    */
-  eventsAfter(afterTs: number, afterId?: string): Array<{ id: string; ts: number; kind: string; task_id?: string; slot_id?: string; payload: Record<string, unknown> }> {
+  eventsAfter(afterTs: number, afterId?: string): Array<{ id: string; ts: number; kind: string; mission_id?: string; task_id?: string; slot_id?: string; payload: Record<string, unknown> }> {
     const missions = this.store.listMissions().filter((m) => m.status !== 'done' && m.status !== 'aborted')
     // Array.sort 自 ES2019 稳定：同 ts 事件保持落盘顺序，id 定位才可靠
     const sorted = missions.flatMap((m) => this.store.listEvents(m.id)).sort((a, b) => a.ts - b.ts)
@@ -723,6 +723,9 @@ export class PodService {
       id: e.id,
       ts: e.ts,
       kind: e.kind,
+      // 归属字段（P2-3 push notification 用）：eventsAfter 是「全部活跃 mission」的混流，
+      // 订阅方按 mission 过滤必需此字段。增量字段：SSE/轮询客户端按 id 去重，不受影响。
+      mission_id: e.mission_id,
       task_id: e.task_id,
       slot_id: e.slot_id,
       payload: e.payload,

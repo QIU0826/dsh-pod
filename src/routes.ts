@@ -19,7 +19,8 @@ import { allowsJsonBody } from './core/http-guard.js'
 import { NotFoundError, PodError } from './core/errors.js'
 import { browseDirectories } from './core/fs-browse.js'
 import type { PlanTaskInput } from './core/orchestrator.js'
-import { buildAgentCard, internalEventToA2a, isFinalA2aEvent, missionToA2aTask } from './core/a2a.js'
+import { buildAgentCard, internalEventToA2a, isFinalA2aEvent, missionToA2aTask, parsePushConfig } from './core/a2a.js'
+import { createA2aPushRegistry } from './a2a-push.js'
 import { AGENT_AVATARS, UNLIMITED_BUDGET_USD } from './core/types.js'
 import type { PodEvent, TaskType, Vendor } from './core/types.js'
 
@@ -176,6 +177,9 @@ export function parseA2aBody(
   }
 }
 
+/** A2A push notification watcher 注册表（模块级：与路由同生命周期，mission 级键）。 */
+const a2aPush = createA2aPushRegistry()
+
 /**
  * A2A sendMessage / sendMessageStream 公共处理：
  * 消息 → launch mission（A2A Task = mission）→ 非流式回 Task 快照；
@@ -220,6 +224,10 @@ async function handleA2aSend(
     return
   }
   const snapshot = missionToA2aTask(mission, parsed.value.goal)
+  // Push Notification（v1.0 §4.3）：客户端给了 pushNotificationConfig → 注册终态 webhook
+  // watcher（与 SSE 并存；非流式 sendMessage 也可纯靠回调收结果）。
+  const pushConfig = parsePushConfig(params)
+  if (pushConfig !== undefined) a2aPush.register(current, mission.id, pushConfig)
   if (!opts.stream) {
     writeJson(res, 200, opts.jsonRpcId !== undefined ? { jsonrpc: '2.0', id: opts.jsonRpcId, result: snapshot } : snapshot)
     return

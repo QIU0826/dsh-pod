@@ -129,14 +129,22 @@ npm run serve                                       # = build + 起服务
 | `GET /api/dsh-pod/fs/browse?path=` | 只读目录浏览（设置页选仓库） |
 | `GET /api/dsh-pod/assets?path=` | 白名单资产读取（worktree 根集合内，穿越/符号链接逃逸 → 403） |
 
-### 联邦 / A2A 对外面（v0.3）
+### 联邦 / A2A 对外面（v0.3，v1.0 对齐）
 
 | 方法与路径 | 说明 |
 |---|---|
-| `GET /.well-known/agent-card` | Agent Card 发现端点（名册即技能表） |
-| `POST /a2a/sendMessage` | 非流式：消息 → mission 受理 → A2A Task 快照 |
-| `POST /a2a/sendMessageStream` | 流式 SSE：快照 + status/artifact 增量至终态 |
+| `GET /.well-known/agent-card` | Agent Card 发现端点（名册即技能表；`capabilities.pushNotifications=true` + v1.0 `signatures: []` 签名扩展位，loopback NoAuth 如实未签名） |
+| `POST /a2a/sendMessage` | 非流式：消息 → mission 受理 → A2A Task 快照；`configuration.pushNotificationConfig` 可注册终态 webhook 回调 |
+| `POST /a2a/sendMessageStream` | 流式 SSE：快照 + status/artifact 增量至终态；pushNotificationConfig 同样生效（与 SSE 并存） |
 | `POST /a2a` | JSON-RPC（`message/send` \| `message/stream`） |
+
+**Push Notification（v1.0 §4.3）**：客户端在 `configuration.pushNotificationConfig` 给
+`{ url, token?, authentication? }`；mission 终态时服务端 POST StreamResponse 单键
+`statusUpdate`（与流帧同构），鉴权 `authentication` → `Authorization: <scheme> <credentials>`，
+否则 `token` → `X-A2A-Notification-Token`。at-least-once（2 次尝试 / 10s 超时），失败仅
+stderr 留痕不影响编排；mission 被替换即作废。SSRF 面：只放行 http(s) scheme（allowlist 属部署侧）。
+**状态词汇**：task_rejected（能力拒单）与 task_escalated（转人工）显式映射非终态
+`input-required`（停顿需人工），外部驱动方才能正确处理这两种停顿。
 
 ## 开发
 

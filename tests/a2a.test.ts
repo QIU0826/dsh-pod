@@ -5,10 +5,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildAgentCard,
+  buildPushHeaders,
   internalEventToA2a,
   isFinalA2aEvent,
   missionState,
   missionToA2aTask,
+  parsePushConfig,
 } from '../src/core/a2a.js'
 import { parseA2aBody } from '../src/routes.js'
 import type { Mission, PodEvent } from '../src/core/types.js'
@@ -45,17 +47,19 @@ function ev(kind: string, payload: Record<string, unknown>, over: Partial<PodEve
 }
 
 describe('Agent Card（发现端点）', () => {
-  it('名册 → 技能表；能力位如实（流式真支持，推送未实现）', () => {
+  it('名册 → 技能表；能力位如实（流式真支持，推送 v1.0 已接线）+ 签名扩展位', () => {
     const card = buildAgentCard({
       baseUrl: 'http://127.0.0.1:3930/',
       slots: [
         { id: 'S-1', role: '实现工程师', capabilities: ['实现', '测试'], vendor: 'claude', model: 'deepseek' },
         { id: 'S-2', role: '审查员', capabilities: ['审查'], vendor: 'codex', model: '' },
       ],
-    }) as Record<string, unknown> & { capabilities: Record<string, unknown>; skills: Array<Record<string, unknown>> }
+    }) as Record<string, unknown> & { capabilities: Record<string, unknown>; skills: Array<Record<string, unknown>>; signatures: unknown[] }
     expect(card.url).toBe('http://127.0.0.1:3930/a2a')
     expect(card.capabilities.streaming).toBe(true)
-    expect(card.capabilities.pushNotifications).toBe(false)
+    expect(card.capabilities.pushNotifications).toBe(true)
+    // v1.0 Signed Agent Card 扩展位：loopback NoAuth 场景如实给空数组（未签名）
+    expect(card.signatures).toEqual([])
     expect(card.skills).toHaveLength(2)
     expect(card.skills[0]!.tags).toEqual(['实现', '测试'])
     // 凭据/内部路径不出协议面：NoAuth（loopback-only 部署）
@@ -169,5 +173,64 @@ describe('parseA2aBody（sendMessage 请求体）', () => {
     if (!parsed.ok) return
     const slots = parsed.value.launchBody.slots as Array<{ id: string }>
     expect(slots[0]!.id).toBe('S-9')
+  })
+})
+
+describe('pushNotificationConfig 提取与鉴权头（v1.0 §4.3）', () => {
+  it('合法 config 提取；缺失/坏形/非 http(s) → undefined（fail-closed 不抛错）', () => {
+    const ok = parsePushConfig({
+      configuration: { pushNotificationConfig: { url: 'https://client.example/hook', token: 't1' } },
+    })
+    expect(ok).toEqual({ url: 'https://client.example/hook', token: 't1' })
+
+    expect(parsePushConfig({})).toBeUndefined()
+    expect(parsePushConfig({ configuration: {} })).toBeUndefined()
+    expect(parsePushConfig({ configuration: { pushNotificationConfig: { url: '' } } })).toBeUndefined()
+    expect(parsePushConfig({ configuration: { pushNotificationConfig: { url: 'not a url' } } })).toBeUndefined()
+    // SSRF 面：非 http(s) scheme 一律拒绝（file:/ftp: 等）
+    expect(parsePushConfig({ configuration: { pushNotificationConfig: { url: 'file:///etc/passwd' } } })).toBeUndefined()
+    expect(parsePushConfig(null)).toBeUndefined()
+  })
+
+  it('鉴权头：authentication 优先（Authorization: scheme credentials）；token → X-A2A-Notification-Token', () => {
+    expect(buildPushHeaders({ url: 'http://x', authentication: { scheme: 'Bearer', credentials: 'abc' } })).toEqual({
+      authorization: 'Bearer abc',
+    })
+    expect(buildPushHeaders({ url: 'http://x', authentication: { scheme: 'Basic' } })).toEqual({ authorization: 'Basic' })
+    expect(buildPushHeaders({ url: 'http://x', token: 'tok123' })).toEqual({ 'x-a2a-notification-token': 'tok123' })
+    // 两者都有 → authentication 赢（v1.0：authentication 是规范形态）
+    expect(buildPushHeaders({ url: 'http://x', token: 'tok', authentication: { scheme: 'Digest', credentials: 'd' } })).toEqual({
+      authorization: 'Digest d',
+    })
+    expect(buildPushHeaders({ url: 'http://x' })).toEqual({})
+  })
+
+  it('authentication 鉴权从 sendMessage 参数一并提取（parsePushConfig 全形状）', () => {
+    const ok = parsePushConfig({
+      configuration: {
+        pushNotificationConfig: { url: 'http://127.0.0.1:9999/hook', authentication: { scheme: 'Bearer', credentials: 'sekret' } },
+      },
+    })
+    expect(ok).toEqual({ url: 'http://127.0.0.1:9999/hook', authentication: { scheme: 'Bearer', credentials: 'sekret' } })
+  })
+})
+
+describe('停顿需人工的显式状态映射（v1.0 词汇对齐）', () => {
+  it('task_rejected（能力拒绝终局）→ 非终态 input-required 状态 + 审计 artifact', () => {
+    const mapped = internalEventToA2a(ev('task_rejected', { reason: '无人可派' }, { task_id: 'T-1' }))
+    expect(mapped).toHaveLength(2)
+    expect(mapped[0]!.kind).toBe('status-update')
+    expect((mapped[0] as { status: { state: string } }).status.state).toBe('input-required')
+    expect(isFinalA2aEvent(mapped[0]!)).toBe(false)
+    expect((mapped[0] as { status: { message: { parts: Array<{ text: string }> } } }).status.message.parts[0]!.text).toContain('需人工介入')
+    expect(mapped[1]!.kind).toBe('artifact-update')
+  })
+
+  it('task_escalated（attempts 烧尽 / early exit）→ 非终态 input-required + 审计 artifact', () => {
+    const mapped = internalEventToA2a(ev('task_escalated', { message: 'attempts exhausted' }, { task_id: 'T-2' }))
+    expect(mapped).toHaveLength(2)
+    expect((mapped[0] as { status: { state: string } }).status.state).toBe('input-required')
+    expect(isFinalA2aEvent(mapped[0]!)).toBe(false)
+    expect(mapped[1]!.kind).toBe('artifact-update')
   })
 })

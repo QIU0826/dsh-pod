@@ -77,7 +77,7 @@ export interface AgentCardOptions {
   version?: string
 }
 
-/** Agent Card（发现端点）：名册 → 技能表；能力位如实（流式 = SSE 真支持）。 */
+/** Agent Card（发现端点）：名册 → 技能表；能力位如实（流式真支持，推送 v1.0 已接线）。 */
 export function buildAgentCard(opts: AgentCardOptions): Record<string, unknown> {
   return {
     name: 'dsh-pod',
@@ -87,7 +87,7 @@ export function buildAgentCard(opts: AgentCardOptions): Record<string, unknown> 
     protocolVersion: '0.2.5',
     capabilities: {
       streaming: true,
-      pushNotifications: false,
+      pushNotifications: true,
       stateTransitionHistory: true,
     },
     defaultInputModes: ['text/plain'],
@@ -100,6 +100,9 @@ export function buildAgentCard(opts: AgentCardOptions): Record<string, unknown> 
     })),
     security: [{ schemes: [] }],
     securitySchemes: {},
+    // v1.0 Signed Agent Card 扩展位（JWS 数组）：loopback NoAuth 场景如实给空数组；
+    // 跨机/上网络时这是第一道防线（防发现环节投毒），届时填真实签名。
+    signatures: [],
     supportsAuthenticatedExtendedCard: false,
     preferredTransport: 'JSONRPC',
     additionalInterfaces: [
@@ -206,7 +209,13 @@ export function internalEventToA2a(event: PodEvent): A2aStreamEvent[] {
       return [artifactUpdate(taskId, `negotiation:${who}`, text, event.ts)]
     }
     case 'task_rejected':
-      return [artifactUpdate(taskId, 'negotiation:final', `⛔ ${event.task_id} 终局拒绝：${textOf(p)}`, event.ts)]
+      // 能力拒绝终局（全员谢绝转人工）：mission 未终态（可重规划），不能标 rejected-final；
+      // 但必须给外部驱动方一条非终态「停顿需人工」信号（v1.0 input-required 即此语义），
+      // 否则任务停滞时对端只看到 working 无进展。artifact 照旧留审计细节。
+      return [
+        statusUpdate(taskId, 'input-required', false, `⛔ ${event.task_id} 终局拒绝（无可用员工），需人工介入：${textOf(p)}`.slice(0, 300), event.ts),
+        artifactUpdate(taskId, 'negotiation:final', `⛔ ${event.task_id} 终局拒绝：${textOf(p)}`, event.ts),
+      ]
     case 'task_dispatched':
       return [artifactUpdate(taskId, `task:${event.task_id ?? ''}`, `📦 ${event.task_id} 已派发给 ${p.to_slot ?? '?'}，执行中`, event.ts)]
     case 'task_started':
@@ -216,7 +225,11 @@ export function internalEventToA2a(event: PodEvent): A2aStreamEvent[] {
     case 'task_blocked':
       return [artifactUpdate(taskId, `task:${event.task_id ?? ''}`, `⚠️ ${event.task_id} 受阻（${p.fault ?? '?'}）：${textOf(p)}`.slice(0, 400), event.ts)]
     case 'task_escalated':
-      return [artifactUpdate(taskId, `task:${event.task_id ?? ''}`, `⛔ ${event.task_id} 转人工：${textOf(p)}`.slice(0, 400), event.ts)]
+      // 转人工（attempts 烧尽 / early exit / mismatch）：同样是「停顿需人工」信号
+      return [
+        statusUpdate(taskId, 'input-required', false, `⛔ ${event.task_id} 转人工：${textOf(p)}`.slice(0, 300), event.ts),
+        artifactUpdate(taskId, `task:${event.task_id ?? ''}`, `⛔ ${event.task_id} 转人工：${textOf(p)}`.slice(0, 400), event.ts),
+      ]
     case 'task_paused':
       return [artifactUpdate(taskId, `task:${event.task_id ?? ''}`, `⏸ ${event.task_id} 已暂停（用户）`, event.ts)]
     case 'task_resumed':
@@ -242,4 +255,70 @@ export function internalEventToA2a(event: PodEvent): A2aStreamEvent[] {
 /** 是否终态事件（收到后 SSE 流收口）。 */
 export function isFinalA2aEvent(e: A2aStreamEvent): boolean {
   return e.kind === 'status-update' && e.final
+}
+
+// ── Push Notification（v1.0 §4.3：客户端 webhook 回调）──
+
+/** v1.0 PushNotificationConfig：任务更新时服务端 POST 到客户端提供的 webhook。 */
+export interface A2aPushConfig {
+  url: string
+  /** SDK 默认头名 X-A2A-Notification-Token 携带（authentication 未给时）。 */
+  token?: string
+  /** v1.0 AuthenticationInfo：scheme 必填（Bearer/Basic…），credentials 可选。 */
+  authentication?: { scheme: string; credentials?: string }
+}
+
+/**
+ * 从 sendMessage 参数提取 `configuration.pushNotificationConfig`。
+ * fail-closed：缺失 / 形状不对 / url 非 http(s) → undefined（当作没配，不抛错不编造）。
+ * SSRF 注意（v1.0 安全要求）：服务端不得盲目信任 webhook URL——本实现只放行 http(s)
+ * scheme + 10s 超时 + 2 次尝试；loopback-only 的 A2A 入口本身已限攻击面，allowlist 属部署侧。
+ */
+export function parsePushConfig(params: unknown): A2aPushConfig | undefined {
+  const cfg =
+    params !== null && typeof params === 'object'
+      ? (params as { configuration?: { pushNotificationConfig?: unknown } }).configuration
+      : undefined
+  const raw = cfg !== null && typeof cfg === 'object' ? cfg.pushNotificationConfig : undefined
+  if (raw === null || typeof raw !== 'object') return undefined
+  const url = (raw as { url?: unknown }).url
+  if (typeof url !== 'string' || url.length === 0) return undefined
+  let scheme: string
+  try {
+    scheme = new URL(url).protocol
+  } catch {
+    return undefined
+  }
+  if (scheme !== 'http:' && scheme !== 'https:') return undefined
+  const out: A2aPushConfig = { url }
+  const token = (raw as { token?: unknown }).token
+  if (typeof token === 'string' && token.length > 0) out.token = token
+  const auth = (raw as { authentication?: unknown }).authentication
+  if (auth !== null && typeof auth === 'object') {
+    const s = (auth as { scheme?: unknown }).scheme
+    if (typeof s === 'string' && s.length > 0) {
+      out.authentication = { scheme: s }
+      const cred = (auth as { credentials?: unknown }).credentials
+      if (typeof cred === 'string' && cred.length > 0) out.authentication.credentials = cred
+    }
+  }
+  return out
+}
+
+/**
+ * 回调鉴权头（v1.0 §4.3.1）：authentication 优先 → `Authorization: <scheme> <credentials>`；
+ * 其次 token → `X-A2A-Notification-Token`（JS SDK 默认头名）；两者皆缺 → 不带鉴权头
+ * （loopback 场景合法，但客户端应自行校验来源）。
+ */
+export function buildPushHeaders(config: A2aPushConfig): Record<string, string> {
+  const headers: Record<string, string> = {}
+  if (config.authentication !== undefined) {
+    headers.authorization =
+      config.authentication.credentials !== undefined
+        ? `${config.authentication.scheme} ${config.authentication.credentials}`
+        : config.authentication.scheme
+  } else if (config.token !== undefined) {
+    headers['x-a2a-notification-token'] = config.token
+  }
+  return headers
 }
