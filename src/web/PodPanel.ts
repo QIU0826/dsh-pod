@@ -42,6 +42,7 @@ import { SessionsView } from './sessions-view.js'
 import { BoardView } from './board-view.js'
 import { DagView } from './dag-view.js'
 import { ApprovalView } from './approval-view.js'
+import { PetRoomView } from './pet-room.js'
 import { SettingsView } from './settings-view.js'
 import { MISSION_LABEL, MISSION_TONE, tokenBudgetPct, rosterToSlots } from './view-helpers.js'
 
@@ -50,7 +51,7 @@ const MISSIONS_POLL_MS = 5000
 /** 单次轮询最多续读的批数（防 has_more 异常时死循环拖垮主线程）。 */
 const MAX_EVENT_PAGES = 10
 
-type ViewKey = 'sessions' | 'chat' | 'board' | 'dag' | 'approval' | 'settings'
+type ViewKey = 'sessions' | 'chat' | 'board' | 'dag' | 'pets' | 'approval' | 'settings'
 
 export function PodPanel(): ReactElement {
   const [status, setStatus] = useState<StatusResponse | null>(null)
@@ -333,6 +334,7 @@ export function PodPanel(): ReactElement {
         navItem('chat', '对话视图', '对话', 'bot', pendingApprovals.length),
         navItem('board', '任务看板', '看板', 'kanban'),
         navItem('dag', 'DAG 拓扑', 'DAG', 'network'),
+        navItem('pets', '桌宠房间', '桌宠', 'paw'),
         createElement('span', { className: 'dsh-rail-spacer' }),
         navItem('settings', '设置', '设置', 'settings')),
       createElement('div', { className: 'dsh-main-col' },
@@ -443,8 +445,10 @@ export function PodPanel(): ReactElement {
                 })
               : view === 'dag'
                 ? createElement(DagView, { tasks })
-                : view === 'approval'
-                  ? createElement(ApprovalView, {
+                : view === 'pets'
+                  ? createElement(PetRoomView, { status, events })
+                  : view === 'approval'
+                    ? createElement(ApprovalView, {
                       approvalId,
                       onBack: () => setView('chat'),
                       onApprove: (id, remember) => { void runAction(() => postApprove(id, undefined, remember)); setView('chat') },

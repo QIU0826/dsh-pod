@@ -595,6 +595,43 @@ export const CONSOLE_CSS = `
 .dsh-note.error { background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.3); color: #fca5a5; }
 .dsh-note.demo { background: rgba(245,158,11,.08); border: 1px solid rgba(245,158,11,.3); color: #fbbf24; }
 .dsh-note.demo strong { color: #fbbf24; font-weight: 600; margin-right: 2px; }
-.dsh-note.demo { background: rgba(245,158,11,.08); border: 1px solid rgba(245,158,11,.3); color: #fbbf24; }
-.dsh-note.demo strong { color: #fbbf24; font-weight: 600; margin-right: 2px; }
+
+/* ── 桌宠房间（学习 dsh-web/dsh-pet，2026-09-02）────────── */
+.dsh-pet-room { position: relative; flex: 1; overflow: auto; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; padding: 0 24px 28px; }
+.dsh-pet-room-wall { position: absolute; inset: 0 0 38% 0; background:
+  radial-gradient(1200px 500px at 50% -10%, rgba(34,211,238,.10), transparent 60%),
+  linear-gradient(180deg, #0d1420 0%, #101a2b 70%, #14243a 100%); pointer-events: none; }
+.dsh-pet-room-floor { position: absolute; inset: 38% 0 0 0; background:
+  linear-gradient(180deg, #0e1a2c 0%, #0a1322 100%); pointer-events: none; }
+.dsh-pet-room-floor::after { content: ''; position: absolute; inset: 0;
+  background-image:
+    linear-gradient(rgba(34,211,238,.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(34,211,238,.05) 1px, transparent 1px);
+  background-size: 72px 72px, 72px 72px;
+  transform: perspective(600px) rotateX(52deg); transform-origin: top center; }
+.dsh-pet-room-title { position: relative; margin: 18px 0 4px; font-size: 13px; letter-spacing: .22em; color: var(--ink-2); text-transform: uppercase; flex: none; }
+.dsh-pet-room-grid { position: relative; display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-end; gap: 34px 48px; padding: 24px 8px 6px; width: 100%; max-width: 1080px; flex: none; }
+.dsh-pet-station { position: relative; display: flex; flex-direction: column; align-items: center; }
+.dsh-pet-sprite { position: relative; z-index: 2; }
+.dsh-pet-shadow { width: 92px; height: 14px; margin-top: -8px; border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(0,0,0,.5), transparent); z-index: 1; }
+.dsh-pet-bubble { position: relative; z-index: 3; margin-bottom: 10px; max-width: 230px; min-width: 120px;
+  padding: 8px 12px; border-radius: 12px; border: 1px solid rgba(34,211,238,.28);
+  background: linear-gradient(180deg, rgba(13,22,36,.92), rgba(10,17,28,.92));
+  box-shadow: var(--shadow-2); font-size: 12px; color: var(--ink); }
+.dsh-pet-bubble pre { margin: 0; white-space: pre-wrap; word-break: break-all; font-family: var(--sans); line-height: 1.5; }
+.dsh-pet-bubble.busy { border-color: rgba(34,211,238,.55); }
+.dsh-pet-bubble.bad { border-color: rgba(239,68,68,.5); }
+.dsh-pet-bubble::after { content: ''; position: absolute; left: 50%; bottom: -6px; margin-left: -6px;
+  width: 10px; height: 10px; transform: rotate(45deg);
+  background: rgba(10,17,28,.92); border-right: 1px solid rgba(34,211,238,.28); border-bottom: 1px solid rgba(34,211,238,.28); }
+.dsh-pet-bubble.bad::after { border-right-color: rgba(239,68,68,.5); border-bottom-color: rgba(239,68,68,.5); }
+.dsh-pet-nameplate { position: relative; z-index: 2; display: flex; flex-direction: column; align-items: center; gap: 1px;
+  margin-top: 6px; padding: 5px 14px; border-radius: 10px;
+  background: rgba(19,19,26,.85); border: 1px solid var(--line); }
+.dsh-pet-vendor { font-size: 13px; font-weight: 600; color: var(--primary); }
+.dsh-pet-role { font-size: 11px; color: var(--ink-2); }
+.dsh-pet-meta { font-size: 10.5px; color: var(--ink-3); font-family: var(--mono); }
+.dsh-pet-room-empty { position: relative; margin: 40px 0 60px; font-size: 14px; color: var(--ink-2); }
+.dsh-pet-room-legend { position: relative; margin-top: 18px; font-size: 11px; color: var(--ink-3); flex: none; }
 `
