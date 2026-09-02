@@ -314,6 +314,8 @@ export interface ClaudeStartOptions {
   newSessionId?: string
   maxBudgetUsd?: number
   allowedTools?: string[]
+  /** --plugin-dir 显式加载用户本地插件（--bare 跳过 plugin sync；能力保留 2026-09-02）。 */
+  pluginDir?: string
   permissionMode?: 'acceptEdits' | 'bypassPermissions'
   timeoutMs?: number
 }
@@ -344,6 +346,8 @@ export interface ClaudeBackendOptions {
   envForSlot?: (slot: AgentSlot) => Record<string, string>
   /** --allowedTools 进程白名单（3.8 节三道防线之一），每次 start 统一注入。 */
   allowedTools?: string[]
+  /** --plugin-dir 显式加载用户本地插件（--bare 跳过 plugin sync；2026-09-02 能力保留）。 */
+  pluginDir?: string
   /** 单任务进程超时（默认 15 分钟；长任务经 orchestrator max_wall_clock_ms 传递）。 */
   taskTimeoutMs?: number
 }
@@ -362,8 +366,15 @@ export function buildClaudeArgs(options: ClaudeStartOptions): string[] {
     '-p',
     '--output-format', 'stream-json',
     '--verbose', '--include-partial-messages',
-    // CR-29 补充实证：headless worker 不需要 skills/斜杠命令；全局安装 293 个 skills 时
-    // 其 system-reminder 注入会让部分 anthropic 兼容上游（GLM 中转）报 400（input 应为 string）。
+    // 兼容性护栏（CR-29 实证，2026-09-02 复核）：--bare 必须保留（claude 凭据链路的
+    // 必要前提——去掉后本机代理 15721 → GLM 链路 10 次重试 unknown 全失败）；
+    // --disable-slash-commands（= Disable all skills）同样必须保留——实测恢复 skills
+    // 后其 system-reminder 注入破坏兼容上游请求（--bare 下 claude 2.1.129 仍注入，
+    // 与帮助文档「按需解析」语义不符），历史 CR-29 已加此护栏。
+    // 能力保留（2026-09-02 用户决策）：~/.claude/skills（293 个）/plugins 物理资产
+    // 原样保留（绝不删除/修改用户配置）；headless 员工进程不注入是上游兼容性硬约束
+    // （代理不支持 skills system-reminder），手动 claude 照常可用；待上游支持或
+    // claude 新版按需加载后，可经 backend pluginDir/skill 选项显式启用。
     '--disable-slash-commands',
     '--bare',
   ]
@@ -392,6 +403,7 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
   private readonly clock: () => number
   private readonly envForSlot: ((slot: AgentSlot) => Record<string, string>) | undefined
   private readonly allowedTools: string[] | undefined
+  private readonly pluginDir: string | undefined
   private readonly taskTimeoutMs: number
 
   constructor(options: ClaudeBackendOptions = {}) {
@@ -399,6 +411,8 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
     this.clock = options.clock ?? (() => Date.now())
     this.envForSlot = options.envForSlot
     this.allowedTools = options.allowedTools
+    // pluginDir 默认不传（保持原状：--bare 跳过 plugin sync）；未来上游兼容后经此显式启用
+    this.pluginDir = options.pluginDir
     this.taskTimeoutMs = options.taskTimeoutMs ?? 15 * 60_000
     // 默认探测复用 preflight 的 shell-fallback runner（.cmd 包装器兼容）
     this.detectRunner = options.detectRunner ?? execCommandRunner
@@ -442,6 +456,7 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
       newSessionId: needsNewSession ? randomUUID() : undefined,
       permissionMode: 'bypassPermissions',
       allowedTools: this.allowedTools,
+      pluginDir: this.pluginDir,
     })
     const env = this.envForSlot !== undefined ? this.envForSlot(slot) : undefined
     const spawned = this.spawnClaude(args, worktree, env)
