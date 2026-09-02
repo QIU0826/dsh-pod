@@ -27,7 +27,12 @@ export function openEventStream(
       for (;;) {
         if (cancelled) break
         const { done, value } = await reader.read()
-        if (done) break
+        if (done) {
+          // 服务端正常收流（standalone 重启/重建后再起来时 reader 以 EOF 结束而非抛错）：
+          // 必须走 onError 让轮询兜底接管，否则对话流静默冻结且无任何报错（审计 P3 #17）
+          if (!cancelled) onError?.(new Error('SSE stream closed by server'))
+          break
+        }
         buffer += decoder.decode(value, { stream: true })
         let boundary: number
         while ((boundary = buffer.indexOf("\n\n")) !== -1) {

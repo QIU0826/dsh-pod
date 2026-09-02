@@ -17,7 +17,7 @@ import { execFile as execFileCb, spawn, type ChildProcess } from 'node:child_pro
 import { promisify } from 'node:util'
 const execFileAsync = promisify(execFileCb)
 import { killTree } from './kill-tree.js'
-import { assertSafeArgvToken } from './argv-guard.js'
+import { assertSafeArgvPath, assertSafeArgvToken } from './argv-guard.js'
 import { randomUUID } from 'node:crypto'
 import type { ProcessRegistry } from './process-registry.js'
 import type {
@@ -388,6 +388,13 @@ export function buildClaudeArgs(options: ClaudeStartOptions): string[] {
     args.push('--allowedTools', options.allowedTools.join(','))
   }
   if (options.permissionMode !== undefined) args.push('--permission-mode', options.permissionMode)
+  // 能力保留的显式启用口（2026-09-02 用户决策）：默认不传保持 --bare 现状（上游代理
+  // 不支持 skills/plugins system-reminder，CR-29 实证）；配置了 pluginDir 才拼进 argv——
+  // 此前接口三层都接了但 argv 从未拼上，配置即静默失效（审计 P2-3）。
+  if (options.pluginDir !== undefined && options.pluginDir.length > 0) {
+    assertSafeArgvPath('claude pluginDir', options.pluginDir)
+    args.push('--plugin-dir', options.pluginDir)
+  }
   return args
 }
 

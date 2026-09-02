@@ -259,16 +259,18 @@ async function handleA2aSend(
       }
     }
   }
-  // replay 全量（mission 刚建，事件很少）再 1s 增量轮询（与 /events/stream 同源机制）
-  pushInternal(current.eventsAfter(0))
+  // timer 先声明再 replay（finish 引用 timer；若 replay 命中终态事件，倒置会 TDZ）
   const timer = setInterval(() => {
     if (closed) return
     try {
-      pushInternal(lastId.length > 0 ? current.eventsAfter(0, lastId) : current.eventsAfter(0))
+      pushInternal(lastId.length > 0 ? current.missionEventsAfter(mission.id, 0, lastId) : current.missionEventsAfter(mission.id, 0))
     } catch {
       /* 读取异常：保持连接，下轮重试 */
     }
   }, 1_000)
+  // replay 全量（mission 刚建，事件很少）再靠上面的 1s 增量轮询；missionEventsAfter
+  // 是单 mission 视图：终态事件可达（活跃过滤会把 mission_done 永久挡在门外）且不串其他 mission
+  pushInternal(current.missionEventsAfter(mission.id, 0))
   req.on('close', finish)
   res.on('close', finish)
 }

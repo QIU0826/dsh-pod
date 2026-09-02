@@ -194,7 +194,9 @@ export function internalEventToA2a(event: PodEvent): A2aStreamEvent[] {
     case 'mission_done':
       return [statusUpdate(taskId, 'completed', true, '任务完成（质量门 + 合并门全过）', event.ts)]
     case 'mission_denied':
-      return [statusUpdate(taskId, 'rejected', true, `合并被拒：${textOf(p)}`, event.ts)]
+      // 非终态（mission 状态机：deny 后回 running 重跑）。标 final 会让对端提前断流，
+      // 真正的 completed 永不再达（审计修复：与 task_rejected 分支同一纪律）
+      return [statusUpdate(taskId, 'working', false, `合并被拒，任务重跑：${textOf(p)}`, event.ts)]
     case 'mission_aborted':
       return [statusUpdate(taskId, 'canceled', true, `已中止：${textOf(p)}`, event.ts)]
     case 'task_negotiation': {
@@ -246,7 +248,9 @@ export function internalEventToA2a(event: PodEvent): A2aStreamEvent[] {
     case 'agent_relay':
       return [artifactUpdate(taskId, 'relay', `🔁 ${textOf(p)}`.slice(0, 300), event.ts)]
     case 'budget_short_circuit':
-      return [statusUpdate(taskId, 'failed', true, `预算短路：剩余 ${p.remaining_usd} < 预估 ${p.estimate_usd}`, event.ts)]
+      // 非终态：预算短路现在会 pause mission（编排器修复），等待人工加预算/恢复——
+      // input-required 语义而非 failed(final)
+      return [statusUpdate(taskId, 'input-required', false, `预算短路：剩余 ${p.remaining_usd} < 预估 ${p.estimate_usd}，mission 已暂停`, event.ts)]
     default:
       return []
   }

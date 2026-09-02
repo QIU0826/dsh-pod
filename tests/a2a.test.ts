@@ -97,8 +97,9 @@ describe('内部事件 → A2A 流事件', () => {
     expect(isFinalA2aEvent(done[0]!)).toBe(true)
 
     const denied = internalEventToA2a(ev('mission_denied', { reason: '风格不符' }))
-    expect((denied[0] as { status: { state: string } }).status.state).toBe('rejected')
-    expect(isFinalA2aEvent(denied[0]!)).toBe(true)
+    // deny 后 mission 回 running 重跑 → 非终态 working（审计修复：不得提前断流）
+    expect((denied[0] as { status: { state: string } }).status.state).toBe('working')
+    expect(isFinalA2aEvent(denied[0]!)).toBe(false)
 
     const aborted = internalEventToA2a(ev('mission_aborted', { reason: 'x' }))
     expect((aborted[0] as { status: { state: string } }).status.state).toBe('canceled')

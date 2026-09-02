@@ -279,6 +279,9 @@ export function verifyAndParseIm(req: ImRequest, opts: ImOptions): ImVerificatio
     // 未配置 token 或请求不带/不匹配 → 一律拒绝（此前完全跳过验签，等于不设防）
     const configured = opts.larkVerificationToken ?? ''
     if (configured.length === 0) return { ok: false, reason: 'lark verification token not configured (plaintext mode)' }
+    // 时间窗防重放（审计修复）：静态 token 不具备新鲜度——历史有效请求体（代理日志/
+    // TLS 终结侧泄露）在重放去重 TTL 之外可无限重放非幂等指令；与加密分支同窗校验
+    if (!withinWindow(timestamp, opts.nowMs, tolerance)) return { ok: false, reason: 'lark timestamp out of window (plaintext mode)' }
     const raw = parseJson(req.rawBody)
     const presented = extractLarkToken(raw)
     if (presented.length === 0) return { ok: false, reason: 'missing lark verification token' }

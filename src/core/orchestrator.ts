@@ -247,6 +247,9 @@ export class MissionOrchestrator {
   private readonly onPlanExpanded: ((missionId: string, plan: PlanTaskInput[], sourceTaskId: string) => void) | undefined
   private readonly experiments: ExperimentsLike
   private readonly handles = new Map<string, WorkerHandle>()
+  /** 派发代际（审计 P1 #5）：taskId → 当前代际号；旧代际的迟到退出不改状态只记账本。 */
+  private readonly dispatchGenerations = new Map<string, number>()
+  private dispatchSeq = 0
   private readonly queuedSteer = new Map<string, string[]>()
   /** 协商健康缓存（vendor → 结论 + 时刻）：探测拉起真实 CLI，TTL 内复用；auth_expired 即失效。 */
   private readonly vendorHealth = new Map<Vendor, { at: number; ok: boolean; reason?: string; detail?: string }>()
@@ -522,7 +525,12 @@ export class MissionOrchestrator {
   }
 
   private activeTasks(): Task[] {
-    return this.store.listTasks(this.missionId).filter((t) => t.status === 'dispatched' || t.status === 'running')
+    // negotiating/accepted 计入占用（审计 P2 #8）：协商探测窗口（本地 CLI 15s、
+    // remote 最长约 5min）内任务此前对并发闸不可见，HTTP/MCP 的 pod_dispatch
+    // 并发调用可突破 maxParallel。探测在 dispatchTask 内联完成，不会滞留这两种状态。
+    return this.store
+      .listTasks(this.missionId)
+      .filter((t) => t.status === 'dispatched' || t.status === 'running' || t.status === 'negotiating' || t.status === 'accepted')
   }
 
   private readyTasks(): Task[] {
@@ -793,6 +801,11 @@ export class MissionOrchestrator {
     }
     this.taskMachine.dispatch(task.id, slot.id)
     this.taskMachine.start(task.id)
+    // 代际守卫（审计 P1 #5）：watchdog kill 后不等退出即重派时，旧 worker 的退出
+    // 事件会晚于新派发到达。每个派发固定一个递增代际号；完成处理按代际比对，
+    // 旧代际的退出只记账本 usage（真实消耗），不再改动任务状态/句柄/槽位。
+    const generation = ++this.dispatchSeq
+    this.dispatchGenerations.set(task.id, generation)
     // DoD-19：新派发 = 新 reply（重置聚合游标）
     resetReplyCursor(slot.id, task.id)
     this.watchdog.arm({
@@ -814,7 +827,7 @@ export class MissionOrchestrator {
       onExit: (completion) => {
         // 终极兜底：完成处理链的任何逃逸（如存储目录已消失时的二次抛出）
         // 不得变成 unhandled rejection 炸掉宿主进程——留日志即止
-        void this.handleCompletion(task.id, completion).catch((error) => {
+        void this.handleCompletion(task.id, completion, generation).catch((error) => {
           const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
           console.error('[dsh-pod] task completion handler crashed:', message)
         })
@@ -823,9 +836,9 @@ export class MissionOrchestrator {
     this.handles.set(task.id, handle)
     // 档位 B/C 的会话复用：workers 层靠 slot.session_ref 判断「续会话还是起新会话」
     // （claude: --resume <id>；codex: resume <threadId>）。
-    // 此前 core 侧从不写回，slot.session_ref 恒为 undefined → 每次派单都被判成
-    // 「起新会话」，声称的 per-mission 档位形同虚设：既重复付上下文重建的 token，
-    // 也丢了跨任务的连续性（agent 不记得自己刚做过什么）。
+    // 此处只覆盖「后端同步给出 session_ref」的形态（测试桩/部分后端）；真实 CLI 后端
+    // 在进程退出时才解析出 session_ref——真正的写回在 processCompletion 完成路径上
+    // （审计 P1 #4：此前只有这一个即时写回点，真实链路恒不触发，--resume 形同虚设）。
     // transient 档位不写回（语义就是每任务新进程，无跨任务上下文）。
     if (slot.session_tier !== 'transient' && handle.session_ref !== undefined && handle.session_ref.length > 0) {
       this.store.updateSlot(slot.id, { session_ref: handle.session_ref })
@@ -889,7 +902,9 @@ export class MissionOrchestrator {
         continue
       }
 
-      // 派发前预算短路（AgentScope-F / DC-4）：预算是 mission 级硬闸，不换人重试
+      // 派发前预算短路（AgentScope-F / DC-4）：预算是 mission 级硬闸，不换人重试。
+      // 短路即 pause（审计 P2 修复：此前只落事件不 pause 也不终态，driveLoop 空转、
+      // maintenanceTick 每 30s 重驱，needs_human 反复翻转 + 事件刷屏挤出审计窗口）
       const remainingUsd = mission.budget_usd - mission.spent_equiv_usd
       const estimate = this.ledger.estimateTaskCostUsd(this.missionId, task.type, candidate.model)
       if (remainingUsd < estimate) {
@@ -908,6 +923,13 @@ export class MissionOrchestrator {
             spent_equiv_usd: Number(mission.spent_equiv_usd.toFixed(4)),
           },
         })
+        this.stopRequested = true
+        this.stopReason = 'budget'
+        try {
+          this.missionMachine.pause()
+        } catch {
+          /* 已离开 running（并发收口）：停摆标记仍会终止本轮驱动 */
+        }
         return null
       }
 
@@ -963,7 +985,20 @@ export class MissionOrchestrator {
       })
       const health = await this.probeVendorHealth(candidate, candidateBackend)
       if (health.ok) {
-        this.taskMachine.accept(task.id, { vendor: candidate.vendor, probe: health.detail ?? '' })
+        // 状态复核（审计 P2 #9）：探测是长 await，窗口内用户可能暂停了 mission/任务
+        const taskNow = this.store.getTask(this.missionId, task.id)
+        if (taskNow === undefined) return null
+        if (taskNow.status === 'paused') return null // 任务已被暂停（事件已落）：静默退出，不 accept
+        if (this.stopRequested) {
+          this.taskMachine.standDown(task.id, 'mission 暂停/中止，要约撤回（探测窗口内）')
+          return null
+        }
+        try {
+          this.taskMachine.accept(task.id, { vendor: candidate.vendor, probe: health.detail ?? '' })
+        } catch {
+          // 状态在复核与迁移之间又漂移（极窄窗口）：留给重驱入口裁决，不炸驱动循环
+          return null
+        }
         return { slot: candidate, backend: candidateBackend }
       }
       excluded.add(candidate.id)
@@ -1069,9 +1104,9 @@ export class MissionOrchestrator {
     void podEvent
   }
 
-  private async handleCompletion(taskId: string, completion: WorkerCompletion): Promise<void> {
+  private async handleCompletion(taskId: string, completion: WorkerCompletion, generation?: number): Promise<void> {
     try {
-      await this.processCompletion(taskId, completion)
+      await this.processCompletion(taskId, completion, generation)
     } catch (error) {
       // 内部错误绝不静默（error-handling 纪律）：落事件 + 任务故障化 + 唤醒驱动循环。
       // catch 路径自身也要防二次抛出（实测：存储目录消失时 appendEvent 抛同源 ENOENT，
@@ -1098,16 +1133,52 @@ export class MissionOrchestrator {
         // 状态已漂移或存储不可用：只留日志，不二次抛出
       }
     } finally {
-      // 完成即弃句柄：正常完成的任务此前从不清理，Map 无界增长（审计 M3）
-      this.handles.delete(taskId)
+      // 完成即弃句柄：正常完成的任务此前从不清理，Map 无界增长（审计 M3）。
+      // 代际守卫：仅当本次退出属于当前代际时才清句柄——旧代际的迟到退出
+      // 不得删掉新尝试的句柄（否则新进程从此杀不掉，预算失控）
+      if (generation === undefined || this.dispatchGenerations.get(taskId) === generation) {
+        this.handles.delete(taskId)
+        this.dispatchGenerations.delete(taskId)
+      }
       this.signalCompletion()
     }
   }
 
-  private async processCompletion(taskId: string, completion: WorkerCompletion): Promise<void> {
+  private async processCompletion(taskId: string, completion: WorkerCompletion, generation?: number): Promise<void> {
     const task = this.store.getTask(this.missionId, taskId)
     if (task === undefined || task.owner_slot_id === undefined) {
       this.signalCompletion()
+      return
+    }
+    // 档位 B/C 会话写回（审计 P1 #4）：真实 CLI 后端在进程退出时才解析出
+    // session_ref（collect 完成后挂在 handle 上）——派发瞬间的即时写回恒空。
+    // 在句柄被清理前把它落到槽位，下个任务才能真正走 --resume 续会话。
+    const handleForSession = this.handles.get(taskId)
+    if (handleForSession?.session_ref !== undefined && handleForSession.session_ref.length > 0) {
+      const ownerSlot = this.store.getSlot(task.owner_slot_id)
+      if (ownerSlot !== undefined && ownerSlot.session_tier !== 'transient') {
+        this.store.updateSlot(ownerSlot.id, { session_ref: handleForSession.session_ref })
+      }
+    }
+    // 代际守卫（审计 P1 #5）：旧代际的迟到退出——usage 照实入账（真实消耗），
+    // 但不改任务状态（否则旧失败烧掉新尝试的 attempts/旧 done 裁决新尝试）
+    if (generation !== undefined && this.dispatchGenerations.get(taskId) !== generation) {
+      const ownerSlot = this.store.getSlot(task.owner_slot_id)
+      if (ownerSlot !== undefined) {
+        try {
+          this.ledger.recordUsage(this.missionId, ownerSlot.id, taskId, ownerSlot.model, completion.usage.tokens_in, completion.usage.tokens_out, completion.usage.source)
+        } catch {
+          /* 旧代际入账失败不追账：账本是尽力而为 */
+        }
+      }
+      this.store.appendEvent(this.missionId, {
+        id: `ev-stale-exit-${taskId}-${this.clock()}-${generation}`,
+        mission_id: this.missionId,
+        ts: this.clock(),
+        kind: 'task_stale_exit',
+        task_id: taskId,
+        payload: { generation: generation, exit: completion.exit, note: '旧代际退出：只记账本，不改任务状态' },
+      })
       return
     }
     this.watchdog.disarm(`task-idle:${taskId}`)
@@ -1343,9 +1414,8 @@ export class MissionOrchestrator {
       }
       const lastProgress = Math.max(task.updated_at, lastEventTsByTask.get(task.id) ?? 0)
       if (this.clock() - lastProgress < STALL_TIMEOUT_MS) continue
-      try {
-        this.killTask(task.id)
-      } catch { /* 句柄可能已死 */ }
+      // async 拒绝 try/catch 接不住（审计 P2 #13）：补 .catch 防 unhandled rejection 崩宿主
+      void this.killTask(task.id).catch(() => { /* 句柄已死/进程退出竞态：非故障 */ })
       try {
         this.taskMachine.fail(task.id, { kind: 'idle_timeout', message: `stall guard: no progress for ${Math.round(STALL_TIMEOUT_MS / 60_000)}min` })
         this.store.appendEvent(this.missionId, {
@@ -1656,6 +1726,10 @@ export class MissionOrchestrator {
       if (backend !== undefined) await backend.kill(handle)
       this.handles.delete(taskId)
     }
+    // 被杀进程的退出事件一律视为旧代际（watchdog/暂停/中止路径）：
+    // 它迟到到达时只记账本，不碰任务状态（代际守卫，审计 P1 #5）。
+    // 注意：用户暂停路径的 pauseMarkers 兼容保留（状态已迁 paused，双保险）。
+    this.dispatchGenerations.delete(taskId)
   }
 
   setWatchdogThreshold(kind: 'task-idle' | 'task-wall-clock', ms: number): void {
@@ -1789,7 +1863,7 @@ export class MissionOrchestrator {
     this.stopReason = 'abort'
     this.missionMachine.abort(reason)
     for (const taskId of [...this.handles.keys()]) {
-      void this.killTask(taskId)
+      void this.killTask(taskId).catch(() => { /* 树杀竞态：中止路径尽力而为 */ })
     }
     // 唤醒驱动循环：被杀 worker 的退出信号可能永不到达（如远程后端），循环不得悬挂
     this.signalCompletion()
@@ -1826,6 +1900,10 @@ export class MissionOrchestrator {
         fault: undefined,
         last_error: resolution.note ?? 'human takeover: retry',
         next_retry_at: now,
+        // 人工裁决 = 重试资格授予（审计 P2 #12）：attempts 归零。此前保留 attempts，
+        // shouldRetry 对 attempts>=3 的升级任务恒 false——「转人工唯一恢复路径」
+        // 对其最常见来源（3 次失败升级）反而失效，任务永久卡 blocked。
+        attempts: 0,
       })
     }
     this.store.appendEvent(this.missionId, {
@@ -1992,12 +2070,28 @@ export class MissionOrchestrator {
         reason: error instanceof Error ? error.message : String(error),
       }
     }
-    const approval = this.buildApprovalRequest()
-    return {
-      status: 'awaiting_approval',
-      doneTasks: done,
-      escalatedTasks: escalated,
-      pendingApprovals: [approval.id],
+    try {
+      const approval = this.buildApprovalRequest()
+      return {
+        status: 'awaiting_approval',
+        doneTasks: done,
+        escalatedTasks: escalated,
+        pendingApprovals: [approval.id],
+      }
+    } catch (error) {
+      // NO_PATCH：纯 research/doc/plan mission（无带 commit 的实现任务）没有可合并
+      // 产物——此前该异常从 run() 直接抛出，mission 卡 awaiting_approval 且无审批卡，
+      // 无恢复路径（审计 P2）。按「无产物完成」收口并如实上报。
+      const message = error instanceof Error ? error.message : String(error)
+      if (error instanceof PodError && error.code === 'NO_PATCH') {
+        try {
+          this.missionMachine.completeNoPatch('orchestrator')
+        } catch {
+          return { status: 'needs_human', doneTasks: done, escalatedTasks: escalated, pendingApprovals: [], reason: message }
+        }
+        return { status: 'done', doneTasks: done, escalatedTasks: escalated, pendingApprovals: [] }
+      }
+      return { status: 'needs_human', doneTasks: done, escalatedTasks: escalated, pendingApprovals: [], reason: message }
     }
   }
 

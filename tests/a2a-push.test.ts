@@ -43,20 +43,20 @@ afterAll(() => {
   void server.close()
 })
 
-function serviceWithEvents(batches: PodEvent[][], missionId = 'M-1'): A2aPushServiceLike & { calls: number } {
+function serviceWithEvents(batches: PodEvent[][]): A2aPushServiceLike & { calls: number } {
   const state = { call: 0, calls: 0 }
   return {
     get calls() {
       return state.calls
     },
-    eventsAfter() {
+    missionEventsAfter() {
       const batch = batches[Math.min(state.call, batches.length - 1)] ?? []
       state.call++
       state.calls++
       return batch
     },
-    status() {
-      return { mission: { id: missionId } }
+    missionExists() {
+      return true
     },
   }
 }
@@ -120,14 +120,22 @@ describe('A2A push notification（webhook 回调）', () => {
     registry.stopAll()
   })
 
-  it('mission 被替换 → watcher 作废不投递；他 mission 事件不认（不误投）', async () => {
+  it('mission 被删除（deleteMission）→ watcher 作废不投递；跨 mission 事件不投递（防御过滤）', async () => {
     received.length = 0
     respondWith = 200
-    const otherMission = serviceWithEvents([[ev('mission_done', 'M-OTHER')]], 'M-OTHER')
+    // 桩故意无视 missionId 返回 M-OTHER 的终态事件：watcher 的归属过滤必须拦下
+    const service = serviceWithEvents([[ev('mission_done', 'M-OTHER')]])
     const registry = createA2aPushRegistry({ pollMs: 5 })
-    registry.register(otherMission, 'M-1', { url: `http://127.0.0.1:${port}/hook-d` })
+    registry.register({ ...service, missionExists: () => true }, 'M-1', { url: `http://127.0.0.1:${port}/hook-d` })
+    await sleep(80)
+    expect(received).toHaveLength(0) // 事件属 M-OTHER，M-1 watcher 不认
+    registry.stopAll()
+
+    // missionExists=false（级联删除）→ 下一 tick watcher 作废
+    received.length = 0
+    registry.register({ ...service, missionExists: () => false }, 'M-2', { url: `http://127.0.0.1:${port}/hook-d2` })
     await waitFor(() => registry.activeCount() === 0)
-    expect(received).toHaveLength(0) // 事件属 M-OTHER，watcher 等 M-1 → 轮询中发现 mission 已换 → 作废
+    expect(received).toHaveLength(0)
     registry.stopAll()
   })
 })

@@ -272,9 +272,19 @@ export class PodService {
       })
     }
     mkdirSync(this.dataDir, { recursive: true })
+    // 运行时节流状态快照（审计 P2 #14）：reloadCronJobs 重建调度器会丢 lastFiredAt，
+    // `?? 0` 使全部 enabled job 立即到期——保存配置（哪怕只改了 label）= 立即全量触发。
+    const firedBefore = new Map<string, number>()
+    for (const job of this.cron.list()) {
+      if (job.lastFiredAt !== undefined) firedBefore.set(job.id, job.lastFiredAt)
+    }
     writeFileSync(this.cronJobsFile, JSON.stringify({ jobs: clean }, null, 2), 'utf8')
     this.reloadCronJobs()
-    return { ok: true, message: `已写入 ${clean.length} 条定时任务（cron.json + 热加载）` }
+    for (const job of this.cron.list()) {
+      const keep = firedBefore.get(job.id)
+      if (keep !== undefined) job.lastFiredAt = keep
+    }
+    return { ok: true, message: `已写入 ${clean.length} 条定时任务（cron.json + 热加载，触发节流状态已保留）` }
   }
 
 
@@ -345,7 +355,7 @@ export class PodService {
       throw error
     }
     this.orchestrator = orchestrator
-    this.running = orchestrator.run().catch((error) => {
+    this.running = this.trackRun(orchestrator, orchestrator.run().catch((error) => {
       const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
       console.error('[dsh-pod] mission run crashed:', message)
       this.lastRunError = { missionId, message, ts: this.clock() }
@@ -366,7 +376,7 @@ export class PodService {
         }
       }
       return { status: 'aborted' as const, doneTasks: [], escalatedTasks: [], pendingApprovals: [], reason: String(error) }
-    })
+    }))
     // 3.3 节：mission 独立会话承载 commander（编排逻辑）；创建失败仅落事件，不阻断 mission
     if (this.commanderLauncher !== undefined) {
       this.commanderLauncher(input.goal, input.cwd).catch((error) => {
@@ -567,7 +577,7 @@ export class PodService {
     orch.humanResolve(taskId, resolution)
     const missionId = this.store.getActiveMission()?.id ?? ''
     // 重新驱动：完成/重试后继续派发依赖链
-    this.running = orch.run().catch((error) => {
+    this.running = this.trackRun(orch, orch.run().catch((error) => {
       const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
       this.store.appendEvent(missionId, {
         id: `ev-resume-error-${Date.now()}`,
@@ -577,7 +587,7 @@ export class PodService {
         payload: { error: message },
       })
       return { status: 'aborted' as const, doneTasks: [], escalatedTasks: [], pendingApprovals: [], reason: message }
-    })
+    }))
     return this.running
   }
 
@@ -672,6 +682,32 @@ export class PodService {
     })
   }
 
+  /**
+   * run 收口跟踪（审计 P1 #3）：驱动循环结束后，mission 已终态 → 释放编排器引用。
+   * 此前 orchestrator 只在 launch/recover 赋值、从不置空，done/aborted 会话在
+   * 本进程生命周期内 deleteMission 恒 409（「先中止再删」的中止并不释放它）。
+   */
+  private trackRun(orch: MissionOrchestrator, run: Promise<RunSummary>): Promise<RunSummary> {
+    void run
+      .then(() => this.releaseFinishedOrchestrator(orch))
+      .catch(() => this.releaseFinishedOrchestrator(orch))
+    return run
+  }
+
+  private releaseFinishedOrchestrator(orch: MissionOrchestrator): void {
+    if (this.orchestrator !== orch) return
+    const mission = this.store.getMission(orch.missionId)
+    if (mission === undefined || mission.status === 'done' || mission.status === 'aborted') {
+      this.orchestrator = undefined
+      this.running = undefined
+    }
+  }
+
+  /** mission 是否仍存在（a2a-push watcher 的删除作废判定）。 */
+  missionExists(missionId: string): boolean {
+    return this.store.getMission(missionId) !== undefined
+  }
+
   private requireOrchestrator(): MissionOrchestrator {
     if (this.orchestrator === undefined) {
       // 跨重启恢复（DoD-11，P0 修复：此前只重建对象——孤儿任务永久卡 dispatched/running）：
@@ -744,14 +780,48 @@ export class PodService {
     return [...new Set(roots)]
   }
 
-  /** 全量事件（SSE replay 用：无上限，新订阅者先收 buffered history 再收 live）。 */
+  /** 终态 mission 的事件在事件面继续可见的宽限期：让轮询方/SSE/push 有时间取走终态事件。 */
+  static readonly EVENTS_TERMINAL_GRACE_MS = 10 * 60 * 1000
+
+  /**
+   * 单 mission 事件读取（A2A SSE / push watcher 专用）：不做「活跃 mission」过滤——
+   * mission 完成路径在同一同步块内先翻终态再落 mission_done（mission.ts），
+   * 任何轮询方都不可能观察到「mission 活跃且终态事件可读」的中间态；
+   * 活跃过滤会把 mission_done/mission_aborted 永久挡在门外（终态帧永不可达）。
+   */
+  missionEventsAfter(
+    missionId: string,
+    afterTs: number,
+    afterId?: string,
+  ): Array<{ id: string; ts: number; kind: string; mission_id?: string; task_id?: string; slot_id?: string; payload: Record<string, unknown> }> {
+    const sorted = this.store.listEvents(missionId).sort((a, b) => a.ts - b.ts)
+    const firstAfterTs = sorted.findIndex((e) => e.ts > afterTs)
+    let start = firstAfterTs === -1 ? sorted.length : firstAfterTs
+    if (afterId !== undefined && afterId.length > 0) {
+      const idx = sorted.findIndex((e) => e.id === afterId)
+      start = idx === -1 ? start : idx + 1
+    }
+    return sorted.slice(start).map((e) => ({
+      id: e.id, ts: e.ts, kind: e.kind, mission_id: e.mission_id, task_id: e.task_id, slot_id: e.slot_id, payload: e.payload,
+    }))
+  }
+
+  /** 事件面可见的 mission 集：活跃 + 终态宽限期内（终态事件可被取走，之后滚出）。 */
+  private eventsVisibleMissions(): Mission[] {
+    const now = this.clock()
+    return this.store.listMissions().filter((m) => {
+      if (m.status !== 'done' && m.status !== 'aborted') return true
+      return now - m.updated_at < PodService.EVENTS_TERMINAL_GRACE_MS
+    })
+  }
+
   /**
    * SSE 增量取数（events/stream 数据源）。游标语义与 eventsTail 对齐：
    * 优先 afterId（事件 id 精确定位，同毫秒事件不丢）；缺省/失效回退 ts 严格比较。
    * （审计 P1 修复：此前 SSE 与轮询只有后者修了同毫秒丢事件，此处是漏掉的对称路径。）
    */
   eventsAfter(afterTs: number, afterId?: string): Array<{ id: string; ts: number; kind: string; mission_id?: string; task_id?: string; slot_id?: string; payload: Record<string, unknown> }> {
-    const missions = this.store.listMissions().filter((m) => m.status !== 'done' && m.status !== 'aborted')
+    const missions = this.eventsVisibleMissions()
     // Array.sort 自 ES2019 稳定：同 ts 事件保持落盘顺序，id 定位才可靠
     const sorted = missions.flatMap((m) => this.store.listEvents(m.id)).sort((a, b) => a.ts - b.ts)
     const firstAfterTs = sorted.findIndex((e) => e.ts > afterTs)
@@ -785,7 +855,7 @@ export class PodService {
    * 已推进的游标永久跳过——高吞吐流式输出时表现为对话流丢内容。
    */
   eventsTail(afterTs: number, afterId?: string): { events: EventTailItem[]; cursor: string; has_more: boolean } {
-    const missions = this.store.listMissions().filter((m) => m.status !== 'done' && m.status !== 'aborted')
+    const missions = this.eventsVisibleMissions()
     // Array.sort 自 ES2019 稳定：同 ts 事件保持落盘顺序，afterId 定位才可靠
     const sorted = missions.flatMap((m) => this.store.listEvents(m.id)).sort((a, b) => a.ts - b.ts)
     const firstAfterTs = (): number => {
@@ -947,8 +1017,13 @@ export class PodService {
     if (mission.status !== 'done' && mission.status !== 'aborted') {
       throw new PodError(`会话仍在运行（${mission.status}），请先中止再删除`, 'MISSION_ACTIVE')
     }
-    if (this.orchestrator !== undefined && this.orchestrator.missionId === missionId) {
+    // 编排器只在驱动未收口时挡删（run 仍在途）；mission 已终态即释放（见 releaseFinishedOrchestrator），
+    // 此前「终态后 orchestrator 引用永不置空」导致本进程内 done/aborted 会话永远 409 删不掉
+    if (this.orchestrator !== undefined && this.orchestrator.missionId === missionId && this.running !== undefined) {
       throw new PodError('当前编排器正在驱动该会话，无法删除', 'MISSION_ACTIVE')
+    }
+    if (this.orchestrator !== undefined && this.orchestrator.missionId === missionId) {
+      this.orchestrator = undefined
     }
     const slots = this.store.listSlots(missionId)
     const removed = {

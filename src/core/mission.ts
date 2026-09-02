@@ -155,6 +155,21 @@ export class MissionMachine {
     }
   }
 
+  /**
+   * 无产物收口（审计 P2 修复）：全部任务 done 但没有任何带 commit 的实现任务
+   * （纯 research/doc/plan 型 mission）——没有可合并的 patch，awaiting_approval
+   * 里既无卡可批也无法 resume，此前 mission 永久楔死。直接落 done 并如实标注原因。
+   */
+  completeNoPatch(by: string): void {
+    const mission = this.getMission()
+    if (mission.status !== 'awaiting_approval') {
+      throw new InvalidTransitionError(mission.status, 'done', 'completeNoPatch requires awaiting_approval')
+    }
+    this.store.updateMission(mission.id, { status: 'done' })
+    this.cleanupMissionRules()
+    this.emit(mission, 'mission_done', { mode: 'no-patch', by, note: '无可合并产物（纯调研/文档/规划任务），直接完成' })
+  }
+
   /** 批准合并 → done。审批卡裁决由 ApprovalEngine 持久化（2.6 节模式 1）。 */
   approve(approvalId: string, by: string): void {
     const mission = this.getMission()

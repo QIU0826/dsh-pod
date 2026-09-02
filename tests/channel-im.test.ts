@@ -219,9 +219,9 @@ describe('端到端：入站 → 指令路由 → 出站（审批门不绕过）
 
 describe('飞书明文模式验签 + 重放去重（审计修复）', () => {
   const TOKEN = 'lark-verification-token'
-  const larkPlain = (over: { token?: string; eventId?: string } = {}): ImRequest => ({
+  const larkPlain = (over: { token?: string; eventId?: string; ts?: number } = {}): ImRequest => ({
     vendor: 'lark',
-    headers: {},
+    headers: { 'x-lark-request-timestamp': String(over.ts ?? Math.floor(NOW / 1000)) },
     rawBody: JSON.stringify({
       header: { token: over.token ?? TOKEN, event_id: over.eventId, event_type: 'im.message.receive_v1' },
       event: {
@@ -235,6 +235,12 @@ describe('飞书明文模式验签 + 重放去重（审计修复）', () => {
     const r = verifyAndParseIm(larkPlain(), { nowMs: NOW })
     expect(r.ok).toBe(false)
     expect(r.reason).toContain('not configured')
+  })
+
+  it('明文模式时间窗过期 → 拒绝（静态 token 无新鲜度，历史报文不可在 TTL 外重放）', () => {
+    const stale = verifyAndParseIm(larkPlain({ ts: Math.floor(NOW / 1000) - 3600 }), { larkVerificationToken: TOKEN, nowMs: NOW })
+    expect(stale.ok).toBe(false)
+    expect(stale.reason).toContain('out of window')
   })
 
   it('明文模式 token 缺失/不匹配 → 拒绝；匹配 → 放行', () => {

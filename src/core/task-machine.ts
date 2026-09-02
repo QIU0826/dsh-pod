@@ -235,6 +235,21 @@ export class TaskMachine {
     this.emit(this.getTask(taskId), 'task_rejected', { reason, by_slot: task.owner_slot_id })
   }
 
+  /**
+   * 要约撤回（Negotiating|Accepted → ready，无故障语义）：探测 await 窗口内
+   * mission 被暂停/中止等外部状态变化时，协商中的任务回待派池——不谢绝任何
+   * 槽位、不计故障、不消费 attempts（审计 P2 #9；与 rejectBySlot 的语义区分）。
+   */
+  standDown(taskId: string, reason: string): void {
+    const task = this.getTask(taskId)
+    if (task.status !== 'negotiating' && task.status !== 'accepted') {
+      throw new InvalidTransitionError(task.status, 'ready', 'only negotiating or accepted tasks can stand down')
+    }
+    this.store.updateTask(this.missionId, taskId, { status: 'ready', owner_slot_id: undefined })
+    this.releaseSlot(task)
+    this.emit(this.getTask(taskId), 'task_negotiation', { phase: 'standdown', reason })
+  }
+
   /** 派发（ready | 可重试 blocked | accepted → dispatched）。429 退避期内的重试被拒绝。 */
   dispatch(taskId: string, slotId: string): void {
     const task = this.getTask(taskId)
@@ -391,7 +406,7 @@ export class TaskMachine {
   }
 
   private escalateInternal(task: Task, reason: string, failures: { check: string; detail: string }[]): void {
-    this.store.updateTask(task.id, {
+    this.store.updateTask(this.missionId, task.id, {
       status: 'escalated',
       escalated_at: this.clock(),
       last_error: reason,
@@ -431,7 +446,7 @@ export class TaskMachine {
       ? `early exit: ${noNewEvidence + 1} consecutive failures with identical evidence (no new information) — ${message}`
       : message
 
-    this.store.updateTask(task.id, {
+    this.store.updateTask(this.missionId, task.id, {
       status: escalated ? 'escalated' : 'blocked',
       fault: kind,
       last_error: lastError,

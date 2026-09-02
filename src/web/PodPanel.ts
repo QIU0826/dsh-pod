@@ -251,6 +251,10 @@ export function PodPanel(): ReactElement {
     setSelectedSessionId(null)
     setUserMessages([])
     setAnswered(new Set())
+    // 审计 P3 #18：切新会话必须清事件缓冲与游标，否则旧会话的流式消息/问答卡
+    // 混进新会话（服务端事件面只回活跃 mission 的事件，刷新即消失——不刷新则脏）
+    setEvents([])
+    lastEventId.current = ''
     setView('chat')
   }
 
@@ -269,7 +273,11 @@ export function PodPanel(): ReactElement {
     if (!window.confirm(`删除会话「${target?.goal ?? id}」？\n\n将清空该会话的全部任务、审批、账本、事件与 worktree，且不可恢复。`)) return
     void runAction(async () => {
       await deleteMission(id)
-      if (selectedSessionId === id) setSelectedSessionId(null)
+      if (selectedSessionId === id) {
+        setSelectedSessionId(null)
+        setEvents([])
+        lastEventId.current = ''
+      }
     })
   }
 
@@ -416,13 +424,11 @@ export function PodPanel(): ReactElement {
                   reassignTarget: selectedSlot.length > 0 ? selectedSlot : null,
                   reassignTargetLabel: selectedSlot.length > 0 ? shortSlotId(selectedSlot) : '',
                   onSelectSlot: setSelectedSlot,
-                  onAddTask: (title, type) => void runAction(async () => {
-                    await fetch('/api/dsh-pod/plan', {
-                      method: 'POST',
-                      headers: { 'content-type': 'application/json' },
-                      body: JSON.stringify({ action: 'add', tasks: [{ id: `T-${Date.now().toString(36).slice(-5).toUpperCase()}`, title, spec: title, type, skill_tags: [], depends_on: [] }] }),
-                    })
-                  }),
+                  onAddTask: (title, type) => void runAction(() => postPlan('add', {
+                    // 走统一 postPlan（readJson 会对 4xx 抛错进错误条）；裸 fetch 会把
+                    // 409（mission 刚终态）/422（DUPLICATE_TASK）静默吞掉（审计 P3 #22）
+                    tasks: [{ id: `T-${Date.now().toString(36).slice(-5).toUpperCase()}`, title, spec: title, type, skill_tags: [], depends_on: [] }],
+                  })),
                 })
               : view === 'dag'
                 ? createElement(DagView, { tasks })

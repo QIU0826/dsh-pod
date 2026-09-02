@@ -261,7 +261,8 @@ describe('CodexHeadlessBackend（FakeSpawner 集成）', () => {
     const persistent: AgentSlot = { ...slot, session_tier: 'per-mission', session_ref: 'thread-9' }
     await backend.start(persistent, task, 'W')
     const args = captured[0]!
-    expect(args.slice(0, 5)).toEqual(['exec', 'resume', '--json', 'thread-9', '-'])
+    // 沙箱不降级（审计 P2-4）：resume 同样锚定 -C worktree + -s read-only
+    expect(args).toEqual(['exec', 'resume', '--json', '-C', 'W', '-s', 'read-only', 'thread-9', '-'])
     expect(stdinText).toContain('T-1')
   })
 

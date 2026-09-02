@@ -125,7 +125,9 @@ export function buildCodexArgs(mode: CodexLaunchMode, worktree: string, model?: 
   assertSafeArgvToken('codex model', model)
   if (mode.kind === 'resume') {
     assertSafeArgvToken('codex threadId', mode.threadId)
-    return ['exec', 'resume', '--json', mode.threadId, '-']
+    // 续接会话不降级沙箱（审计 P2-4）：-C 锚定同一 worktree、-s 保持 read-only，
+    // 否则 resume 跑在用户 ~/.codex/config.toml 的默认沙箱下
+    return ['exec', 'resume', '--json', '-C', worktree, '-s', 'read-only', mode.threadId, '-']
   }
   const args = ['exec', '-', '--json', '--color', 'never', '--skip-git-repo-check', '-s', 'read-only', '-C', worktree]
   if (model !== undefined && model.length > 0) args.push('-m', model)

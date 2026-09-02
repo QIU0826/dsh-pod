@@ -33,8 +33,15 @@ export interface A2aPushEvent {
 
 /** watcher 需要的 PodService 最小面（真实 PodService 满足；测试注入桩）。 */
 export interface A2aPushServiceLike {
-  eventsAfter(afterTs: number, afterId?: string): A2aPushEvent[]
-  status(): { mission?: { id: string } | null }
+  /** 单 mission 事件读取（不做活跃过滤：mission 终态翻转与 mission_done 同步块内完成，
+   *  按「活跃 mission」过滤的事件流永远读不到终态事件——push 的核心就是投递终态）。 */
+  missionEventsAfter(
+    missionId: string,
+    afterTs: number,
+    afterId?: string,
+  ): A2aPushEvent[]
+  /** mission 是否仍存在（被 deleteMission 级联删除 → watcher 作废）。 */
+  missionExists(missionId: string): boolean
 }
 
 export interface A2aPushRegistryOptions {
@@ -50,6 +57,7 @@ interface Registration {
   lastId: string
   timer: ReturnType<typeof setInterval>
   done: boolean
+  bornAt: number
 }
 
 export interface A2aPushRegistry {
@@ -95,23 +103,25 @@ export function createA2aPushRegistry(opts: A2aPushRegistryOptions = {}): A2aPus
         prev.done = true
         clearInterval(prev.timer)
       }
-      const reg: Registration = { missionId, config, lastId: '', timer: undefined as never, done: false }
+      const reg: Registration = { missionId, config, lastId: '', timer: undefined as never, done: false, bornAt: Date.now() }
       const tick = async (): Promise<void> => {
         if (reg.done) return
-        // mission 被替换（单 mission 运行时重新 launch）→ 本 watcher 作废，不再错投
-        const current = service.status().mission
-        if (current === null || current === undefined || current.id !== reg.missionId) {
+        // mission 被级联删除（deleteMission）→ watcher 作废
+        if (!service.missionExists(reg.missionId)) {
           reg.done = true
           clearInterval(reg.timer)
           watchers.delete(reg.missionId)
           return
         }
         try {
-          const events = reg.lastId.length > 0 ? service.eventsAfter(0, reg.lastId) : service.eventsAfter(0)
+          const events = reg.lastId.length > 0 ? service.missionEventsAfter(reg.missionId, 0, reg.lastId) : service.missionEventsAfter(reg.missionId, 0)
           for (const event of events) {
             if (reg.done) return
-            // 只认本 mission 的终态（eventsAfter 是活跃 mission 混流）；mission_id 缺失按不认处理（fail-closed）
-            if (event.mission_id !== reg.missionId) continue
+            // 防御性归属过滤（missionEventsAfter 契约上只回本 mission 事件；异常混入不投递）
+            if (event.mission_id !== undefined && event.mission_id !== reg.missionId) {
+              reg.lastId = event.id
+              continue
+            }
             reg.lastId = event.id
             for (const mapped of internalEventToA2a(event as import('./core/types.js').PodEvent)) {
               if (reg.done) return
@@ -125,6 +135,12 @@ export function createA2aPushRegistry(opts: A2aPushRegistryOptions = {}): A2aPus
           }
         } catch {
           /* 读取异常：保持注册，下轮重试 */
+        }
+        // 生命上限（24h）：mission 长期非终态（如 paused 无人恢复）时 watcher 不得永生
+        if (Date.now() - reg.bornAt > 24 * 60 * 60 * 1000) {
+          reg.done = true
+          clearInterval(reg.timer)
+          watchers.delete(reg.missionId)
         }
       }
       reg.timer = setInterval(() => {
