@@ -324,6 +324,18 @@ export class PodService {
         'CWD_NOT_GIT_REPO',
       )
     }
+    // 空仓守卫（用户实证闭环）：`git worktree add` 要求仓库至少有一个 commit——
+    // 刚 git init 的空仓会过上面检查却在派发时半路失败；发射前给出一句话可执行的指引
+    try {
+      execFileSync('git', ['-C', input.cwd, 'rev-parse', '--verify', 'HEAD'], {
+        encoding: 'utf8', timeout: 10_000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'],
+      })
+    } catch {
+      throw new PodError(
+        `目标目录是空 git 仓库（没有任何提交）: ${input.cwd}（在该目录执行一次提交，例如 git commit --allow-empty -m init，或选择已有提交的仓库）`,
+        'CWD_GIT_EMPTY_REPO',
+      )
+    }
     const missionId = `M-${this.clock()}-${Math.floor(Math.random() * 1e6)}`
     const orchestrator = this.makeOrchestrator(missionId)
     const mission = orchestrator.launch(input)
