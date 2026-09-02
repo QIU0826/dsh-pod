@@ -812,7 +812,12 @@ export class MissionOrchestrator {
     const handle = await backend.start(slot, enriched, worktreePath, {
       onProgress: (event) => this.handleProgress(slot, task, event),
       onExit: (completion) => {
-        void this.handleCompletion(task.id, completion)
+        // 终极兜底：完成处理链的任何逃逸（如存储目录已消失时的二次抛出）
+        // 不得变成 unhandled rejection 炸掉宿主进程——留日志即止
+        void this.handleCompletion(task.id, completion).catch((error) => {
+          const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+          console.error('[dsh-pod] task completion handler crashed:', message)
+        })
       },
     })
     this.handles.set(task.id, handle)
@@ -1068,23 +1073,29 @@ export class MissionOrchestrator {
     try {
       await this.processCompletion(taskId, completion)
     } catch (error) {
-      // 内部错误绝不静默（error-handling 纪律）：落事件 + 任务故障化 + 唤醒驱动循环
+      // 内部错误绝不静默（error-handling 纪律）：落事件 + 任务故障化 + 唤醒驱动循环。
+      // catch 路径自身也要防二次抛出（实测：存储目录消失时 appendEvent 抛同源 ENOENT，
+      // 逃逸 void 调用点后成为 unhandled rejection——Node>=15 默认崩宿主进程）
       const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
-      this.store.appendEvent(this.missionId, {
-        id: `ev-completion-error-${taskId}-${this.clock()}`,
-        mission_id: this.missionId,
-        ts: this.clock(),
-        kind: 'completion_error',
-        task_id: taskId,
-        payload: { error: message },
-      })
-      const task = this.store.getTask(this.missionId, taskId)
-      if (task !== undefined && (task.status === 'dispatched' || task.status === 'running')) {
-        try {
+      try {
+        this.store.appendEvent(this.missionId, {
+          id: `ev-completion-error-${taskId}-${this.clock()}`,
+          mission_id: this.missionId,
+          ts: this.clock(),
+          kind: 'completion_error',
+          task_id: taskId,
+          payload: { error: message },
+        })
+      } catch {
+        console.error('[dsh-pod] completion-error event also failed (store unavailable?):', message)
+      }
+      try {
+        const task = this.store.getTask(this.missionId, taskId)
+        if (task !== undefined && (task.status === 'dispatched' || task.status === 'running')) {
           this.taskMachine.fail(taskId, { kind: 'crash', message: `internal error: ${message}` })
-        } catch {
-          // 状态已漂移：只留事件，不二次抛出
         }
+      } catch {
+        // 状态已漂移或存储不可用：只留日志，不二次抛出
       }
     } finally {
       // 完成即弃句柄：正常完成的任务此前从不清理，Map 无界增长（审计 M3）
@@ -1292,12 +1303,12 @@ export class MissionOrchestrator {
       const task = this.store.getTask(this.missionId, item.task_id)
       if (task === undefined) continue
       if (item.kind === 'task-wall-clock') {
-        void this.killTask(item.task_id)
+        void this.killTask(item.task_id).catch(() => { /* 句柄已死/进程退出竞态：非故障 */ })
         if (task.status === 'dispatched' || task.status === 'running') {
           this.taskMachine.fail(item.task_id, { kind: 'wall_clock', message: 'watchdog: wall-clock exceeded' })
         }
       } else if (item.kind === 'task-idle') {
-        void this.killTask(item.task_id)
+        void this.killTask(item.task_id).catch(() => { /* 句柄已死/进程退出竞态：非故障 */ })
         if (task.status === 'dispatched' || task.status === 'running') {
           this.taskMachine.fail(item.task_id, { kind: 'idle_timeout', message: 'watchdog: no stream events' })
         }
