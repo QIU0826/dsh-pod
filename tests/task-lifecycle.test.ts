@@ -258,6 +258,37 @@ describe('TaskMachine 生命周期迁移（非法迁移 fail-closed）', () => {
     fixture.store.updateTask('M-1', t.id, { status: 'running' })
     expect(() => machine.rejectTerminal('T-1', 'x')).toThrow(/only a negotiating/)
   })
+
+  it('report(need_clarify) 软失败 → blocked + soft_attempts=1、不计 attempts、可重派（回归：竞态定位 2026-09-02）', async () => {
+    seed()
+    const machine = new TaskMachine(fixture.store, {
+      missionId: 'M-1',
+      clock: () => 1_700_000_000_000,
+      verify: async () => ({ ok: true, failures: [], mismatch: false }),
+    })
+    machine.offer('T-1', 'S-1', {})
+    machine.accept('T-1', {})
+    machine.dispatch('T-1', 'S-1')
+    machine.start('T-1')
+    await machine.report('T-1', {
+      task_id: 'T-1',
+      task_type: 'implement',
+      status: 'need_clarify',
+      summary: '实现前需澄清范围',
+      files_changed: [],
+      test_result: 'not_run',
+      decisions: [],
+      blockers: [],
+      questions: ['q1?', 'q2?'],
+    })
+    const t = fixture.store.getTask('M-1', 'T-1')
+    expect(t?.status).toBe('blocked') // 软失败转 blocked（非 escalated，非 running）
+    expect(t?.soft_attempts).toBe(1)
+    expect(t?.attempts).toBe(0) // 软失败不消费 attempts
+    expect(t?.fault).toBe('need_clarify')
+    // 可重派（next_retry_at 为 now，非 auth/rate_limited 退避）
+    expect(machine.shouldRetry(t!, 1_700_000_000_000)).toBe(true)
+  })
 })
 
 describe('协商（Negotiating）编排行为', () => {
