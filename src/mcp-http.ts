@@ -74,7 +74,27 @@ export interface McpHttpHandle {
 export function createMcpHttpServer(service: PodService, opts: McpHttpOptions = {}): McpHttpHandle {
   const token = (opts.token ?? '').trim()
   // 每会话一个 transport+server 实例（官方 stateful 模式）：多客户端并发互不干扰。
-  const sessions = new Map<string, { server: McpServer; transport: StreamableHTTPServerTransport }>()
+  const sessions = new Map<string, { server: McpServer; transport: StreamableHTTPServerTransport; lastSeen: number }>()
+  // 会话回收（审计修复 #29）：客户端异常退出（未发 DELETE）的会话此前永久持有
+  // server+transport——惰性 sweep（每次请求）+ 定时器双保险，30 分钟无访问即关停清理
+  const MCP_SESSION_TTL_MS = 30 * 60 * 1000
+  async function sweepSessions(): Promise<void> {
+    const now = Date.now()
+    for (const [id, entry] of sessions) {
+      if (now - entry.lastSeen > MCP_SESSION_TTL_MS) {
+        try {
+          await entry.server.close()
+        } catch {
+          // 关停失败也移除引用：不让一个坏会话卡住整个回收
+        }
+        sessions.delete(id)
+      }
+    }
+  }
+  const sweeper = setInterval(() => {
+    void sweepSessions()
+  }, 5 * 60 * 1000)
+  sweeper.unref?.()
 
   function authorized(req: IncomingMessage): boolean {
     if (token.length === 0) return true
@@ -114,9 +134,11 @@ export function createMcpHttpServer(service: PodService, opts: McpHttpOptions = 
       return
     }
 
+    void sweepSessions()
     const rawSid = req.headers['mcp-session-id']
     const sessionId = Array.isArray(rawSid) ? rawSid[0] : rawSid
     let entry = sessionId !== undefined ? sessions.get(sessionId) : undefined
+    if (entry !== undefined) entry.lastSeen = Date.now()
 
     // DELETE = 客户端显式关闭会话（MCP 规范）。
     if (req.method === 'DELETE') {
@@ -166,7 +188,7 @@ export function createMcpHttpServer(service: PodService, opts: McpHttpOptions = 
       }
       // handleRequest 完成后 sessionId 已就绪，注册新会话供后续请求按头路由。
       const id = transport.sessionId
-      if (id !== undefined) sessions.set(id, { server, transport })
+      if (id !== undefined) sessions.set(id, { server, transport, lastSeen: Date.now() })
       return
     }
 
@@ -186,6 +208,7 @@ export function createMcpHttpServer(service: PodService, opts: McpHttpOptions = 
     token,
     sessionCount: () => sessions.size,
     close: async () => {
+      clearInterval(sweeper)
       for (const { server } of sessions.values()) await server.close()
       sessions.clear()
     },

@@ -83,7 +83,18 @@ export function PodPanel(): ReactElement {
     // 游标优先取服务端批次游标（轮询）；SSE 逐帧推送没有批次游标，取该帧自身的 id。
     // 用 id 而非 ts：同毫秒产生的多个事件不会被 `ts > after` 的严格比较整批跳过。
     const last = incoming[incoming.length - 1]!
-    lastEventId.current = cursor !== undefined && cursor.length > 0 ? cursor : last.id
+    const candidate = cursor !== undefined && cursor.length > 0 ? cursor : last.id
+    // 游标单调（审计修复）：SSE replay 逐帧推送历史事件，旧帧会把游标拉回去——
+    // 期间每 2s 的轮询从旧游标全量重拉（has_more 分页最多 10 次请求/tick）。
+    // 仅当候选游标与当前游标「同批或更新」时才推进：按事件序比较（events 排序后追加）。
+    if (lastEventId.current.length === 0) {
+      lastEventId.current = candidate
+    } else {
+      const prevIdx = incoming.findIndex((e) => e.id === lastEventId.current)
+      const candIdx = incoming.findIndex((e) => e.id === candidate)
+      // 候选在数组中且不早于当前游标位置 → 推进；当前游标不在本批（已领先）→ 除非候选也在批内且靠后，否则不动
+      if (candIdx >= 0 && (prevIdx === -1 || candIdx >= prevIdx)) lastEventId.current = candidate
+    }
     setEvents((prev) => {
       const seen = new Set(prev.map((e) => e.id))
       return [...prev, ...incoming.filter((e) => !seen.has(e.id))].slice(-400)

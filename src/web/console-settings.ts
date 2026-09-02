@@ -111,6 +111,13 @@ export function loadSettings(): ConsoleSettings {
       if (parsed.budgetMode !== 'unlimited' && parsed.budgetMode !== 'tokens') {
         merged.budgetMode = 'tokens'
       }
+      // 坏值归位（审计修复）：非字符串/null 会让 .trim() 抛错被外层 catch 吞掉——
+      // 整份设置静默回默认（用户丢 cwd/名册/宗旨）；非数字串则静默丢 token 熔断
+      if (typeof merged.budgetTokens !== 'string') {
+        merged.budgetTokens = '2000000'
+      } else if (!/^\d+$/.test(merged.budgetTokens.trim()) || Number(merged.budgetTokens) <= 0) {
+        merged.budgetTokens = '2000000'
+      }
       if (merged.budgetMode === 'tokens' && merged.budgetTokens.trim().length === 0) {
         merged.budgetTokens = '2000000'
       }

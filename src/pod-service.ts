@@ -263,6 +263,10 @@ export class PodService {
       if (command === null || typeof command !== 'object' || typeof command.kind !== 'string') {
         return { ok: false, message: 'job needs command.kind (status|launch|approve|deny|steer|pause|resume|abort)' }
       }
+      // kind 枚举校验（审计修复）：拼错的 kind 此前被落盘+热加载成「永不生效」的静默哑 job
+      if (!['status', 'launch', 'approve', 'deny', 'steer', 'pause', 'resume', 'abort'].includes(command.kind)) {
+        return { ok: false, message: `unknown command.kind: ${command.kind}（可用：status|launch|approve|deny|steer|pause|resume|abort）` }
+      }
       clean.push({
         id: raw.id,
         intervalMs: Math.max(1_000, Math.floor(raw.intervalMs)),

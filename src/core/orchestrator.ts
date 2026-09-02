@@ -822,17 +822,43 @@ export class MissionOrchestrator {
       task_id: task.id,
       deadline: this.clock() + task.max_wall_clock_ms,
     })
-    const handle = await backend.start(slot, enriched, worktreePath, {
-      onProgress: (event) => this.handleProgress(slot, task, event),
-      onExit: (completion) => {
-        // 终极兜底：完成处理链的任何逃逸（如存储目录已消失时的二次抛出）
-        // 不得变成 unhandled rejection 炸掉宿主进程——留日志即止
-        void this.handleCompletion(task.id, completion, generation).catch((error) => {
-          const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
-          console.error('[dsh-pod] task completion handler crashed:', message)
-        })
-      },
-    })
+    let handle: WorkerHandle
+    try {
+      handle = await backend.start(slot, enriched, worktreePath, {
+        onProgress: (event) => this.handleProgress(slot, task, event),
+        onExit: (completion) => {
+          // 终极兜底：完成处理链的任何逃逸（如存储目录已消失时的二次抛出）
+          // 不得变成 unhandled rejection 炸掉宿主进程——留日志即止
+          void this.handleCompletion(task.id, completion, generation).catch((error) => {
+            const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+            console.error('[dsh-pod] task completion handler crashed:', message)
+          })
+        },
+      })
+    } catch (error) {
+      // 启动即抛（spawn 失败/worktree 异常）：即时故障化可重试（审计修复——
+      // 此前任务滞留 running、槽位滞留 working，只能等 10min stall guard 兜底）
+      const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+      this.watchdog.disarm(`task-idle:${task.id}`)
+      this.watchdog.disarm(`task-wall-clock:${task.id}`)
+      this.dispatchGenerations.delete(task.id)
+      try {
+        this.taskMachine.fail(task.id, { kind: 'crash', message: `backend start failed: ${message.slice(0, 200)}` })
+      } catch {
+        // 状态已漂移：留事件即可
+      }
+      this.store.appendEvent(this.missionId, {
+        id: `ev-start-failed-${task.id}-${this.clock()}`,
+        mission_id: this.missionId,
+        ts: this.clock(),
+        kind: 'task_blocked',
+        task_id: task.id,
+        slot_id: slot.id,
+        payload: { fault: 'crash', guard: 'backend-start', message: message.slice(0, 300) },
+      })
+      this.signalCompletion()
+      return false
+    }
     this.handles.set(task.id, handle)
     // 档位 B/C 的会话复用：workers 层靠 slot.session_ref 判断「续会话还是起新会话」
     // （claude: --resume <id>；codex: resume <threadId>）。
@@ -1794,6 +1820,9 @@ export class MissionOrchestrator {
     this.stopRequested = true
     this.stopReason = 'user'
     this.missionMachine.pause()
+    // watchdog 计时挂起（审计修复，CR-01-4 此前从未接线）：暂停期间在途任务不被
+    // idle/wall-clock 误杀烧 attempts；挂起时长在 resume 时顺延到 deadline
+    this.watchdog.pauseAll()
     // 唤醒可能在 waitForCompletion 上等待的驱动循环：在途完成仍独立处理，不依赖循环存活
     this.signalCompletion()
   }
@@ -1802,6 +1831,7 @@ export class MissionOrchestrator {
    * 回到 running 时自动重驱——此前 resume 后无人再调 run()，mission 永久停摆（P0 修复）。 */
   resume(): void {
     this.missionMachine.resume()
+    this.watchdog.resumeAll()
     this.ensureDriving()
   }
 

@@ -141,11 +141,16 @@ export class RemoteBackend implements WorkerBackend {
     callbacks: { onProgress?(event: WorkerProgressEvent): void; onExit?(completion: WorkerCompletion): void },
   ): Promise<void> {
     let completion: WorkerCompletion | null = null
+    // 游标增量（审计修复 #15）：不带 after 的全量轮询会把同一批进度事件每 pollMs
+    // 重放一次（10min 任务 ≈ 每条事件重复投递上千次），本地事件洪峰挤出审计窗口
+    let cursor = -1
     while (completion === null) {
       let batch: PollResult
       try {
-        const raw = (await this.transport.request('GET', '/events?session_ref=' + encodeURIComponent(handle.session_ref ?? ''))) as RemoteEventBatch
+        const q = '/events?session_ref=' + encodeURIComponent(handle.session_ref ?? '') + (cursor >= 0 ? '&after=' + cursor : '')
+        const raw = (await this.transport.request('GET', q)) as RemoteEventBatch & { next?: number }
         batch = { events: raw.events ?? [], completion: raw.completion ?? null }
+        if (typeof raw.next === 'number') cursor = raw.next
       } catch {
         // 网络抖动：sleep 后重试，不误报完成
         await sleep(this.pollMs)

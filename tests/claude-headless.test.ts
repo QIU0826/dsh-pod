@@ -37,6 +37,12 @@ function makeTask(): Task {
   }
 }
 
+
+/** 即时 git runner 假件：单测不起真 git（基线探测/校验路径走 code=1 快速返回）。 */
+const fakeGitRunner = {
+  run: async () => ({ code: 1, stdout: '', stderr: 'not a git repo (fake)' }),
+}
+
 describe('parseStreamJsonLine（容错解析）', () => {
   it('解析合法 JSON 事件', () => {
     expect(parseStreamJsonLine('{"type":"system","subtype":"init"}')).toEqual({ type: 'system', subtype: 'init' })
@@ -452,6 +458,7 @@ describe('ClaudeHeadlessBackend.start（FakeSpawner 集成）', () => {
     let exitCompletion: unknown
     const backend = new ClaudeHeadlessBackend({
       clock: () => now,
+      detectRunner: fakeGitRunner,
       spawner: () => {
         let sink: (line: string) => void = () => {}
         const spawned = {
@@ -505,6 +512,7 @@ describe('spawn 失败路径（P0：error 监听防宿主崩溃 + 不误判 done
     let captured: import('../src/core/types.js').WorkerCompletion | undefined
     const backend = new ClaudeHeadlessBackend({
       clock: () => 1_700_000_000_000,
+      detectRunner: fakeGitRunner,
       spawner: () => ({
         child: { pid: 999 } as never,
         stderrTail: [],
@@ -570,33 +578,66 @@ describe('commit_sha 权威校正（E2E 实证 2026-09-01：模型手填 sha 19%
       const fakeReport = '完成。```json{"task_id":"T-3","task_type":"implement","status":"done","summary":"s","files_changed":["a.ts"],"commit_sha":"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef","test_command":"npm test","test_result":"not_run","decisions":[],"blockers":[],"questions":[]}```'
       const events = ['{"type":"result","is_error":false,"result":' + JSON.stringify(fakeReport) + ',"session_id":"s","usage":{"input_tokens":1,"output_tokens":1}}']
       let captured: { report?: MissionReport } | undefined
+      // 脚本化 git runner：任务开始时的基线 HEAD 与结束时的 HEAD 不同（= 任务期间真实落了 commit）
+      // 调用序即语义：第 1 次 rev-parse HEAD = 任务开始基线；其后 = 结束时 HEAD（任务期间落了新 commit）
+      const baselineSha = 'b'.repeat(40)
+      let headCalls = 0
+      const scriptedGitRunner = {
+        run: async (_cmd: string, args: string[]) => {
+          if (args.includes('verify')) return { code: 1, stdout: '', stderr: '' } // 报告 sha 不可解析
+          if (args.includes('HEAD')) {
+            headCalls += 1
+            const sha = headCalls === 1 ? baselineSha : realHead
+            return { code: 0, stdout: `${sha}
+`, stderr: '' }
+          }
+          return { code: 1, stdout: '', stderr: '' }
+        },
+      }
+      const makeSpawner = (events: string[]) => () => {
+        let sink: (line: string) => void = () => {}
+        const spawned = {
+          child: { pid: 1 } as never,
+          stderrTail: [] as string[],
+          onLine() {},
+          writeStdin() {},
+          exited: Promise.resolve({ code: 0, signal: null, timedOut: false }),
+        }
+        Object.defineProperty(spawned, 'onLine', {
+          set(fn: (line: string) => void) {
+            sink = fn
+            for (const line of events) fn(line)
+          },
+          get() {
+            return sink
+          },
+        })
+        return spawned
+      }
       const backend = new ClaudeHeadlessBackend({
         clock: () => now,
-        spawner: () => {
-          let sink: (line: string) => void = () => {}
-          const spawned = {
-            child: { pid: 1 } as never,
-            stderrTail: [],
-            onLine() {},
-            writeStdin() {},
-            exited: Promise.resolve({ code: 0, signal: null, timedOut: false }),
-          }
-          Object.defineProperty(spawned, 'onLine', {
-            set(fn: (line: string) => void) {
-              sink = fn
-              for (const line of events) fn(line)
-            },
-            get() {
-              return sink
-            },
-          })
-          return spawned
-        },
+        detectRunner: scriptedGitRunner,
+        spawner: makeSpawner(events),
       })
       const slot: AgentSlot = { id: 'S-1', mission_id: 'M-1', vendor: 'claude', role: 'implementer', capabilities: ['编码'], model: 'deepseek-v4-pro', effort: 'medium', session_tier: 'transient', status: 'idle', tokens_in: 0, tokens_out: 0, ctx_usage_pct: 0, window_tokens: 200_000 }
       await backend.start(slot, makeTask(), dir, { onExit: (c) => { captured = c } })
       await waitForExit(() => captured)
-      expect(captured?.report?.commit_sha).toBe(realHead) // 编造 sha 被真实 HEAD 覆盖
+      expect(captured?.report?.commit_sha).toBe(realHead) // 编造 sha 被任务期间新产生的 HEAD 覆盖
+
+      // 基线 = 当前 HEAD（任务没落任何 commit）→ 拒绝覆盖：不得拿前一任务的 commit 盖章
+      let captured2: { report?: MissionReport } | undefined
+      const sameHeadRunner = {
+        run: async (_cmd: string, args: string[]) => {
+          if (args.includes('verify')) return { code: 1, stdout: '', stderr: '' }
+          if (args.includes('HEAD')) return { code: 0, stdout: `${realHead}
+`, stderr: '' }
+          return { code: 1, stdout: '', stderr: '' }
+        },
+      }
+      const backend2 = new ClaudeHeadlessBackend({ clock: () => now, detectRunner: sameHeadRunner, spawner: makeSpawner(events) })
+      await backend2.start(slot, makeTask(), dir, { onExit: (c) => { captured2 = c } })
+      await waitForExit(() => captured2)
+      expect(captured2?.report?.commit_sha).toBe('deadbeefdeadbeefdeadbeefdeadbeefdeadbeef') // 保持原值交 verifier 裁决
     } finally {
       safeRm(dir)
     }

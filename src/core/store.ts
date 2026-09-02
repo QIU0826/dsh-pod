@@ -500,6 +500,18 @@ export class JsonStore implements PodStore {
   }
 
   close(): void {
+    // 落盘兜底（审计修复）：appendEvent 只进内存、由下一次状态变更合并 persist——
+    // 直接 close 会把「最后一次状态变更之后」的纯事件（steer/进度/问答）全部丢掉。
+    // 仅当主文件仍归本实例所有时才 flush：迁移路径已把 store.json 改名 .migrated，
+    // 此刻再 persist 会把旧文件重新写出来（迁移测试捕获的回归）。
+    // 目录已消失等写失败不再抛出（close 必须可完成）。
+    if (this.data !== undefined && existsSync(this.mainPath)) {
+      try {
+        this.persist()
+      } catch {
+        // 尽力而为：留数据在内存随 close 一同消亡，不阻断关停链路
+      }
+    }
     this.data = undefined
   }
 }

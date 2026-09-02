@@ -245,9 +245,6 @@ const INJECTION_PATTERNS: Array<{ re: RegExp; severity: 'high' | 'medium' }> = [
   { re: /higher\s+priority/i, severity: 'medium' },
 ];
 
-/** 外联 URL（潜在数据外传通道）。 */
-const URL_PATTERN = /https?:\/\/[^\s'"`]+/gi
-
 /** 越权动词（破坏性/提权操作，需在工具用途语境外确认）。 */
 const PRIVILEGE_PATTERNS: Array<{ re: RegExp }> = [
   { re: /\brm\s+-rf\b/i },
@@ -277,7 +274,9 @@ export function scanToolDescriptions(tools: GatewayTool[]): ToolScanFinding[] {
         break // 每类最多一条，避免刷屏
       }
     }
-    const urlMatch = URL_PATTERN.exec(desc)
+    // 每次新鲜正则（审计修复）：模块级 /g 的 lastIndex 跨调用/跨字符串泄漏，
+    // 前一个描述命中后会让下一个描述的外联 URL 检测随机漏报
+    const urlMatch = /https?:\/\/[^\s'"`]+/i.exec(desc)
     if (urlMatch !== null) {
       findings.push({ ref: tool.ref, category: 'external_url', evidence: urlMatch[0].slice(0, 120), severity: 'medium' })
     }

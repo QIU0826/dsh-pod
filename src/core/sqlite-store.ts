@@ -401,7 +401,12 @@ export class SqliteStore implements PodStore {
   }
 
   listEvents(missionId: string): PodEvent[] {
-    return this.listJson<PodEvent>('events', 'mission_id = ?', [missionId])
+    // 显式按 seq 排序（审计修复）：无 ORDER BY 时顺序是索引扫描的隐式行为（SQL 语义上
+    // 未定义），依赖事件序的消费者（reply 聚合/游标重建）在两引擎下不保证一致
+    const rows = this.requireDb()
+      .prepare('SELECT data FROM events WHERE mission_id = ? ORDER BY seq')
+      .all(missionId) as Array<{ data: string }>
+    return rows.map((r) => JSON.parse(r.data) as PodEvent)
   }
 
   dropEvents(missionId: string, predicate: (event: PodEvent) => boolean): number {

@@ -1270,7 +1270,9 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
         }
         if (req.method === 'POST') {
           const body = await readJsonBody(req)
-          writeJson(res, 200, current.cronSave(body?.jobs))
+          const result = current.cronSave(body?.jobs)
+          // 校验失败 = 422（此前 200 包 {ok:false}，非 CronPanel 调用方无从得知）
+          writeJson(res, result.ok ? 200 : 422, result)
           return
         }
         writeJson(res, 405, { error: 'method not allowed' })

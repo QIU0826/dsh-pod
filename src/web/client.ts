@@ -215,7 +215,6 @@ export function apply(ctx: ClientContext): void {
     panelOpen = !panelOpen
     document.dispatchEvent(new CustomEvent(ACTIVATE_EVENT, { detail: PANEL_NAME }))
     document.documentElement.setAttribute(ACTIVE_ATTR, '')
-    panelOpen = true
   }
   const disposers: Array<() => void> = []
   try {

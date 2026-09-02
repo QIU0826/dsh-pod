@@ -28,13 +28,29 @@ function escapeXml(text: string): string {
   return text.replace(/[<>&'"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' })[c] as string)
 }
 
-/** 分层（最长路径深度），依赖缺失节点不炸。 */
-function layerOf(tasks: StatusTask[], id: string, seen: Set<string> = new Set()): number {
-  if (seen.has(id)) return 0
-  seen.add(id)
-  const task = tasks.find((t) => t.id === id)
-  if (task === undefined || task.depends_on.length === 0) return 0
-  return 1 + Math.max(...task.depends_on.map((dep) => layerOf(tasks, dep, seen)))
+/**
+ * 分层（最长路径深度）：memo 化 DFS（审计修复）——此前共享 seen 集合让兄弟分支
+ * 第二次经过同一依赖时返回 0，菱形依赖（A→B→D、A→C→D）的 C 被错放浅层、边画反。
+ * 环防护改用独立的 onStack 标记（重入返回 0），memo 保证正确性且只算一次。
+ */
+function buildLayers(tasks: StatusTask[]): Map<string, number> {
+  const memo = new Map<string, number>()
+  const depth = (id: string, onStack: Set<string>): number => {
+    if (memo.has(id)) return memo.get(id)!
+    if (onStack.has(id)) return 0 // 依赖环：按 0 层截断，不炸不永递归
+    const task = tasks.find((t) => t.id === id)
+    if (task === undefined || task.depends_on.length === 0) {
+      memo.set(id, 0)
+      return 0
+    }
+    onStack.add(id)
+    const layer = 1 + Math.max(...task.depends_on.map((dep) => depth(dep, onStack)))
+    onStack.delete(id)
+    memo.set(id, layer)
+    return layer
+  }
+  for (const t of tasks) depth(t.id, new Set())
+  return memo
 }
 
 export function DagView(props: { tasks: StatusTask[] }): ReactElement {
@@ -45,8 +61,9 @@ export function DagView(props: { tasks: StatusTask[] }): ReactElement {
   const { inner, width, height } = useMemo(() => {
     if (tasks.length === 0) return { inner: '', width: 800, height: 400 }
     const layers = new Map<number, StatusTask[]>()
+    const layerCache = buildLayers(tasks)
     for (const t of tasks) {
-      const depth = layerOf(tasks, t.id)
+      const depth = layerCache.get(t.id) ?? 0
       const bucket = layers.get(depth) ?? []
       bucket.push(t)
       layers.set(depth, bucket)

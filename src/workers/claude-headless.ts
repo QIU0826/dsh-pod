@@ -13,9 +13,7 @@
  * Windows 专项：claude 以 .cmd 分发 → win32 下 spawn 必须 shell:true（本机实证 ENOENT）。
  */
 
-import { execFile as execFileCb, spawn, type ChildProcess } from 'node:child_process'
-import { promisify } from 'node:util'
-const execFileAsync = promisify(execFileCb)
+import { spawn, type ChildProcess } from 'node:child_process'
 import { killTree } from './kill-tree.js'
 import { assertSafeArgvPath, assertSafeArgvToken } from './argv-guard.js'
 import { randomUUID } from 'node:crypto'
@@ -146,6 +144,11 @@ export function claudeErrorEnvelope(
   if (info.apiStatus === 401 || info.apiStatus === 403) return makeEnvelope(`AUTH_${info.apiStatus}`, false, info.message)
   // 404 = 模型/接口配置不存在，重试无意义（与凭据过期同类处置：停重试转人工）
   if (info.apiStatus === 404) return makeEnvelope('AUTH_CONFIG_404', false, '模型或接口配置不存在（检查 ANTHROPIC_BASE_URL 与模型名）')
+  // 成功短路（审计修复）：isError=false 且进程正常退出 → 无错误信封——中途恢复的
+  // api_retry 不能给 done 完成挂上 RATE_LIMIT_429/CRASH（污染审计与账本归因）
+  if (!info.isError && exit.spawnFailed !== true && !exit.timedOut && (exit.code === null || exit.code === 0)) {
+    return undefined
+  }
   if (lastRetry !== undefined) {
     const text = lastRetry.error ?? ''
     if (/401|403|unauthorized|auth|credential/i.test(text)) return makeEnvelope('AUTH_401', false, text)
@@ -553,6 +556,17 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
     return spawned as SpawnedClaude
   }
 
+  /** worktree 当前 HEAD（取不到给空串，调用方按「无基线」处理）。走注入式 runner：单测不起真 git。 */
+  private async currentHead(worktree: string): Promise<string> {
+    try {
+      const r = await this.detectRunner.run('git', ['-C', worktree, 'rev-parse', 'HEAD'])
+      const sha = r.stdout.trim()
+      return r.code === 0 && /^[0-9a-f]{40}$/.test(sha) ? sha : ''
+    } catch {
+      return ''
+    }
+  }
+
   private async collect(
     slot: AgentSlot,
     task: Task,
@@ -562,8 +576,17 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
       onProgress?(event: WorkerProgressEvent): void
     },
   ): Promise<{ sessionRef?: string; completion: WorkerCompletion }> {
+    // 环形缓冲（审计修复）：--include-partial-messages 下事件行数远超最终行数，
+    // 无界 push 使长任务内存线性膨胀；保留尾部窗口已覆盖解析需求
+    // （result/api_retry/report 都在流末尾），头部丢行只影响计数统计
+    const MAX_STDOUT_LINES = 5_000
+    let droppedHeadLines = 0
     const lines: string[] = []
     spawned.onLine = (line) => {
+      if (lines.length >= MAX_STDOUT_LINES) {
+        lines.shift()
+        droppedHeadLines++
+      }
       lines.push(line)
       const event = parseStreamJsonLine(line)
       if (event !== undefined) {
@@ -586,6 +609,9 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
     const stderrDetail = spawned.stderrTail.length > 0 && resultEvent === undefined
       ? spawned.stderrTail.join(' | ').slice(0, 400)
       : undefined
+    // 基线 HEAD（审计修复）：校正只信「任务期间新产生」的 commit。同 worktree 串行复用
+    // 时前一任务的 HEAD 若被当作本任务的 sha，会拿别人的 diff 参与本任务裁决。
+    const baselineHead = await this.currentHead(worktree)
     const usage = resultEvent === undefined ? { tokens_in: 0, tokens_out: 0, source: 'measured' as const } : (extractUsage(resultEvent) ?? { tokens_in: 0, tokens_out: 0, source: 'measured' as const })
     const errorInfo = resultEvent === undefined ? { isError: false } : resultErrorInfo(resultEvent)
     // spawn 失败显式归为 failed(crash)：不标则 code=null 走不到任何故障分支，会被误判 done
@@ -601,15 +627,19 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
     // 写码类、status=done 且报告 sha 在 worktree 无法解析时，以 worktree HEAD 真实
     // sha 覆盖——绝不从无到有补 sha（无 sha 保持原判，防谎报 done 绕过 fail-plausible）。
     if (report !== undefined && report.status === 'done' && (task.type === 'implement' || task.type === 'test') && typeof report.commit_sha === 'string' && report.commit_sha.length > 0 && worktree.length > 0) {
-      try {
-        await execFileAsync('git', ['-C', worktree, 'rev-parse', '--verify', '--quiet', `${report.commit_sha}^{commit}`], { timeout: 5000, windowsHide: true })
-      } catch {
+      // 解析与 HEAD 读取走注入式 runner（可测；code!==0 视为不可解析）
+      const verify = await this.detectRunner.run('git', ['-C', worktree, 'rev-parse', '--verify', '--quiet', `${report.commit_sha}^{commit}`])
+      if (verify.code !== 0) {
         try {
-          const head = await execFileAsync('git', ['-C', worktree, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 5000, windowsHide: true })
+          const head = await this.detectRunner.run('git', ['-C', worktree, 'rev-parse', 'HEAD'])
           const headSha = head.stdout.trim()
-          if (/^[0-9a-f]{40}$/.test(headSha) && headSha !== report.commit_sha) {
+          // 基线判定（审计修复）：HEAD 必须是任务期间新产生的 commit——与基线相同说明
+          // 本任务没有真实落 commit（模型虚报 sha），不得拿前一任务的 HEAD 盖章
+          if (/^[0-9a-f]{40}$/.test(headSha) && headSha !== report.commit_sha && headSha !== baselineHead) {
             console.warn(`[claude-headless] report commit_sha 不可解析（${report.commit_sha}），以 worktree HEAD 校正为 ${headSha}`)
             report.commit_sha = headSha
+          } else if (headSha === baselineHead) {
+            console.warn(`[claude-headless] report commit_sha 不可解析且 worktree 无新 commit（HEAD=基线），保持原值交 verifier 裁决`)
           }
         } catch {
           // HEAD 也取不到（worktree 异常）：保持原值，交 verifier fail-closed

@@ -108,6 +108,15 @@ export class ImReplayGuard {
     }
     return true
   }
+
+  /**
+   * 释放标记（at-least-once，审计修复）：firstSeen 预留后处理失败（如无活跃会话时
+   * approve 抛错）→ 释放，vendor 对同一 event_id 的官方重试可再次执行；
+   * 否则失败投递会被去重表永久吞掉（指令丢失）。
+   */
+  release(eventId: string): void {
+    this.seen.delete(eventId)
+  }
 }
 
 /** vendor 凭据（由调用方从环境注入；本模块不读 process.env，便于测试与凭据隔离）。 */
@@ -362,7 +371,15 @@ export async function handleImRequest(
     return { handled: true, outbound, reason: 'unknown instruction' }
   }
 
-  const reply = await handleChannelCommand(target, cmd)
+  // at-least-once（审计修复）：处理抛错（瞬态：无活跃会话/存储抖动）→ 释放重放标记
+  // 再抛给 HTTP 层回 5xx，vendor 官方重试同一 event_id 可再次执行
+  let reply
+  try {
+    reply = await handleChannelCommand(target, cmd)
+  } catch (error) {
+    if (verified.eventId !== undefined) opts.replayGuard?.release(verified.eventId)
+    throw error
+  }
   const outbound = buildImOutbound(inbound, reply)
   if (send !== undefined) await send(outbound)
   return { handled: true, outbound }

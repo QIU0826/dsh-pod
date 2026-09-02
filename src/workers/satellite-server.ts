@@ -23,6 +23,10 @@ export interface SatelliteSessionState {
   killed: boolean
   /** /start 返回的底层句柄：/kill 必须经它真正终止远程 worker 进程（P0 审计修复）。 */
   handle?: WorkerHandle
+  /** 事件环形缓冲的头部丢弃基数：绝对游标 = dropped + 数组下标（有界防长任务膨胀）。 */
+  dropped: number
+  /** 最近访问时刻（epoch ms）：终态会话超时回收的判定基准。 */
+  lastSeen: number
 }
 
 export interface SatelliteServerOptions {
@@ -64,7 +68,18 @@ export function createSatelliteHandler(opts: SatelliteServerOptions): {
   const token = (opts.token ?? '').trim()
   const sessions = new Map<string, SatelliteSessionState>()
 
+  // 会话回收（审计修复 #29）：终态会话（completion 已置）10 分钟无访问即清理——
+  // 此前 sessions 只增不减，客户端断连/忘 DELETE 的会话连事件缓冲一起常驻泄漏
+  const SESSION_TTL_MS = 10 * 60 * 1000
+  function sweepSessions(): void {
+    const now = Date.now()
+    for (const [ref, st] of sessions) {
+      if (st.completion !== null && now - st.lastSeen > SESSION_TTL_MS) sessions.delete(ref)
+    }
+  }
+
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    sweepSessions()
     const url = new URL(req.url ?? '/', 'http://x')
     if (req.method === 'GET' && url.pathname === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' })
@@ -95,8 +110,14 @@ export function createSatelliteHandler(opts: SatelliteServerOptions): {
       const sessionRef = url.searchParams.get('session_ref') ?? ''
       const state = sessions.get(sessionRef)
       if (!state) { res.writeHead(404); res.end(JSON.stringify({ error: 'session not found' })); return }
+      state.lastSeen = Date.now()
+      // 游标增量（审计修复 #15）：此前每次返回全量缓冲，RemoteBackend 每 pollMs 重放
+      // 全部事件 → 本地事件洪峰挤出审计窗口。after=绝对下标（dropped 基数）；缺省=全量（兼容）
+      const afterRaw = url.searchParams.get('after')
+      const after = afterRaw !== null && /^\d+$/.test(afterRaw) ? Number(afterRaw) : -1
+      const delta = after < 0 ? state.events : state.events.slice(Math.max(0, after - state.dropped))
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ events: state.events, completion: state.completion }))
+      res.end(JSON.stringify({ events: delta, completion: state.completion, next: state.dropped + state.events.length }))
       return
     }
     if (req.method === 'POST') {
@@ -120,11 +141,17 @@ export function createSatelliteHandler(opts: SatelliteServerOptions): {
         const task = body.task as Task
         if (!slot || !task) { res.writeHead(400); res.end(JSON.stringify({ error: 'slot/task required' })); return }
         const sessionRef = 'sat-' + Date.now() + '-' + Math.floor(Math.random() * 1e6)
-        const state: SatelliteSessionState = { session_ref: sessionRef, events: [], completion: null, killed: false }
+        const state: SatelliteSessionState = { session_ref: sessionRef, events: [], completion: null, killed: false, dropped: 0, lastSeen: Date.now() }
         sessions.set(sessionRef, state)
         const handle = await opts.backend.start(slot, task, body.worktree ?? '', {
           onProgress: (ev) => {
-            if (!state.killed) state.events.push(ev)
+            if (state.killed) return
+            state.events.push(ev)
+            // 有界（审计修复）：长任务流式事件此前无界累积（内存 + 全量重放载荷）
+            if (state.events.length > 5_000) {
+              state.events.shift()
+              state.dropped++
+            }
           },
           onExit: (completion) => {
             state.completion = completion
@@ -138,6 +165,7 @@ export function createSatelliteHandler(opts: SatelliteServerOptions): {
       if (url.pathname === '/kill') {
         const sessionRef = body.session_ref ?? ''
         const state = sessions.get(sessionRef)
+        if (state !== undefined) state.lastSeen = Date.now()
         if (state) {
           state.killed = true
           // 真正终止远程 worker 进程：只置标记不杀进程会让任务继续烧 token（P0 审计修复）。
