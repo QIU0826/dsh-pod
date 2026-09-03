@@ -634,4 +634,27 @@ export const CONSOLE_CSS = `
 .dsh-pet-meta { font-size: 10.5px; color: var(--ink-3); font-family: var(--mono); }
 .dsh-pet-room-empty { position: relative; margin: 40px 0 60px; font-size: 14px; color: var(--ink-2); }
 .dsh-pet-room-legend { position: relative; margin-top: 18px; font-size: 11px; color: var(--ink-3); flex: none; }
+/* 桌宠增强（2026-09-03）：多房间分区 + 戳一下详情卡 + steer 指令输入 */
+.dsh-pet-zone { position: relative; display: flex; flex-direction: column; align-items: center; width: 100%; flex: none; }
+.dsh-pet-zone-title { margin: 16px 0 0; padding: 3px 16px; border-radius: 999px; font-size: 11.5px; letter-spacing: .12em;
+  color: var(--ink-2); background: rgba(19,26,38,.7); border: 1px solid var(--line); }
+.dsh-pet-zone-title.alert { color: #fca5a5; border-color: rgba(239,68,68,.45); background: rgba(60,18,18,.55); }
+.dsh-pet-zone-title.busy { color: #7dd3fc; border-color: rgba(34,211,238,.4); }
+.dsh-pet-station { cursor: pointer; transition: transform .18s ease; }
+.dsh-pet-station:hover { transform: translateY(-3px); }
+.dsh-pet-station.selected .dsh-pet-sprite { filter: drop-shadow(0 0 14px rgba(34,211,238,.55)); }
+.dsh-pet-detail { z-index: 4; margin-top: 10px; width: 300px; padding: 10px 12px; border-radius: 12px;
+  background: linear-gradient(180deg, rgba(13,22,36,.96), rgba(9,15,25,.96));
+  border: 1px solid rgba(34,211,238,.45); box-shadow: var(--shadow-2); font-size: 12px; color: var(--ink); }
+.dsh-pet-detail-rows { display: flex; flex-direction: column; gap: 4px; }
+.dsh-pet-detail-row { display: flex; gap: 8px; align-items: baseline; }
+.dsh-pet-detail-label { flex: none; min-width: 52px; font-size: 10.5px; color: var(--ink-3); }
+.dsh-pet-detail-value { word-break: break-all; line-height: 1.45; font-family: var(--mono); font-size: 11.5px; }
+.dsh-pet-detail-steer { display: flex; gap: 6px; margin-top: 9px; }
+.dsh-pet-detail-input { flex: 1; min-width: 0; padding: 6px 9px; border-radius: 8px; font-size: 12px;
+  background: rgba(8,14,24,.9); border: 1px solid var(--line); color: var(--ink); outline: none; }
+.dsh-pet-detail-input:focus { border-color: rgba(34,211,238,.55); }
+.dsh-pet-detail-send { flex: none; padding: 6px 12px; border-radius: 8px; font-size: 12px; cursor: pointer;
+  background: rgba(34,211,238,.16); border: 1px solid rgba(34,211,238,.45); color: var(--primary); }
+.dsh-pet-detail-send:disabled { opacity: .4; cursor: default; }
 `

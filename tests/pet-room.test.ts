@@ -1,3 +1,4 @@
+import { createElement } from 'react'
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
@@ -11,7 +12,7 @@ import {
   type PetAnimation,
   type PetPhase,
 } from '../src/web/pet-sprite.js'
-import { slotPhase, latestProgressByTask, PetRoomView } from '../src/web/pet-room.js'
+import { slotPhase, latestProgressByTask, PetRoomView, zoneOf } from '../src/web/pet-room.js'
 import type { PodEvent, StatusResponse, StatusSlot, StatusTask } from '../src/web/api.js'
 
 /**
@@ -208,7 +209,7 @@ function statusFixture(over: Partial<StatusResponse> = {}): StatusResponse {
 
 describe('房间视图 SSR 渲染（PetRoomView）', () => {
   it('status null → 渲染连接中空状态（不黑屏）', () => {
-    const html = renderToStaticMarkup(PetRoomView({ status: null, events: [] }))
+    const html = renderToStaticMarkup(createElement(PetRoomView, { status: null, events: [] }))
     expect(html).toContain('dsh-pet-room')
     expect(html).toContain('连接中')
   })
@@ -221,7 +222,7 @@ describe('房间视图 SSR 渲染（PetRoomView）', () => {
         slot({ id: 'S-3', vendor: 'dsh', role: 'planner' }),
       ],
     })
-    const html = renderToStaticMarkup(PetRoomView({ status: st, events: [] }))
+    const html = renderToStaticMarkup(createElement(PetRoomView, { status: st, events: [] }))
     expect(html).toContain('Claude')
     expect(html).toContain('Codex')
     expect(html).toContain('DSH')
@@ -233,8 +234,53 @@ describe('房间视图 SSR 渲染（PetRoomView）', () => {
       slots: [slot({ id: 'S-1', vendor: 'claude', role: 'implementer' })],
       tasks: [task({ id: 'T-1', owner: 'S-1', status: 'running', title: '写 clampInt 函数' })],
     })
-    const html = renderToStaticMarkup(PetRoomView({ status: st, events: [] }))
+    const html = renderToStaticMarkup(createElement(PetRoomView, { status: st, events: [] }))
     expect(html).toContain('写 clampInt 函数')
     expect(html).toContain('思考中')
+  })
+})
+
+describe('桌宠增强（2026-09-03）：多房间分区 + 戳一下详情卡', () => {
+  it('zoneOf：failed→alert（最显眼）、thinking/tool/review→busy、其余→rest', () => {
+    expect(zoneOf('failed')).toBe('alert')
+    expect(zoneOf('thinking')).toBe('busy')
+    expect(zoneOf('tool')).toBe('busy')
+    expect(zoneOf('review')).toBe('busy')
+    expect(zoneOf('idle')).toBe('rest')
+    expect(zoneOf('waiting')).toBe('rest')
+    expect(zoneOf('done')).toBe('rest')
+  })
+
+  it('分区渲染：出状况 slot 进 alert 区（分区标题 + 前置排序），忙碌/待命各归其区', () => {
+    const st = statusFixture({
+      slots: [
+        slot({ id: 'S-1', vendor: 'claude', role: 'implementer', status: 'idle' }),
+        slot({ id: 'S-2', vendor: 'codex', role: 'reviewer', status: 'working' }),
+        slot({ id: 'S-3', vendor: 'ark', role: 'implementer', status: 'error' }),
+      ],
+      tasks: [
+        task({ id: 'T-1', owner: 'S-1', status: 'done' }),
+        task({ id: 'T-2', owner: 'S-2', status: 'running', type: 'review', title: '审查 T-1' }),
+        task({ id: 'T-3', owner: 'S-3', status: 'escalated', title: '出状况的实现' }),
+      ],
+    })
+    const html = renderToStaticMarkup(createElement(PetRoomView, { status: st, events: [] }))
+    // 三个分区标题都渲染，且 alert 分区在 busy 之前（出状况排最前）
+    expect(html).toContain('dsh-pet-zone-title alert')
+    expect(html).toContain('dsh-pet-zone-title busy')
+    expect(html).toContain('dsh-pet-zone-title rest')
+    expect(html.indexOf('dsh-pet-zone-title alert')).toBeLessThan(html.indexOf('dsh-pet-zone-title busy'))
+  })
+
+  it('详情卡默认收起（未选中不渲染 steer 输入框），station 带点击手柄提示', () => {
+    const st = statusFixture({
+      slots: [slot({ id: 'S-1', vendor: 'claude', role: 'implementer' })],
+      tasks: [task({ id: 'T-1', owner: 'S-1', status: 'running', title: '写 clampInt 函数' })],
+    })
+    const html = renderToStaticMarkup(createElement(PetRoomView, { status: st, events: [] }))
+    expect(html).toContain('dsh-pet-station')
+    expect(html).not.toContain('dsh-pet-detail')
+    expect(html).not.toContain('dsh-pet-detail-input')
+    expect(html).toContain('戳一下看详情')
   })
 })

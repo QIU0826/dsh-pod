@@ -446,7 +446,11 @@ export function PodPanel(): ReactElement {
               : view === 'dag'
                 ? createElement(DagView, { tasks })
                 : view === 'pets'
-                  ? createElement(PetRoomView, { status, events })
+                  ? createElement(PetRoomView, {
+                    status,
+                    events,
+                    onSteer: (slotId, instruction) => void runAction(() => postSteer(slotId, instruction)),
+                  })
                   : view === 'approval'
                     ? createElement(ApprovalView, {
                       approvalId,
