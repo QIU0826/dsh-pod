@@ -78,6 +78,25 @@ describe('记忆子系统 2.8.1（MemoryStore，主动策展 + 图谱 + reflecti
     rmSync(dir, { recursive: true, force: true })
   })
 
+  it('query limit：updated_ts 降序截断——最新优先，非插入序（候选池语义修复）', () => {
+    const dir = tempDir()
+    let t = 1_700_000_000_000
+    const clock = () => (t += 1000)
+    const store = new MemoryStore({ filePath: join(dir, 'memory.json'), clock })
+    store.open()
+    const oldest = store.write({ owner_slot_id: 'S-1', content_ref: '老经验' })
+    const mid = store.write({ owner_slot_id: 'S-1', content_ref: '中间' })
+    const newest = store.write({ owner_slot_id: 'S-1', content_ref: '新经验（跨 mission 最该注入）' })
+    // limit 截断取最新 N 条：此前无排序 slice 取到「最早写入的 N 条」，新经验漏出候选池
+    const top2 = store.query({ limit: 2 })
+    expect(top2.map((r) => r.id)).toEqual([newest.id, mid.id])
+    expect(top2.some((r) => r.id === oldest.id)).toBe(false)
+    // 无 limit 全量也按最新优先（Web 看板 / 注入一致语义）
+    const all = store.query()
+    expect(all[0]!.id).toBe(newest.id)
+    rmSync(dir, { recursive: true, force: true })
+  })
+
   it('correct 更新并保留变更历史（审计留痕）', () => {
     const { store, dir } = makeStore()
     const rec = store.write({ owner_slot_id: 'S-1', type: 'fact', importance: 3, content_ref: '旧', tags: ['a'] })

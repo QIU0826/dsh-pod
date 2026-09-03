@@ -333,6 +333,11 @@ export class MemoryStore {
       }
       result = result.filter((r) => involved.has(r.id))
     }
+    // 排序：updated_ts 降序（最新优先）。必须在 limit 截断**之前**——此前无排序直接
+    // slice，Object.values 返回插入序，limit 截断取到「最早写入的 N 条」；记忆库超限后
+    // 新写入的记录（含跨 mission 经验，恰是最该注入的）会漏出候选池
+    // （2026-09-03：injectRelevantMemory 全库候选路的语义漏洞，v11 命中只因当时总数 <32）。
+    result.sort((a, b) => b.updated_ts - a.updated_ts)
     if (q.limit !== undefined) result = result.slice(0, q.limit)
     return result
   }
