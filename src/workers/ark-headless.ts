@@ -136,9 +136,15 @@ export class ArkBackend implements WorkerBackend {
         })
         return
       }
+      // status 枚举归一化（真实实证 2026-09-03：deepseek-v4-flash 审查任务输出 needs_changes，
+      // 不在 'done'|'blocked'|'need_clarify' 契约内——此前被当作 exit='failed' 兜底成 crash，
+      // 审查意见（blockers/summary）被整个丢弃、白烧 3 次重试后 escalated）。
+      // 与 claude-headless 对齐：report 拿到即 exit='done'，status 语义分派交给 task-machine.report
+      //（done → 完成；need_clarify → 软失败等 steer；blocked/未知 → 硬失败且 blockers 进 message）。
+      // 归一化在 extractReport 内做（claude/ark 两后端共享）。
       const usage = { tokens_in: 0, tokens_out: 0, source: 'unavailable' as UsageSource }
       opts.callbacks?.onExit?.({
-        exit: report.status === 'done' ? 'done' : 'failed',
+        exit: 'done',
         report,
         usage,
         artifacts: report.files_changed ?? [],

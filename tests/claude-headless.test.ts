@@ -142,6 +142,25 @@ describe('extractReport（MISSION_REPORT JSON 提取）', () => {
     const report = extractReport('OK。{"task_id":"T-3","status":"blocked","blockers":["x"],"questions":[],"summary":"s","files_changed":[],"test_result":"not_run","task_type":"implement","decisions":[]}')
     expect(report?.status).toBe('blocked')
   })
+  it('status 枚举归一化（2026-09-03 实证：deepseek-v4-flash 审查输出 needs_changes → blocked，不再被兜底 crash）', () => {
+    const mk = (status: string): string =>
+      `{"task_id":"T-1","task_type":"review","status":"${status}","summary":"s","files_changed":[],"test_result":"pass","decisions":[],"blockers":["b"],"questions":[]}`
+    // 近义词 → done
+    expect(extractReport(`\`\`\`json\n${mk('DONE')}\n\`\`\``)?.status).toBe('done')
+    expect(extractReport(`\`\`\`json\n${mk('pass')}\n\`\`\``)?.status).toBe('done')
+    expect(extractReport(`\`\`\`json\n${mk('success')}\n\`\`\``)?.status).toBe('done')
+    // 近义词 → need_clarify
+    expect(extractReport(`\`\`\`json\n${mk('needs_input')}\n\`\`\``)?.status).toBe('need_clarify')
+    // 近义词 → blocked（审查不通过语义）
+    expect(extractReport(`\`\`\`json\n${mk('needs_changes')}\n\`\`\``)?.status).toBe('blocked')
+    expect(extractReport(`\`\`\`json\n${mk('changes_requested')}\n\`\`\``)?.status).toBe('blocked')
+    expect(extractReport(`\`\`\`json\n${mk('FAILED')}\n\`\`\``)?.status).toBe('blocked')
+    // 完全未知值 → 保守兜底 blocked（未确认成功不按 done 放行）
+    expect(extractReport(`\`\`\`json\n${mk('some_new_word')}\n\`\`\``)?.status).toBe('blocked')
+    // 契约内原值不被改写
+    expect(extractReport(`\`\`\`json\n${mk('need_clarify')}\n\`\`\``)?.status).toBe('need_clarify')
+    expect(extractReport(`\`\`\`json\n${mk('done')}\n\`\`\``)?.status).toBe('done')
+  })
 })
 
 describe('classifyClaudeExit（退出码 → 故障分类，3.4 节故障表）', () => {

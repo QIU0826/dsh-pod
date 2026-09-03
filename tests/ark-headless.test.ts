@@ -87,6 +87,25 @@ describe("ArkBackend（火山方舟 Agent Plan）", () => {
     expect(exit).toMatchObject({ exit: "failed", fault: "crash" })
     expect((exit as { error_detail?: string }).error_detail).toContain("network reset")
   })
+
+  it("start：模型输出枚举外 status（needs_changes）→ 归一化 blocked + exit=done 交任务机分派（2026-09-03 实证：此前 exit=failed 兜底 crash，审查意见被丢弃）", async () => {
+    const reportText = JSON.stringify({
+      task_id: "T-1", task_type: "review", status: "needs_changes",
+      summary: "T-1 核心规格已落实，但 out/task-T-1.diff 混入提交，违反 commit 纪律",
+      files_changed: ["src/util.ts"], test_result: "pass", decisions: [], blockers: ["越界改动：out/task-T-1.diff"], questions: [],
+    })
+    const backend = new ArkBackend({
+      apiKey: "ark-x",
+      fetchImpl: fakeFetch(async () => new Response(JSON.stringify({ choices: [{ message: { content: "```json\n" + reportText + "\n```" } }] }), { status: 200 })),
+    })
+    const exit = await new Promise<unknown>((resolve) => {
+      void backend.start(makeSlot(), makeTask(), "C:/w", { onExit: resolve })
+    })
+    expect(exit).toMatchObject({ exit: "done" })
+    const report = (exit as { report?: { status?: string; blockers?: string[] } }).report
+    expect(report?.status).toBe("blocked")
+    expect(report?.blockers).toEqual(["越界改动：out/task-T-1.diff"])
+  })
 })
 
   it("complete()：裸调用返回文本（评分/问答类，不要求 MISSION_REPORT）", async () => {

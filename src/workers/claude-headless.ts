@@ -172,15 +172,38 @@ export function extractReport(text: string): import('../core/types.js').MissionR
   for (const match of text.matchAll(fenced)) {
     try {
       const parsed: unknown = JSON.parse(match[1]!.trim())
-      if (isReportLike(parsed)) return parsed as import('../core/types.js').MissionReport
+      if (isReportLike(parsed)) {
+        const report = parsed as import('../core/types.js').MissionReport
+        report.status = normalizeReportStatus(report.status)
+        return report
+      }
     } catch {
       // 该围栏不是 JSON，继续找下一个
     }
   }
   for (const candidate of balancedJsonCandidates(text)) {
-    if (isReportLike(candidate)) return candidate as import('../core/types.js').MissionReport
+    if (isReportLike(candidate)) {
+      const report = candidate as import('../core/types.js').MissionReport
+      report.status = normalizeReportStatus(report.status)
+      return report
+    }
   }
   return undefined
+}
+
+/**
+ * report.status 枚举归一化（真实实证 2026-09-03：deepseek-v4-flash 审查任务输出
+ * needs_changes——不在 'done'|'blocked'|'need_clarify' 契约内。模型语义明确（审查
+ * 不通过 + blockers 齐全），但 task-machine.report 对未知 status 走 crash 兜底，
+ * 审查意见被丢弃、白烧重试后 escalated。近义词表归一 + 兜底 blocked（保守：
+ * 未确认成功一律不按 done 放行）。
+ */
+export function normalizeReportStatus(status: string): import('../core/types.js').MissionReport['status'] {
+  const key = status.trim().toLowerCase()
+  if (key === 'done' || key === 'ok' || key === 'pass' || key === 'success' || key === 'completed') return 'done'
+  if (key === 'need_clarify' || key === 'clarify' || key === 'question' || key === 'needs_input') return 'need_clarify'
+  // blocked / fail / failed / needs_changes / changes_requested / 未知值 → blocked
+  return 'blocked'
 }
 
 function isReportLike(value: unknown): boolean {
