@@ -23,6 +23,10 @@ export interface WatchdogArm {
   task_id?: string
   /** 绝对触发时刻（epoch ms）。 */
   deadline: number
+  /** arm 时刻（epoch ms）：arm() 自动补记；resumeAll 按「pause 前 arm 还是暂停中 arm」
+   *  区分顺延量——暂停中 arm 的计时器若顺延整个挂起时长会过度顺延（多给最多整个
+   *  挂起期的预算）。 */
+  armed_at?: number
 }
 
 export interface FiredWatchdog {
@@ -66,7 +70,7 @@ export class Watchdog {
 
   /** arm 一个计时器（同 key 覆盖 = 活动信号刷新）。 */
   arm(arm: WatchdogArm): void {
-    this.arms.set(arm.key, { ...arm })
+    this.arms.set(arm.key, { ...arm, armed_at: this.clock() })
   }
 
   disarm(key: string): void {
@@ -94,10 +98,19 @@ export class Watchdog {
 
   resumeAll(): void {
     if (!this.paused) return
-    const suspension = this.clock() - (this.pausedAt ?? this.clock())
-    // 挂起时长顺延：挂起期间不消耗任务时间。
+    const now = this.clock()
+    const pauseStartedAt = this.pausedAt ?? now
+    const suspension = now - pauseStartedAt
+    // 挂起时长顺延（挂起期间不消耗任务时间），按 arm 时刻区分顺延量（2026-09-03）：
+    //   - pause 前 arm（armed_at < pause 开始）：整个挂起期间都在挂起 → 顺延 suspension；
+    //   - 暂停中 arm（armed_at >= pause 开始）：暂停期间从 arm 到 resume 的时间也不应消耗
+    //     预算 → 顺延 (now - armed_at)；顺延后 deadline = resume 时刻 + 完整阈值（重新获得
+    //     完整预算）。旧实现统一顺延 suspension，暂停中 arm 被多顺延「arm 距 pause 开始」的
+    //     偏移——resume 后卡住的任务晚杀最多整个挂起时长（用户 pause 可数小时，审批挂起可数天）。
     for (const [key, arm] of this.arms) {
-      this.arms.set(key, { ...arm, deadline: arm.deadline + suspension })
+      const armedAt = arm.armed_at ?? pauseStartedAt
+      const shift = armedAt >= pauseStartedAt ? now - armedAt : suspension
+      this.arms.set(key, { ...arm, deadline: arm.deadline + shift })
     }
     this.paused = false
     this.pausedAt = undefined

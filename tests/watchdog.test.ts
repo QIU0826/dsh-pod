@@ -44,6 +44,22 @@ describe('Watchdog（3.3 节 commander 健康 + 3.4 节任务空闲/墙钟，纯
     expect(watchdog.tick(current)).toHaveLength(2)
   })
 
+  it('暂停中 arm → resume 后从 resume 起重新计完整阈值（2026-09-03 顺延量修正，不再叠加 pause 偏移）', () => {
+    let current = T0
+    const watchdog = new Watchdog({ clock: () => current })
+    watchdog.pauseAll() // pause 开始于 T0
+    current = T0 + 5_000
+    // 暂停中在途任务仍发进度 → handleProgress 在 paused 状态下 arm task-idle
+    watchdog.arm({ key: 'idle:T-1', kind: 'task-idle', mission_id: 'M-1', task_id: 'T-1', deadline: current + 900_000 })
+    current = T0 + 10_000
+    watchdog.resumeAll()
+    // 修正前：顺延整个挂起 10_000 → deadline = resume + 905_000（多给 arm 距 pause 开始的 5s）
+    // 修正后：顺延 (resume − arm 时刻) = 5_000 → deadline = resume + 900_000（完整预算恰从 resume 起）
+    expect(watchdog.tick(T0 + 10_000 + 899_999)).toEqual([])
+    const fired = watchdog.tick(T0 + 10_000 + 900_000)
+    expect(fired.some((f) => f.key === 'idle:T-1')).toBe(true)
+  })
+
   it('任务空闲 watchdog：任何 stream 事件 = 重新 arm（统一由调用方重置）', () => {
     const watchdog = new Watchdog({ clock: () => T0 })
     watchdog.arm({ key: 'task-idle:T-1', kind: 'task-idle', mission_id: 'M-1', task_id: 'T-1', deadline: T0 + 15 * 60_000 })
