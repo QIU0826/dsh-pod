@@ -59,6 +59,34 @@ describe('curateIncoming（Curator：幂等去重 + supersede 重做条目）', 
     expect(superseded).toEqual([old.id])
   })
 
+  it('无 commit 任务重跑（2026-09-03 修复）：content 变化 → supersede 旧条目入账新条目（修复前 undefined===undefined 误判幂等、丢新结论）', () => {
+    // review/research/doc 任务 report 无 commit_sha：重跑（如 reassign 换人重做）产出新结论
+    const old = taskToFactEntry(makeTask('T-1', { title: '调研 A 方案' }), 'S-1', now)
+    const existing = [old]
+    const superseded: string[] = []
+    const add = curateIncoming(
+      existing,
+      taskToFactEntry(makeTask('T-1', { title: '调研 B 方案（推翻 A）' }), 'S-1', now + 100),
+      (id) => superseded.push(id),
+      now + 100,
+    )
+    expect(add).toBe(true)
+    expect(superseded).toEqual([old.id])
+  })
+
+  it('无 commit 任务同内容重放 → 幂等跳过（不重复入账）', () => {
+    const existing = [taskToFactEntry(makeTask('T-1', { title: '调研 A 方案' }), 'S-1', now)]
+    const superseded: string[] = []
+    const add = curateIncoming(
+      existing,
+      taskToFactEntry(makeTask('T-1', { title: '调研 A 方案' }), 'S-1', now + 100),
+      (id) => superseded.push(id),
+      now + 100,
+    )
+    expect(add).toBe(false)
+    expect(superseded).toHaveLength(0)
+  })
+
   it('无源任务（决策/坑）直接入账', () => {
     const entry = { id: 'RE-x', mission_id: 'M-1', slot_id: 'S-1', type: 'decision' as const, content: 'd', status: 'active' as const, ts: now }
     const add = curateIncoming([], entry, () => {}, now)

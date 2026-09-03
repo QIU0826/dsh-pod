@@ -42,6 +42,11 @@ export function taskToFactEntry(task: Task, slotId: string, ts: number, idFn?: (
  * 返回应当入账的新条目（调用方 store.addResetEntry）。
  *   - 同 task_id 已有 active 条目（任务被重做/重试成功）→ 旧条目标 superseded，新条目入账；
  *   - 同 task_id 同 commit 已有条目 → 已入账，跳过（幂等，防重复入账）。
+ *
+ * 幂等判定只认「双方都有 commit_sha 且相等」或「双方无 commit 且 content 全等」（2026-09-03）：
+ * 无 commit 任务（review/research/doc，report 无产物）commit_sha 均为 undefined，
+ * `undefined === undefined` 恒真会让重跑的新结论被幂等跳过、旧条目永不 superseded——
+ * 重置摘要丢失最新结论。无 commit 条目改按 content 全等判幂等（同内容重放跳过，内容变化即 supersede）。
  */
 export function curateIncoming(
   existing: ResetEntry[],
@@ -52,7 +57,12 @@ export function curateIncoming(
   if (incoming.task_id === undefined) return true // 无源任务（如决策/坑）直接入账
   const same = existing.filter((e) => e.task_id === incoming.task_id)
   const activeSame = same.filter((e) => e.status === 'active')
-  if (activeSame.some((e) => e.commit_sha === incoming.commit_sha)) return false // 幂等：已入账
+  const identical = activeSame.some(
+    (e) =>
+      (e.commit_sha !== undefined && incoming.commit_sha !== undefined && e.commit_sha === incoming.commit_sha) ||
+      (e.commit_sha === undefined && incoming.commit_sha === undefined && e.content === incoming.content),
+  )
+  if (identical) return false // 幂等：已入账（同 commit / 同 content 重放）
   for (const e of activeSame) supersede(e.id, now) // 任务被重做：旧条目标 superseded
   return true
 }
