@@ -1330,6 +1330,48 @@ describe('P1 规划层（goal → DAG 智能分解，AgentScope DAGPlanExecutor 
     expect(ev.payload.feedback_applied).toBe(true)
   })
 
+  it('单槽阵型 + planner 生成 review → 独立审查缺口拒绝 + reviewGap 反馈写回（v9/v11 根因闭环）', async () => {
+    // 单槽万能员工（声明规划/编码/审查）：planner 按契约仍会生成 implement+review，
+    // 但派发期 DoD-5 会排除唯一实现者 → 旧行为烧到派发期 escalate。修复后规划期 fail-closed。
+    const soloRoster = [
+      { id: 'S-1', vendor: 'claude' as const, role: 'implementer', capabilities: ['规划', '编码', '审查'], model: 'm', session_tier: 'per-mission' as const },
+    ]
+    const orch = makeOrchestrator(fixture, { 'P-1': { completion: planDone('P-1', validPlan) } })
+    orch.launch(launchInput({ cwd: fixture.repo, slots: soloRoster }))
+    orch.createPlannerTask('目标')
+    await orch.run()
+    const p1 = fixture.store.getTask('P-1')!
+    // 反馈已写回，引导 planner 改为自审（措辞不混用「无槽位覆盖」）
+    expect(p1.spec).toContain('上次提案被拒的反馈（执行侧约束）')
+    expect(p1.spec).toContain('T-2 需要独立审查')
+    expect(p1.spec).toContain('自审')
+    expect(p1.spec).not.toContain('无槽位覆盖')
+    const ev = fixture.store.listEvents('M-1').find((e) => e.kind === 'plan_rejected')!
+    expect((ev.payload.semantic as string[]).some((s) => s.includes('independent review infeasible'))).toBe(true)
+    expect(ev.payload.feedback_mode).toBe('roster')
+    // 展开从未发生：review 任务未落盘，任务图里只有规划任务自身
+    expect(fixture.store.listTasks('M-1').map((t) => t.id)).toEqual(['P-1'])
+  })
+
+  it('单槽阵型 + planner 生成纯 implement 提案 → 降级为自审直接通过并展开', async () => {
+    // 单槽自审降级：planner 去掉 review 后，implement-only 提案应通过裁决并正常展开执行
+    const soloRoster = [
+      { id: 'S-1', vendor: 'claude' as const, role: 'implementer', capabilities: ['规划', '编码', '审查'], model: 'm', session_tier: 'per-mission' as const },
+    ]
+    const soloPlan = [
+      { id: 'T-1', title: '实现', spec: 's', type: 'implement' as const, skill_tags: ['编码'], depends_on: [] },
+    ]
+    const orch = makeOrchestrator(fixture, { 'P-1': { completion: planDone('P-1', soloPlan) } })
+    orch.launch(launchInput({ cwd: fixture.repo, slots: soloRoster }))
+    orch.createPlannerTask('目标')
+    const summary = await orch.run()
+    // 自审降级后：规划通过 → 实现任务展开并完成 → 无 review 任务 → 直接进审批
+    expect(fixture.store.getTask('P-1')!.status).toBe('done')
+    expect(fixture.store.getTask('T-1')!.status).toBe('done')
+    expect(summary.status).toBe('awaiting_approval')
+    expect(fixture.store.listEvents('M-1').some((e) => e.kind === 'plan_rejected')).toBe(false)
+  })
+
   it('feedback v2（灰度 feedback-consult）：语义拒绝 → 真咨询最匹配槽位 worker，咨询结果写回 spec', async () => {
     const gapPlan = [
       { id: 'T-1', title: '实现', spec: 's', type: 'implement' as const, skill_tags: ['运维'], depends_on: [] },

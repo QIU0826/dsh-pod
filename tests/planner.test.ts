@@ -11,6 +11,7 @@ import {
   buildCapabilityFeedback,
   buildConsultPrompt,
   buildPlannerSpec,
+  buildReviewGapFeedback,
   classifyPlanErrors,
   extractPlanProposal,
   hasPlannerSlot,
@@ -51,6 +52,26 @@ describe('buildPlannerSpec（规划任务书自包含契约）', () => {
     expect(replan).toContain('重规划上下文')
     expect(replan).toContain('T-1 反复失败')
     expect(replan).toContain('fault=crash')
+  })
+
+  it('单槽名册契约引导自审；多槽仍要求独立审查', () => {
+    const solo = buildPlannerSpec({
+      goal: 'g',
+      roster: [{ id: 'S-1', role: 'implementer', capabilities: ['编码', '审查'] }],
+    })
+    expect(solo).toContain('不要生成 review 任务')
+    expect(solo).toContain('自审')
+    expect(solo).not.toContain('独立审查不可省')
+    const multi = buildPlannerSpec({
+      goal: 'g',
+      roster: [
+        { id: 'S-P', role: 'planner', capabilities: ['规划'] },
+        { id: 'S-1', role: 'implementer', capabilities: ['编码'] },
+        { id: 'S-2', role: 'reviewer', capabilities: ['审查'] },
+      ],
+    })
+    expect(multi).toContain('独立审查不可省')
+    expect(multi).not.toContain('不要生成 review 任务')
   })
 })
 
@@ -142,6 +163,32 @@ describe('validatePlanProposal（代码裁决）', () => {
     expect(onlyDoc.ok).toBe(false)
     if (!onlyDoc.ok) expect(onlyDoc.errors.some((e) => e.includes('no implement'))).toBe(true)
   })
+
+  it('单槽阵型：implement 无 review 配对也通过（降级为自审）', () => {
+    const solo = { slots: [{ capabilities: ['编码'] }], existingTaskIds: new Set<string>() }
+    const r = validatePlanProposal(
+      { tasks: [{ id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'], depends_on: [] }], assumptions: [] },
+      solo,
+    )
+    expect(r.ok).toBe(true)
+  })
+
+  it('拒绝：单槽阵型含 review 任务（独立审查物理不可行）', () => {
+    const solo = { slots: [{ capabilities: ['编码', '审查'] }], existingTaskIds: new Set<string>() }
+    const r = validatePlanProposal(proposal(), solo)
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.errors.some((e) => e.includes('independent review infeasible'))).toBe(true)
+      expect(r.errors.some((e) => e.includes('T-2'))).toBe(true)
+    }
+  })
+
+  it('空阵型：任何含 review 的提案都拒绝', () => {
+    const empty = { slots: [], existingTaskIds: new Set<string>() }
+    const r = validatePlanProposal(proposal(), empty)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.errors.some((e) => e.includes('independent review infeasible'))).toBe(true)
+  })
   it('常量：REPLAN_LIMIT 有界；MAX_PLAN_TASKS 为正', () => {
     expect(REPLAN_LIMIT).toBeGreaterThan(0)
     expect(REPLAN_LIMIT).toBeLessThanOrEqual(3)
@@ -185,6 +232,30 @@ describe('classifyPlanErrors（P1 feedback 环：语义 vs 结构分类）', () 
     expect(fb).toContain('T-2 需求 [运维]')
     expect(fb).toContain('S-1（implementer）：编码')
     expect(fb).toContain('名册实际能力')
+  })
+
+  it('independent review infeasible → semantic + reviewGaps（区别于 capabilityGaps）', () => {
+    const cls = classifyPlanErrors([
+      'independent review infeasible: review task T-2 cannot be dispatched with only 1 slot(s) (DoD-5 quality gate needs a non-author reviewer)',
+      'capability gap: task T-3 needs [运维] but no slot covers it',
+      'duplicate task id: T-1',
+    ])
+    expect(cls.semantic).toHaveLength(2)
+    expect(cls.structural).toHaveLength(1)
+    expect(cls.reviewGaps).toEqual([{ taskId: 'T-2' }])
+    expect(cls.capabilityGaps).toEqual([{ taskId: 'T-3', tags: ['运维'] }])
+  })
+
+  it('buildReviewGapFeedback：引导去掉 review 改为自审，措辞不混用「无槽位覆盖」', () => {
+    const fb = buildReviewGapFeedback(
+      [{ taskId: 'T-2' }],
+      [{ id: 'S-1', role: 'implementer', capabilities: ['编码', '审查'] }],
+    )
+    expect(fb).toContain('T-2 需要独立审查')
+    expect(fb).toContain('只有 1 名员工')
+    expect(fb).toContain('自审')
+    expect(fb).toContain('S-1（implementer）')
+    expect(fb).not.toContain('无槽位覆盖')
   })
 })
 

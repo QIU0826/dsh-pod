@@ -108,7 +108,9 @@ export function buildPlannerSpec(opts: PlannerSpecOptions): string {
     '目标：把用户目标拆成一份名册员工能在最小上下文内独立完成的 DAG。',
     '1. 每个任务：id（T-n 形式）/ title / spec（给员工的完整任务书）/ type / skill_tags / depends_on；',
     '2. type ∈ implement|review|test|doc|research（不允许 plan——规划不嵌套）；',
-    '3. 每个 implement 任务配至少一个 review 任务，其 depends_on 指向该实现任务（独立审查不可省）；',
+    opts.roster.length >= 2
+      ? '3. 每个 implement 任务配至少一个 review 任务，其 depends_on 指向该实现任务（独立审查不可省）；'
+      : '3. 名册只有 1 名员工，无独立审查者：**不要生成 review 任务**，改为在每个 implement 任务的 spec 里写明「本任务由实现者自审，无独立审查」，并在 assumptions 里如实注明；',
     '4. 每个任务的 skill_tags 被名册中至少一名员工的能力集合覆盖（能力覆盖体检）；',
     '5. 依赖无环、只引用提案内的任务 id；任务数 ≤ ' + MAX_PLAN_TASKS + '；',
     '6. 任务切分 = 窗口管理：把每个任务上下文控制在「几个文件」量级——宁可多拆一层，也别让任务读全库；',
@@ -189,11 +191,27 @@ export function validatePlanProposal(
     const covered = ctx.slots.some((s) => t.skill_tags.every((tag) => s.capabilities.includes(tag)))
     if (!covered) errors.push(`capability gap: task ${t.id} needs [${t.skill_tags.join(',')}] but no slot covers it`)
   }
-  // implement-review 配对：每个实现任务至少被一个 review 任务依赖
-  for (const t of tasks) {
-    if (t.type !== 'implement') continue
-    const reviewed = tasks.some((r) => r.type === 'review' && r.depends_on.includes(t.id))
-    if (!reviewed) errors.push(`implement task ${t.id} has no review task depending on it (quality gate cannot be skipped at plan time)`)
+  // implement-review 配对：每个实现任务至少被一个 review 任务依赖。
+  // 例外（2026-09-03 闭环）：名册少于 2 名员工时物理上无法独立审查——派发期 DoD-5
+  // 质量门会排除被审实现者，单槽下唯一员工既实现又被排除 → review 无人可派。
+  // 故单槽降级为「实现者自审」，不再强制配对；否则单槽 implement 提案会陷入
+  // 「要 review（质量门）vs 不能 review（独立性）」死锁，烧到派发期 escalate（v9/v11 两连踩）。
+  if (ctx.slots.length >= 2) {
+    for (const t of tasks) {
+      if (t.type !== 'implement') continue
+      const reviewed = tasks.some((r) => r.type === 'review' && r.depends_on.includes(t.id))
+      if (!reviewed) errors.push(`implement task ${t.id} has no review task depending on it (quality gate cannot be skipped at plan time)`)
+    }
+  }
+  // 独立审查可行性（与派发期 DoD-5 质量门一致）：单槽下 review 任务依赖的被审任务
+  // 只能派给唯一槽位，质量门会排除该实现者 → 无人可派，必然 escalate。规划期即应
+  // fail-closed 并给出可自愈反馈（去掉 review 改为自审），而非烧到派发期。
+  if (ctx.slots.length < 2) {
+    for (const t of tasks) {
+      if (t.type === 'review') {
+        errors.push(`independent review infeasible: review task ${t.id} cannot be dispatched with only ${ctx.slots.length} slot(s) (DoD-5 quality gate needs a non-author reviewer)`)
+      }
+    }
   }
   if (!tasks.some((t) => t.type === 'implement')) errors.push('plan has no implement task')
 
@@ -215,34 +233,41 @@ export function validatePlanProposal(
 
 /**
  * 规划提案拒绝错误分类（P1 Worker feedback 轻量环）：区分
- *   - 语义类（capability gap——执行侧可补约束，重试必须带反馈）；
+ *   - 语义类（capability gap / 独立审查缺口——执行侧可补约束，重试必须带反馈）；
  *   - 结构类（id/环/依赖/规模——纯形状问题，直接重试即可，无需反馈）。
- * 注：spec 含糊目前无代码级判定（spec 只要求非空），语义类暂只含能力缺口。
+ * 注：spec 含糊目前无代码级判定（spec 只要求非空），语义类暂含能力缺口 + 独立审查缺口。
  */
 export interface PlanErrorClass {
   structural: string[]
   semantic: string[]
   /** 能力缺口明细（执行侧反馈的数据源）：taskId → 需求的技能标签。 */
   capabilityGaps: Array<{ taskId: string; tags: string[] }>
+  /** 独立审查缺口明细（单槽阵型下 review 任务物理不可派）：taskId → review 任务。 */
+  reviewGaps: Array<{ taskId: string }>
 }
 
 export function classifyPlanErrors(errors: string[]): PlanErrorClass {
   const structural: string[] = []
   const semantic: string[] = []
   const capabilityGaps: Array<{ taskId: string; tags: string[] }> = []
+  const reviewGaps: Array<{ taskId: string }> = []
   for (const e of errors) {
-    const m = /^capability gap: task (\S+) needs \[(.*?)\]/.exec(e)
-    if (m !== null) {
+    const cap = /^capability gap: task (\S+) needs \[(.*?)\]/.exec(e)
+    const rev = /^independent review infeasible: review task (\S+)/.exec(e)
+    if (cap !== null) {
       semantic.push(e)
       capabilityGaps.push({
-        taskId: m[1]!,
-        tags: m[2]!.split(',').map((s) => s.trim()).filter((s) => s.length > 0),
+        taskId: cap[1]!,
+        tags: cap[2]!.split(',').map((s) => s.trim()).filter((s) => s.length > 0),
       })
+    } else if (rev !== null) {
+      semantic.push(e)
+      reviewGaps.push({ taskId: rev[1]! })
     } else {
       structural.push(e)
     }
   }
-  return { structural, semantic, capabilityGaps }
+  return { structural, semantic, capabilityGaps, reviewGaps }
 }
 
 /**
@@ -263,6 +288,29 @@ export function buildCapabilityFeedback(
     '上次提案被裁决拒绝（执行侧约束）：',
     ...gapLines,
     '名册实际能力（skill_tags 只能取自这些）：',
+    roster,
+  ].join('\n')
+}
+
+/**
+ * 独立审查缺口反馈（单槽阵型）：review 任务物理不可派，需引导 planner 改为自审。
+ * 与 buildCapabilityFeedback 分列——后者说「名册无槽位覆盖」，而单槽可能声明了审查能力，
+ * 只是被 DoD-5 独立性排除，措辞不能混用。
+ */
+export function buildReviewGapFeedback(
+  gaps: Array<{ taskId: string }>,
+  slots: Array<Pick<AgentSlot, 'id' | 'role' | 'capabilities'>>,
+): string {
+  const gapLines = gaps.map(
+    (g) => `- ${g.taskId} 需要独立审查，但名册只有 ${slots.length} 名员工（DoD-5 质量门禁止实现者自审，物理上无第二个审查者）——请去掉该 review 任务，改为在对应 implement 任务的 spec 里写明「本任务由实现者自审，无独立审查」，并在 assumptions 里如实注明；`,
+  )
+  const roster = slots
+    .map((s) => `- ${s.id}（${s.role}）：${s.capabilities.join('、') || '（未声明）'}`)
+    .join('\n')
+  return [
+    '上次提案被裁决拒绝（执行侧约束）：',
+    ...gapLines,
+    '名册实际能力：',
     roster,
   ].join('\n')
 }

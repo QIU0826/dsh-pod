@@ -27,7 +27,7 @@ import { teamOwnerId } from './memory.js'
 import { rankMemories } from './memory-rank.js'
 import { Ledger } from './ledger.js'
 import { MissionMachine } from './mission.js'
-import { PLAN_TASK_SKILL, REPLAN_LIMIT, MAX_CONSULT_FEEDBACK_CHARS, bestConsultSlot, buildCapabilityFeedback, buildConsultPrompt, buildPlannerSpec, classifyPlanErrors, extractPlanProposal, hasPlannerSlot, validatePlanProposal } from './planner.js'
+import { PLAN_TASK_SKILL, REPLAN_LIMIT, MAX_CONSULT_FEEDBACK_CHARS, bestConsultSlot, buildCapabilityFeedback, buildConsultPrompt, buildPlannerSpec, buildReviewGapFeedback, classifyPlanErrors, extractPlanProposal, hasPlannerSlot, validatePlanProposal } from './planner.js'
 import { buildRecentWindow, needsAutoReset, resetThresholdFor, sessionCtxUsage } from './session-tiers.js'
 import type { PodStore } from './store.js'
 import { classifyFault, TaskMachine, type TaskVerifyFn } from './task-machine.js'
@@ -1290,19 +1290,27 @@ export class MissionOrchestrator {
             let feedbackApplied = false
             let feedbackMode: 'consult' | 'roster' | undefined
             if (cls !== undefined && cls.semantic.length > 0) {
-              const consultEnabled = this.experiments.isEnabled('feedback-consult')
-              const consulted = consultEnabled ? await this.consultPlannerFeedback(cls.capabilityGaps, task) : undefined
-              if (consulted !== undefined) {
-                this.store.updateTask(this.missionId, taskId, {
-                  spec: `${task.spec}\n\n## 上次提案被拒的反馈（LLM 咨询·执行侧约束）\n${consulted}`,
-                })
-                feedbackApplied = true
-                feedbackMode = 'consult'
-              } else {
-                const feedback = buildCapabilityFeedback(cls.capabilityGaps, this.store.listSlots(this.missionId))
+              if (cls.reviewGaps.length > 0) {
+                // 独立审查缺口：无「第二个员工」可咨询，直接走名册反馈引导 planner 自审
+                const feedback = buildReviewGapFeedback(cls.reviewGaps, this.store.listSlots(this.missionId))
                 this.store.updateTask(this.missionId, taskId, { spec: `${task.spec}\n\n## 上次提案被拒的反馈（执行侧约束）\n${feedback}` })
                 feedbackApplied = true
                 feedbackMode = 'roster'
+              } else {
+                const consultEnabled = this.experiments.isEnabled('feedback-consult')
+                const consulted = consultEnabled ? await this.consultPlannerFeedback(cls.capabilityGaps, task) : undefined
+                if (consulted !== undefined) {
+                  this.store.updateTask(this.missionId, taskId, {
+                    spec: `${task.spec}\n\n## 上次提案被拒的反馈（LLM 咨询·执行侧约束）\n${consulted}`,
+                  })
+                  feedbackApplied = true
+                  feedbackMode = 'consult'
+                } else {
+                  const feedback = buildCapabilityFeedback(cls.capabilityGaps, this.store.listSlots(this.missionId))
+                  this.store.updateTask(this.missionId, taskId, { spec: `${task.spec}\n\n## 上次提案被拒的反馈（执行侧约束）\n${feedback}` })
+                  feedbackApplied = true
+                  feedbackMode = 'roster'
+                }
               }
             }
             this.taskMachine.fail(taskId, { kind: 'silent_failure', message: `plan proposal rejected: ${errors.join('; ').slice(0, 400)}` })
