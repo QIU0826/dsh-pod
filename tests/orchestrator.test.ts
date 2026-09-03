@@ -553,6 +553,32 @@ describe('N2 记忆运行时注入（CR-07-4：相关 + 有界 + 指针式）', 
     expect(fixture.backends.claude!.started[0]!.task.spec).not.toContain('相关记忆')
   })
 
+  it('跨 mission 团队沉淀（2026-09-03 闭环修复）：全库候选查询兜底，旧 mission 员工写的 lesson 能进注入', async () => {
+    const queries: Array<{ owner_slot_id?: string; limit?: number }> = []
+    const orch = makeOrchestrator(fixture, {}, 'M-1', {
+      // 模拟真实断裂形态：本 slot / team 两路精确匹配都不命中（旧 mission 的记录 owner
+      // 是废弃的 M-old-S-1），只有全库路（不带 owner 条件）能捞出员工写的经验
+      memoryQuery: (q) => {
+        queries.push(q)
+        if (q.owner_slot_id === undefined) {
+          return [
+            { id: 'mem-old', type: 'lesson', importance: 2, tags: [], content_ref: '本仓库无 package.json，.ts 测试用 node --experimental-strip-types 直跑' },
+          ]
+        }
+        return []
+      },
+    })
+    orch.launch(launchInput({ cwd: fixture.repo }))
+    // spec 与经验词重叠（node:test/测试）——BM25 相关性裁决需要词面交集
+    orch.createTasks([{ id: 'T-1', title: '实现', spec: '实现 slugify 并用 node:test 写测试', type: 'implement', skill_tags: ['编码'] }])
+    await orch.run()
+    // 三路查询都有发生：本 slot + team + 全库
+    expect(queries.some((q) => q.owner_slot_id === undefined)).toBe(true)
+    const started = fixture.backends.claude!.started[0]!
+    expect(started.task.spec).toContain('相关记忆（团队沉淀，指针式）')
+    expect(started.task.spec).toContain('本仓库无 package.json')
+  })
+
   it('P1-4 深化①：相关性优先于重要度——importance=2 的相关记忆越过旧 importance≥3 硬门入选且排在前', async () => {
     const orch = makeOrchestrator(fixture, {}, 'M-1', {
       // 旧启发式（importance≥3 硬门 + tag/importance 排序）只会注入高重要度但无关的周报模板，

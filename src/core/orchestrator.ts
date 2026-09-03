@@ -1582,6 +1582,11 @@ export class MissionOrchestrator {
     for (const r of [
       ...(this.memoryQuery({ owner_slot_id: slotId, limit: MEMORY_CANDIDATE_POOL }) ?? []),
       ...(this.memoryQuery({ owner_slot_id: teamOwnerId(this.missionId), limit: MEMORY_CANDIDATE_POOL }) ?? []),
+      // 跨 mission 团队沉淀（2026-09-03 闭环修复）：员工经 pod_mem_write 写的经验 owner 是
+      // 旧 mission 命名空间的 slot id（M-xxx-S-1），上面两路精确匹配永不命中——经验随 mission
+      // 终态沉没，团队学不到。补一路全库候选（limit 封顶同池），无关记忆由 rankMemories 的
+      // BM25 相关性裁决压下去，不会挤掉相关项。
+      ...(this.memoryQuery({ limit: MEMORY_CANDIDATE_POOL }) ?? []),
     ]) {
       if (seen.has(r.id)) continue
       seen.add(r.id)
