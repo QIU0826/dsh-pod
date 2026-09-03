@@ -3,7 +3,7 @@
  * 数据根用临时目录，不碰 ~/.dsh/pod。CLI 参数解析与守卫走纯函数单测。
  */
 import { afterAll, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -95,6 +95,37 @@ describe('standalone server', () => {
   it('未监听直接 close() 不抛（ERR_SERVER_NOT_RUNNING 被吞）', async () => {
     const s = createStandaloneServer({ dataDir: makeTmpDataDir() })
     await expect(s.close()).resolves.toBeUndefined()
+  })
+
+  it('员工侧 MCP 接线（2026-09-03）：listen 后写 worker-mcp.json + /mcp 路由挂载（非 404）', async () => {
+    const dataDir = makeTmpDataDir()
+    const s = await listenStandalone({ port: 0, dataDir })
+    try {
+      // worker-mcp.json 写出（url 回填实际端口，loopback 无 token 时 headers 省略）
+      const configPath = join(dataDir, 'worker-mcp.json')
+      expect(existsSync(configPath)).toBe(true)
+      const config = JSON.parse(readFileSync(configPath, 'utf8')) as {
+        mcpServers: Record<string, { type: string; url: string; headers?: Record<string, string> }>
+      }
+      const serverEntry = config.mcpServers['dsh-pod']
+      expect(serverEntry?.type).toBe('http')
+      expect(serverEntry?.url).toBe(`http://127.0.0.1:${s.port}/mcp`)
+      // /mcp 路由已挂载（非 404；MCP 协议层行为由 mcp-http.test.ts 覆盖）
+      const res = await fetch(`http://127.0.0.1:${s.port}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+      expect(res.status).not.toBe(404)
+    } finally {
+      await s.close()
+    }
+  })
+
+  it('demo 模式不写 worker-mcp.json（DemoBackend 无真实 worker，不接线）', async () => {
+    const dataDir = makeTmpDataDir()
+    const s = await listenStandalone({ port: 0, dataDir, demo: true })
+    try {
+      expect(existsSync(join(dataDir, 'worker-mcp.json'))).toBe(false)
+    } finally {
+      await s.close()
+    }
   })
 })
 

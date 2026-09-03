@@ -14,6 +14,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { killTree } from './kill-tree.js'
 import { assertSafeArgvPath, assertSafeArgvToken } from './argv-guard.js'
 import { randomUUID } from 'node:crypto'
@@ -32,6 +33,11 @@ import { execCommandRunner } from './preflight.js'
 import { renderReportPromptFragment } from '../core/report-schema.js'
 import { makeEnvelope } from '../core/error-envelope.js'
 import type { WorkerErrorEnvelope } from '../core/error-envelope.js'
+
+/** 员工侧 MCP 接线（2026-09-03）：宿主 MCP server 注册名（worker-mcp.json 的 mcpServers 键）。 */
+export const WORKER_MCP_SERVER_NAME = 'dsh-pod'
+/** 员工主动策展记忆的三件套（pod-service 记忆子系统的 MCP 工具面）。 */
+export const WORKER_MEM_MCP_TOOLS = ['pod_mem_query', 'pod_mem_write', 'pod_mem_correct'] as const
 
 export type StreamJsonEvent = Record<string, unknown> & { type?: string }
 
@@ -344,6 +350,13 @@ export interface ClaudeStartOptions {
   pluginDir?: string
   permissionMode?: 'acceptEdits' | 'bypassPermissions'
   timeoutMs?: number
+  /**
+   * 员工侧 MCP 接线（2026-09-03）：宿主 MCP HTTP 端点的配置文件路径
+   * （standalone listen 后写 <dataDir>/worker-mcp.json，含 url/token）。
+   * 文件存在 → --mcp-config 注入 + allowedTools 追加 pod_mem_* 三件套
+   * （员工主动策展记忆：query/write/correct）；不存在 → 行为与旧版逐字节一致。
+   */
+  mcpConfigPath?: string
 }
 
 export interface SpawnedClaude {
@@ -372,6 +385,11 @@ export interface ClaudeBackendOptions {
   envForSlot?: (slot: AgentSlot) => Record<string, string>
   /** --allowedTools 进程白名单（3.8 节三道防线之一），每次 start 统一注入。 */
   allowedTools?: string[]
+  /**
+   * 员工侧 MCP 接线（2026-09-03）：worker-mcp.json 路径（宿主 MCP HTTP 端点配置）。
+   * start 时文件存在才拼 --mcp-config 并追加 pod_mem_* 工具白名单；不存在 = 行为同旧。
+   */
+  mcpConfigPath?: string
   /** --plugin-dir 显式加载用户本地插件（--bare 跳过 plugin sync；2026-09-02 能力保留）。 */
   pluginDir?: string
   /** 单任务进程超时（默认 15 分钟；长任务经 orchestrator max_wall_clock_ms 传递）。 */
@@ -410,7 +428,18 @@ export function buildClaudeArgs(options: ClaudeStartOptions): string[] {
     else if (options.newSessionId !== undefined) args.push('--session-id', options.newSessionId)
   }
   if (options.maxBudgetUsd !== undefined) args.push('--max-budget-usd', String(options.maxBudgetUsd))
-  if (options.allowedTools !== undefined && options.allowedTools.length > 0) {
+  // 员工侧 MCP 接线（2026-09-03）：worker-mcp.json 存在才注入（文件由 standalone listen 后
+  // 写出，存在性即灰度开关——删文件即回退旧版行为）。allowedTools 追加 pod_mem_* 三件套：
+  // 白名单是允许上限语义，多列不存在的工具名无害（模型看不到未挂载的工具）。
+  if (options.mcpConfigPath !== undefined && options.mcpConfigPath.length > 0 && existsSync(options.mcpConfigPath)) {
+    assertSafeArgvPath('claude mcpConfigPath', options.mcpConfigPath)
+    args.push('--mcp-config', options.mcpConfigPath)
+    const baseTools = options.allowedTools ?? []
+    args.push(
+      '--allowedTools',
+      [...baseTools, ...WORKER_MEM_MCP_TOOLS.map((t) => `mcp__${WORKER_MCP_SERVER_NAME}__${t}`)].join(','),
+    )
+  } else if (options.allowedTools !== undefined && options.allowedTools.length > 0) {
     args.push('--allowedTools', options.allowedTools.join(','))
   }
   if (options.permissionMode !== undefined) args.push('--permission-mode', options.permissionMode)
@@ -437,6 +466,8 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
   private readonly envForSlot: ((slot: AgentSlot) => Record<string, string>) | undefined
   private readonly allowedTools: string[] | undefined
   private readonly pluginDir: string | undefined
+  /** 员工侧 MCP 接线：worker-mcp.json 路径（存在才注入 --mcp-config，见 buildClaudeArgs）。 */
+  private readonly mcpConfigPath: string | undefined
   private readonly taskTimeoutMs: number
 
   constructor(options: ClaudeBackendOptions = {}) {
@@ -446,6 +477,7 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
     this.allowedTools = options.allowedTools
     // pluginDir 默认不传（保持原状：--bare 跳过 plugin sync）；未来上游兼容后经此显式启用
     this.pluginDir = options.pluginDir
+    this.mcpConfigPath = options.mcpConfigPath
     this.taskTimeoutMs = options.taskTimeoutMs ?? 15 * 60_000
     // 默认探测复用 preflight 的 shell-fallback runner（.cmd 包装器兼容）
     this.detectRunner = options.detectRunner ?? execCommandRunner
@@ -490,6 +522,7 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
       permissionMode: 'bypassPermissions',
       allowedTools: this.allowedTools,
       pluginDir: this.pluginDir,
+      mcpConfigPath: this.mcpConfigPath,
     })
     const env = this.envForSlot !== undefined ? this.envForSlot(slot) : undefined
     const spawned = this.spawnClaude(args, worktree, env)

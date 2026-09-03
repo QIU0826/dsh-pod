@@ -9,13 +9,14 @@
  * 安全（CR-29 同款纪律）：默认 loopback-only；--host 0.0.0.0 时必须 --token（Bearer）。
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { existsSync, readFileSync } from 'node:fs'
+import { writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createPodRuntime, type PodRuntime } from '../core/pod-runtime.js'
 import { bearerTokenEquals, hasAllowedLoopbackOrigin, isLocalHostHeader, isLoopbackBindHost, isLoopbackRemoteAddress } from '../core/http-guard.js'
 import { PodService } from '../pod-service.js'
 import { makePodRoutes } from '../routes.js'
+import { createMcpHttpServer, type McpHttpHandle } from '../mcp-http.js'
 import { ClaudeHeadlessBackend } from '../workers/claude-headless.js'
 import { CodexHeadlessBackend, codexBinaryCandidates } from '../workers/codex-headless.js'
 import { OpenCodeHeadlessBackend, opencodeBinaryCandidates } from '../workers/opencode-headless.js'
@@ -121,6 +122,8 @@ export interface StandaloneServer {
   port: number
   host: string
   runtime: PodRuntime
+  /** 员工侧 MCP HTTP 端点（/mcp 路由的 handle；pod_mem_* 三件套宿主面）。 */
+  mcp: McpHttpHandle
   close(): Promise<void>
 }
 
@@ -142,13 +145,20 @@ export function createStandaloneServer(options: StandaloneOptions = {}): Standal
     backends: options.demo === true
       ? { claude: new DemoBackend('claude'), codex: new DemoBackend('codex'), opencode: new DemoBackend('opencode') }
       : {
-          claude: new ClaudeHeadlessBackend({ allowedTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep'] }),
+          claude: new ClaudeHeadlessBackend({
+            allowedTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep'],
+            // 员工侧 MCP 接线（2026-09-03）：worker-mcp.json（listen 后写出，含实际端口/token）；
+            // 文件存在 → start 时 --mcp-config 注入 + allowedTools 追加 pod_mem_* 三件套。
+            mcpConfigPath: join(runtime.dataDir, 'worker-mcp.json'),
+          }),
           codex: new CodexHeadlessBackend({ binary: codexBinaryCandidates(process.platform).find((c) => existsSync(c)) ?? 'codex' }),
           opencode: new OpenCodeHeadlessBackend({ binary: opencodeBin ?? 'opencode' }),
           // ark：补 standalone 缺失（v5 实证「no backend registered for vendor ark」）
           ...(arkBackend !== undefined ? { ark: arkBackend } : {}),
         },
   })
+  // 员工侧 MCP HTTP 端点（/mcp）：pod_mem_* 三件套宿主面。token 与主面同源（guard 先行）。
+  const mcp: McpHttpHandle = createMcpHttpServer(service, { token })
   const routes = makePodRoutes(() => service)
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost')
@@ -160,6 +170,13 @@ export function createStandaloneServer(options: StandaloneOptions = {}): Standal
     }
     if (pathname === '/standalone.js') {
       serveStatic(res, pathname, staticDir)
+      return
+    }
+    // 员工侧 MCP 端点（2026-09-03）：pod_* 工具面（含 pod_mem_* 三件套）经 streamable HTTP
+    // 暴露给 worker 子进程（claude --mcp-config 指向 worker-mcp.json）。guard 已在此前
+    // 统一执行（loopback + Host + Origin 校验同主面）。
+    if (pathname === '/mcp' || pathname.startsWith('/mcp/')) {
+      void mcp.handle(req, res)
       return
     }
     // A2A 协议面路径（发现端点 + sendMessage/Stream + JSON-RPC）与既有 API 前缀并列放行
@@ -210,9 +227,11 @@ export function createStandaloneServer(options: StandaloneOptions = {}): Standal
     port,
     host,
     runtime,
+    mcp,
     close: async () => {
       clearInterval(maintenanceTimer)
       if (server.listening) server.close()
+      await mcp.close()
       runtime.close()
     },
   }
@@ -227,5 +246,17 @@ export async function listenStandalone(options: StandaloneOptions = {}): Promise
   })
   const addr = s.server.address()
   if (addr !== null && typeof addr === 'object') s.port = addr.port
+  // 员工侧 MCP 接线（2026-09-03）：listen 后端口已定，写出 worker-mcp.json（claude worker
+  // spawn 时读它拼 --mcp-config）。demo 模式无真实 worker 不写；文件存在性即灰度开关
+  // （删除即回退旧版行为）。非 loopback 部署带 token（与主面同源）。
+  if (options.demo !== true) {
+    const mcpConfigPath = join(s.runtime.dataDir, 'worker-mcp.json')
+    const url = `http://127.0.0.1:${s.port}/mcp`
+    const config =
+      s.mcp.token.length > 0
+        ? { mcpServers: { 'dsh-pod': { type: 'http', url, headers: { Authorization: `Bearer ${s.mcp.token}` } } } }
+        : { mcpServers: { 'dsh-pod': { type: 'http', url } } }
+    writeFileSync(mcpConfigPath, JSON.stringify(config, null, 2) + '\n')
+  }
   return s
 }

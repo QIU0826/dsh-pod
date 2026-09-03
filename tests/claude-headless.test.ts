@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import { readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   buildTaskPrompt,
@@ -558,6 +559,70 @@ describe('buildClaudeArgs 注入面收口（P1：--model/--resume/--session-id �
     expect(() => buildClaudeArgs({ prompt: 'p', cwd: 'C:\w', sessionTier: 'per-mission', sessionRef: 's|id' })).toThrow(/unsafe argv/)
     expect(() => buildClaudeArgs({ prompt: 'p', cwd: 'C:\w', sessionTier: 'per-mission', newSessionId: '%PATH%' })).toThrow(/unsafe argv/)
     expect(() => buildClaudeArgs({ prompt: 'p', cwd: 'C:\w', sessionTier: 'transient', model: 'deepseek-v4-pro' })).not.toThrow()
+  })
+})
+
+describe('员工侧 MCP 接线（2026-09-03：worker-mcp.json 存在 → --mcp-config + pod_mem_* 白名单）', () => {
+  it('mcpConfigPath 存在 → argv 注入 --mcp-config 且 allowedTools 追加 pod_mem_* 三件套', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pod-mcp-'))
+    const mcpConfigPath = join(dir, 'worker-mcp.json')
+    writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers: { 'dsh-pod': { type: 'http', url: 'http://127.0.0.1:3930/mcp' } } }))
+    const args = buildClaudeArgs({
+      prompt: 'p',
+      cwd: 'C:\\w',
+      sessionTier: 'transient',
+      allowedTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep'],
+      mcpConfigPath,
+    })
+    const allowedIdx = args.indexOf('--allowedTools')
+    expect(args).toContain('--mcp-config')
+    const mcpIdx = args.indexOf('--mcp-config')
+    expect(mcpIdx).toBeGreaterThan(-1)
+    expect(args[mcpIdx + 1]).toBe(mcpConfigPath)
+    expect(args[allowedIdx + 1]?.split(',')).toEqual([
+      'Read',
+      'Write',
+      'Edit',
+      'Bash',
+      'Glob',
+      'Grep',
+      'mcp__dsh-pod__pod_mem_query',
+      'mcp__dsh-pod__pod_mem_write',
+      'mcp__dsh-pod__pod_mem_correct',
+    ])
+  })
+
+  it('mcpConfigPath 指向不存在的文件 → 不注入（行为与旧版逐字节一致，文件存在性即灰度开关）', () => {
+    const args = buildClaudeArgs({
+      prompt: 'p',
+      cwd: 'C:\\w',
+      sessionTier: 'transient',
+      allowedTools: ['Read'],
+      mcpConfigPath: join(tmpdir(), 'pod-mcp-nonexistent-xyz', 'worker-mcp.json'),
+    })
+    expect(args).not.toContain('--mcp-config')
+    expect(args).toContain('Read')
+  })
+
+  it('mcpConfigPath 指向不存在的文件 → 不注入（行为与旧版逐字节一致，文件存在性即灰度开关）', () => {
+    const args = buildClaudeArgs({
+      prompt: 'p',
+      cwd: 'C:\\w',
+      sessionTier: 'transient',
+      allowedTools: ['Read'],
+      mcpConfigPath: join(tmpdir(), 'pod-mcp-nonexistent-xyz', 'worker-mcp.json'),
+    })
+    expect(args).not.toContain('--mcp-config')
+    expect(args).toContain('Read')
+  })
+
+  it('extractReport status 归一化：枚举外 needs_changes → blocked（2026-09-03 ark 实证）', () => {
+    const mk = (status: string): string =>
+      '```json\n' + JSON.stringify({ task_id: 'T-1', task_type: 'review', status, summary: 's', files_changed: [], test_result: 'pass', decisions: [], blockers: ['b'], questions: [] }) + '\n```'
+    expect(extractReport(mk('needs_changes'))?.status).toBe('blocked')
+    expect(extractReport(mk('DONE'))?.status).toBe('done')
+    expect(extractReport(mk('need_clarify'))?.status).toBe('need_clarify')
+    expect(extractReport(mk('totally-unknown'))?.status).toBe('blocked')
   })
 })
 

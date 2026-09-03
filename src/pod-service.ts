@@ -166,6 +166,9 @@ export class PodService {
     this.backends = options.backends ?? {
       claude: new ClaudeHeadlessBackend({
         allowedTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep'],
+        // 员工侧 MCP 接线（2026-09-03）：worker-mcp.json 由 standalone listen 后写出
+        // （文件存在 = 灰度开）；claude start 时文件存在才注入 --mcp-config + mem 工具白名单。
+        mcpConfigPath: join(this.dataDir, 'worker-mcp.json'),
       }),
       codex: new CodexHeadlessBackend({
         binary: codexBinaryCandidates('win32').find((c) => existsSync(c)) ?? 'codex',
