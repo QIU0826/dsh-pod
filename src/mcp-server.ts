@@ -119,6 +119,33 @@ export function makeMcpServer(service: PodService, opts: McpServerOptions = {}):
       reason: z.string().optional(),
     },
     pod_abort: { reason: z.string().optional() },
+    // ── pod_mem_*：员工主动策展记忆（2.8.1 知识层；worker 经 --mcp-config 接线后可调）──
+    pod_mem_write: {
+      owner_slot_id: slotIdSchema.describe('拥有者槽位；团队级（mission 复盘）用 team:<mission_id>'),
+      type: z.enum(['lesson', 'pattern', 'decision', 'fact', 'episode']).optional().describe('记忆类型'),
+      importance: z.number().optional().describe('1-5，越高越重要'),
+      tags: z.array(z.string()).optional().describe('标签'),
+      content_ref: z.string().optional().describe('内容引用（文件/路径/摘要，非原始对话转录）'),
+      live_ref: z.string().optional().describe('实时状态引用（live_ref：非快照）'),
+    },
+    pod_mem_query: {
+      owner_slot_id: slotIdSchema.optional().describe('拥有者槽位 id（缺省查全部可见记忆）'),
+      type: z.enum(['lesson', 'pattern', 'decision', 'fact', 'episode']).optional().describe('记忆类型'),
+      tags: z.array(z.string()).optional().describe('标签'),
+      importance_min: z.number().optional().describe('重要性下限'),
+      relation: z.enum(['supports', 'contradicts', 'derived-from']).optional().describe('图谱遍历关系'),
+      relates_to: z.string().optional().describe('图谱遍历起点记录 id'),
+      limit: z.number().optional().describe('最大返回条数'),
+    },
+    pod_mem_correct: {
+      id: z.string().describe('记忆记录 id'),
+      type: z.enum(['lesson', 'pattern', 'decision', 'fact', 'episode']).optional().describe('记忆类型'),
+      importance: z.number().optional().describe('1-5'),
+      tags: z.array(z.string()).optional().describe('标签'),
+      content_ref: z.string().optional().describe('内容引用'),
+      live_ref: z.string().optional().describe('实时状态引用'),
+      by: z.string().optional().describe('变更人（默认 user，审计留痕）'),
+    },
   }
 
   const inputOf = (name: string): z.ZodRawShape => (short ? {} : fullShapes[name] ?? {})
@@ -240,6 +267,55 @@ export function makeMcpServer(service: PodService, opts: McpServerOptions = {}):
     const input = castArgs<AbortArgs>(args)
     service.abort(input.reason ?? 'aborted via mcp')
     return { content: [{ type: 'text', text: JSON.stringify({ aborted: true }) }] }
+  })
+
+  // ── pod_mem_*：员工主动策展记忆（2.8.1 知识层；2026-09-03 补挂——TOOL_BRIEFS 已宣告
+  //    但 fullShapes/registerTool 缺失，模型按清单调用必 not found，v9 实证）──
+  type MemWriteArgs = { owner_slot_id: string; type?: 'lesson' | 'pattern' | 'decision' | 'fact' | 'episode'; importance?: number; tags?: string[]; content_ref?: string; live_ref?: string }
+  type MemQueryArgs = { owner_slot_id?: string; type?: 'lesson' | 'pattern' | 'decision' | 'fact' | 'episode'; tags?: string[]; importance_min?: number; relation?: 'supports' | 'contradicts' | 'derived-from'; relates_to?: string; limit?: number }
+  type MemCorrectArgs = { id: string; type?: 'lesson' | 'pattern' | 'decision' | 'fact' | 'episode'; importance?: number; tags?: string[]; content_ref?: string; live_ref?: string; by?: string }
+
+  server.registerTool('pod_mem_write', { description: TOOL_BRIEFS['pod_mem_write']?.brief ?? '', inputSchema: inputOf('pod_mem_write') }, async (args) => {
+    const input = castArgs<MemWriteArgs>(args)
+    try {
+      const rec = service.memoryWrite({
+        owner_slot_id: input.owner_slot_id,
+        type: input.type,
+        importance: input.importance,
+        tags: input.tags,
+        content_ref: input.content_ref,
+        live_ref: input.live_ref,
+      })
+      return { content: [{ type: 'text', text: JSON.stringify({ id: rec.id, message: '记忆 ' + rec.id + ' 已写入' }) }] }
+    } catch (error) {
+      return { content: [{ type: 'text', text: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }) }] }
+    }
+  })
+
+  server.registerTool('pod_mem_query', { description: TOOL_BRIEFS['pod_mem_query']?.brief ?? '', inputSchema: inputOf('pod_mem_query') }, async (args) => {
+    const input = castArgs<MemQueryArgs>(args)
+    try {
+      const records = service.memoryQuery(input as Parameters<PodService['memoryQuery']>[0])
+      return { content: [{ type: 'text', text: JSON.stringify({ records, message: '返回 ' + records.length + ' 条记忆' }) }] }
+    } catch (error) {
+      return { content: [{ type: 'text', text: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }) }] }
+    }
+  })
+
+  server.registerTool('pod_mem_correct', { description: TOOL_BRIEFS['pod_mem_correct']?.brief ?? '', inputSchema: inputOf('pod_mem_correct') }, async (args) => {
+    const input = castArgs<MemCorrectArgs>(args)
+    try {
+      const rec = service.memoryCorrect(input.id, {
+        type: input.type,
+        importance: input.importance,
+        tags: input.tags,
+        content_ref: input.content_ref,
+        live_ref: input.live_ref,
+      }, input.by ?? 'worker-mcp')
+      return { content: [{ type: 'text', text: JSON.stringify({ corrected: true, message: '记忆 ' + rec.id + ' 已更新（变更历史已留痕）' }) }] }
+    } catch (error) {
+      return { content: [{ type: 'text', text: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }) }] }
+    }
   })
 
   // ── pod_expand_tool：P0-1 按需展开元工具（ADOL --short 的展开通道）──
