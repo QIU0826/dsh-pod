@@ -156,6 +156,9 @@ export interface Task {
   status: TaskStatus
   attempts: number  /** 重试不计入的 attempts 计数（429 / need_clarify），仅观察。 */
   soft_attempts: number
+  /** need_clarify 独立计数（2026-09-03：与 soft_attempts 分离——后者被 429 共享，
+   *  限流穿插会污染「提问无人答复」的升级判定；本字段只数 need_clarify 本身）。 */
+  need_clarify_count?: number
   fault?: FaultKind
   last_error?: string
   /** 信息增量式止损：上次失败的证据签名（failure-evidence.ts）与连续同证据次数。 */

@@ -1947,6 +1947,9 @@ export class MissionOrchestrator {
         // shouldRetry 对 attempts>=3 的升级任务恒 false——「转人工唯一恢复路径」
         // 对其最常见来源（3 次失败升级）反而失效，任务永久卡 blocked。
         attempts: 0,
+        // need_clarify 独立计数同步归零（2026-09-03）：授予重试后应开启新一轮提问机会，
+        // 否则保留的计数会让下次第 1 次提问就触发升级（need_clarify_count>=3 残留）。
+        need_clarify_count: 0,
       })
     }
     this.store.appendEvent(this.missionId, {

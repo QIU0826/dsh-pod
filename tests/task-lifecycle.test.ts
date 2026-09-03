@@ -13,6 +13,7 @@ import { repairPath } from '../src/workers/preflight.js'
 import { JsonStore } from '../src/core/store.js'
 import { MissionOrchestrator } from '../src/core/orchestrator.js'
 import { TaskMachine } from '../src/core/task-machine.js'
+import { RATE_LIMIT_BACKOFF_MAX_MS } from '../src/core/types.js'
 import type { LaunchInput, PlanTaskInput, WorktreeManager } from '../src/core/orchestrator.js'
 import type {
   AgentSlot,
@@ -323,6 +324,86 @@ describe('TaskMachine 生命周期迁移（非法迁移 fail-closed）', () => {
     expect(t.status).toBe('escalated')
     expect(t.soft_attempts).toBe(3)
     expect(machine.shouldRetry(t, 1_700_000_000_000)).toBe(false)
+  })
+
+  it('429 穿插不污染提问封顶：rate_limited×2 + need_clarify×1 → 仍 blocked 可重试（2026-09-03 独立计数修复）', async () => {
+    seed()
+    let now = 1_700_000_000_000
+    const machine = new TaskMachine(fixture.store, {
+      missionId: 'M-1',
+      clock: () => now,
+      rng: () => 0, // 确定性退避：base 恰好 = RATE_LIMIT_BACKOFF_BASE_MS
+      verify: async () => ({ ok: true, failures: [], mismatch: false }),
+    })
+    const reportNeedClarify = () => ({
+      task_id: 'T-1',
+      task_type: 'implement' as const,
+      status: 'need_clarify' as const,
+      summary: '实现前需澄清',
+      files_changed: [],
+      test_result: 'not_run' as const,
+      decisions: [],
+      blockers: [],
+      questions: ['q?'],
+    })
+    // 两次 429（各自退避后重派）：soft_attempts 累计，但 need_clarify_count 必须保持 0
+    for (let i = 1; i <= 2; i += 1) {
+      machine.dispatch('T-1', 'S-1')
+      machine.start('T-1')
+      machine.fail('T-1', { kind: 'rate_limited', message: '429 upstream' })
+      const t = fixture.store.getTask('M-1', 'T-1')!
+      expect(t.status).toBe('blocked')
+      expect(t.soft_attempts).toBe(i)
+      expect(t.need_clarify_count ?? 0).toBe(0) // 429 不累计提问数
+      now += RATE_LIMIT_BACKOFF_MAX_MS // 越过指数退避（softAttempts 增长退避翻倍）
+    }
+    // 第 3 次运行才真正输出 need_clarify（第一次提问）：修复前 softAttempts=3 会被误判 ×3 升级
+    machine.dispatch('T-1', 'S-1')
+    machine.start('T-1')
+    await machine.report('T-1', reportNeedClarify())
+    const t = fixture.store.getTask('M-1', 'T-1')!
+    expect(t.status).toBe('blocked') // 修复前：误 escalated
+    expect(t.need_clarify_count).toBe(1)
+    expect(t.fault).toBe('need_clarify')
+    expect(t.soft_attempts).toBe(3) // 观察字段仍累计所有软失败
+    expect(machine.shouldRetry(t, now)).toBe(true) // 提问机会未被 429 提前耗尽
+  })
+
+  it('need_clarify 独立计数达 3 仍升级（封顶不受 429 干扰，且不依赖 soft_attempts 总值）', async () => {
+    seed()
+    let now = 1_700_000_000_000
+    const machine = new TaskMachine(fixture.store, {
+      missionId: 'M-1',
+      clock: () => now,
+      rng: () => 0,
+      verify: async () => ({ ok: true, failures: [], mismatch: false }),
+    })
+    const reportNeedClarify = () => ({
+      task_id: 'T-1',
+      task_type: 'implement' as const,
+      status: 'need_clarify' as const,
+      summary: '还是不清楚',
+      files_changed: [],
+      test_result: 'not_run' as const,
+      decisions: [],
+      blockers: [],
+      questions: ['q?'],
+    })
+    // 429 → need_clarify×3：soft_attempts 总 4，但提问数独立到 3 → escalate
+    machine.dispatch('T-1', 'S-1')
+    machine.start('T-1')
+    machine.fail('T-1', { kind: 'rate_limited', message: '429' })
+    now += RATE_LIMIT_BACKOFF_MAX_MS
+    for (let i = 1; i <= 3; i += 1) {
+      machine.dispatch('T-1', 'S-1')
+      machine.start('T-1')
+      await machine.report('T-1', reportNeedClarify())
+    }
+    const t = fixture.store.getTask('M-1', 'T-1')!
+    expect(t.status).toBe('escalated')
+    expect(t.need_clarify_count).toBe(3)
+    expect(t.soft_attempts).toBe(4) // 429×1 + need_clarify×3
+    expect(t.last_error).toContain('need_clarify ×3')
   })
 })
 
