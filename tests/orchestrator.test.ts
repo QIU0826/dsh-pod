@@ -1025,6 +1025,26 @@ describe('v0.2 并行执行强化（双路+，dispatchBatch 填满 maxParallel�
     expect(fixture.store.getTask('T-1')!.owner_slot_id).not.toBe(fixture.store.getTask('T-2')!.owner_slot_id)
   })
 
+  it('slot 级互斥：单适配槽位 + 多就绪任务串行执行（不并发派到同一 worktree/session）', async () => {
+    // 修复前：routeTask 不排除有在途任务的槽位 → 两个实现任务都派给唯一 S-1 并发
+    // （per-slot worktree 共享 → 写冲突 / commit 链乱）。修复后第二个任务保持 ready 等待。
+    const orch = makeOrchestrator(fixture, { 'T-1': { delayMs: 40, completion: doneX('T-1') }, 'T-2': { delayMs: 40, completion: doneX('T-2') } })
+    orch.launch(launchInput({ cwd: fixture.repo, parallel: 2, slots: [{ id: 'S-1', vendor: 'claude', role: 'implementer', capabilities: ['编码'], model: 'm', session_tier: 'transient' }] }))
+    orch.createTasks([
+      { id: 'T-1', title: '实现 1', spec: 's', type: 'implement', skill_tags: ['编码'] },
+      { id: 'T-2', title: '实现 2', spec: 's', type: 'implement', skill_tags: ['编码'] },
+    ])
+    await orch.run()
+    expect(fixture.store.getTask('T-1')!.status).toBe('done')
+    expect(fixture.store.getTask('T-2')!.status).toBe('done')
+    // 串行（单槽不并发）：同一时刻只有一个 worker 在跑；两任务不共享在途窗口
+    expect(fixture.backends.claude!.peakActive).toBe(1)
+    expect(fixture.store.getTask('T-1')!.owner_slot_id).toBe('M-1-S-1')
+    expect(fixture.store.getTask('T-2')!.owner_slot_id).toBe('M-1-S-1')
+    // 无 escalate：等待不是「无人可派」
+    expect(fixture.store.listTasks('M-1').every((t) => t.status === 'done')).toBe(true)
+  })
+
   it('launch parallel=1：并行上限收紧到单路（clamp 下限）→ peakActive=1', async () => {
     const orch = makeOrchestrator(fixture, { 'T-1': { delayMs: 40, completion: doneX('T-1') } })
     orch.launch(launchInput({ cwd: fixture.repo, parallel: 1, slots: twoImplementers }))

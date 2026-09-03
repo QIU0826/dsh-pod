@@ -890,8 +890,16 @@ export class MissionOrchestrator {
         tasks: this.store.listTasks(this.missionId),
         // Ledger→路由权重（2.7 节 v0.2 起生效）：槽位历史成功率（完成任务占比），无数据中性不劣化
         slotSuccess: this.slotSuccessRates(),
+        // slot 级互斥（2026-09-03）：排除已有在途任务的槽位。null + busy reason = 适配但
+        // 全忙 → 任务保持 ready 等待（driveLoop 完成信号重驱），不是 escalate。
+        excludeBusy: true,
       })
       if (routed.slotId === null) {
+        if (routed.reason === 'all matching slots busy (in-flight task)') {
+          // 适配槽位全忙：等待而非转人工（与能力缺口的 escalate 区分）。不落事件——
+          // 槽位释放后 driveLoop/maintenanceTick 会重驱本 ready 任务。
+          return null
+        }
         if (excluded.size === 0) {
           // 无人可派（能力缺口 / 审查者唯一）→ 转人工，不消费 attempts
           this.taskMachine.escalate(task.id)
@@ -1032,8 +1040,16 @@ export class MissionOrchestrator {
         slots: availableSlots.filter((s) => !excluded.has(s.id)),
         tasks: this.store.listTasks(this.missionId),
         slotSuccess: this.slotSuccessRates(),
+        excludeBusy: true,
       })
       if (nextRouted.slotId === null) {
+        if (nextRouted.reason === 'all matching slots busy (in-flight task)') {
+          // 本 candidate 谢绝 + 其余适配槽位全忙：回 ready 等槽位释放（而非终局拒绝——
+          // 忙槽位释放后可能健康可用）；standDown 不计故障不消费 attempts
+          this.taskMachine.standDown(task.id, `${candidate.id} 谢绝（${health.reason}），其余适配槽位在途忙，等待释放`)
+          this.signalCompletion()
+          return null
+        }
         this.taskMachine.rejectTerminal(task.id, `${candidate.id} 谢绝（${health.reason}）且无其他可派槽位`)
         this.maybeAutoReplan(task.id)
         this.signalCompletion()

@@ -30,6 +30,11 @@ export interface RouteContext {
    * 缺省/无数据视为中性 0.5，同序时回退稳定序，不劣化原路由。
    */
   slotSuccess?: Record<string, number>
+  /**
+   * slot 级互斥（2026-09-03）：true 时排除已有在途任务的槽位。null + reason
+   * 'all matching slots busy' = 适配但全忙 → 调用方等待槽位释放，勿 escalate。
+   */
+  excludeBusy?: boolean
 }
 
 export type RouteResult =
@@ -50,21 +55,38 @@ function activeLoad(slotId: string, tasks: Task[]): number {
 /**
  * 路由决策（纯函数）：能力硬过滤 → 负载升序 → 成本升序 → 稳定序。
  * 返回 null 时 reason 说明硬条件失败原因（覆盖性体检/告警的数据源）。
+ *
+ * excludeBusy（2026-09-03 slot 级互斥）：排除已有在途任务（negotiating/accepted/
+ * dispatched/running）的槽位——一个槽位同一时刻只跑一个任务（per-slot worktree + session
+ * 单占用），单槽多就绪任务（planner 自审降级后的常见阵型）若不互斥会并发派到同一 worktree，
+ * 写冲突/commit 链乱。注意 null + busy reason = 「适配但全忙」→ 调用方应等待而非 escalate。
  */
 export function routeTask(task: Task, context: RouteContext): RouteResult {
   const candidates = context.slots.filter((slot) => {
     if (UNAVAILABLE_STATUSES.has(slot.status)) return false
     if (slot.mission_id !== task.mission_id) return false
     if (!capabilitiesMatch(slot, task)) return false
+    if (context.excludeBusy === true && activeLoad(slot.id, context.tasks) > 0) return false
     return true
   })
   if (candidates.length === 0) {
+    // 区分「无适配」与「适配但全忙」：前者 escalate（能力/审查者缺口），后者等待槽位释放
+    const busyOnly =
+      context.excludeBusy === true &&
+      context.slots.some((slot) => {
+        if (UNAVAILABLE_STATUSES.has(slot.status)) return false
+        if (slot.mission_id !== task.mission_id) return false
+        if (!capabilitiesMatch(slot, task)) return false
+        return true
+      })
     return {
       slotId: null,
       reason:
-        context.slots.length === 0
-          ? 'no slots in roster'
-          : 'no slot matches capabilities or all slots unavailable',
+        busyOnly
+          ? 'all matching slots busy (in-flight task)'
+          : context.slots.length === 0
+            ? 'no slots in roster'
+            : 'no slot matches capabilities or all slots unavailable',
     }
   }
   const cost = context.modelCost ?? {}
