@@ -441,10 +441,19 @@ export class TaskMachine {
     // attempts>=3 兜底在前，故阈值的有效意义就是「省下最后一轮全价重试」。
     const earlyExit =
       comparable && noNewEvidence >= this.earlyExitThreshold - 1 && this.earlyExitEnabled() && attempts < 3
-    const escalated = (!options.soft && !options.auth && attempts >= 3) || earlyExit
+    // need_clarify 升级上限（2026-09-03 竞态修复的语义取舍）：软失败不烧 attempts，若只按
+    // attempts>=3 判升级，worker 反复 need_clarify（自动重派时 steer 答复还没排队，拿着同样
+    // spec 再问一遍）就永远到不了转人工——无人值守时无限循环烧 LLM 调用（回退验证实证：
+    // 微任务时序下直接饿死事件循环）。3 次提问无人答 → escalate，烧钱封顶；rate_limited
+    // 不受影响（有指数退避，属瞬态限流）。
+    const needClarifyExhausted = kind === 'need_clarify' && softAttempts >= 3
+    const escalated =
+      (!options.soft && !options.auth && attempts >= 3) || earlyExit || needClarifyExhausted
     const lastError = earlyExit
       ? `early exit: ${noNewEvidence + 1} consecutive failures with identical evidence (no new information) — ${message}`
-      : message
+      : needClarifyExhausted
+        ? `need_clarify ×${softAttempts} 无人答复，转人工接管 — ${message}`
+        : message
 
     this.store.updateTask(this.missionId, task.id, {
       status: escalated ? 'escalated' : 'blocked',

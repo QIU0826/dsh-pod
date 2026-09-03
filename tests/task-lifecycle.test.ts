@@ -286,8 +286,43 @@ describe('TaskMachine 生命周期迁移（非法迁移 fail-closed）', () => {
     expect(t?.soft_attempts).toBe(1)
     expect(t?.attempts).toBe(0) // 软失败不消费 attempts
     expect(t?.fault).toBe('need_clarify')
-    // 可重派（next_retry_at 为 now，非 auth/rate_limited 退避）
+    // 可重派（next_retry_at 为 now，非 auth/rate_limited 退避）；steer 答复在重派时注入 spec
     expect(machine.shouldRetry(t!, 1_700_000_000_000)).toBe(true)
+  })
+
+  it('need_clarify ×3 → escalated（软失败烧钱封顶：soft 失败不烧 attempts，无上限则无人值守无限重派）', async () => {
+    seed()
+    const machine = new TaskMachine(fixture.store, {
+      missionId: 'M-1',
+      clock: () => 1_700_000_000_000,
+      verify: async () => ({ ok: true, failures: [], mismatch: false }),
+    })
+    const reportNeedClarify = () => ({
+      task_id: 'T-1',
+      task_type: 'implement' as const,
+      status: 'need_clarify' as const,
+      summary: '还是不清楚',
+      files_changed: [],
+      test_result: 'not_run' as const,
+      decisions: [],
+      blockers: [],
+      questions: ['q?'],
+    })
+    for (let i = 1; i <= 3; i += 1) {
+      machine.dispatch('T-1', 'S-1')
+      machine.start('T-1')
+      await machine.report('T-1', reportNeedClarify())
+      const t = fixture.store.getTask('M-1', 'T-1')!
+      if (i < 3) {
+        expect(t.status).toBe('blocked')
+        expect(t.soft_attempts).toBe(i)
+        expect(machine.shouldRetry(t, 1_700_000_000_000)).toBe(true) // 前两次自动重派
+      }
+    }
+    const t = fixture.store.getTask('M-1', 'T-1')!
+    expect(t.status).toBe('escalated')
+    expect(t.soft_attempts).toBe(3)
+    expect(machine.shouldRetry(t, 1_700_000_000_000)).toBe(false)
   })
 })
 

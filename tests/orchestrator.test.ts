@@ -177,8 +177,16 @@ function plan(over: Partial<PlanTaskInput>[] = []): PlanTaskInput[] {
   return base.map((task, i) => ({ ...task, ...(over[i] ?? {}) }))
 }
 
-function makeWorktreeManager(fixture: Fixture): WorktreeManager {
-  return {
+/** 轮询等待条件成立（异步驱动循环的完成信号不暴露 promise 句柄时用）。 */
+async function until(cond: () => boolean, ms = 3000): Promise<void> {
+  const start = Date.now()
+  while (!cond()) {
+    if (Date.now() - start > ms) throw new Error('condition timeout')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
+function makeWorktreeManager(fixture: Fixture): WorktreeManager {  return {
     async ensure(repoRoot: string, slotId: string) {
       let path = fixture.worktrees.get(slotId)
       if (path === undefined) {
@@ -1091,13 +1099,6 @@ describe('DoD-19 result_summary（非写码任务 report 摘要落盘 + review �
 
 
 describe('P0 修复：驱动循环可靠性与重启恢复', () => {
-  async function until(cond: () => boolean, ms = 3000): Promise<void> {
-    const start = Date.now()
-    while (!cond()) {
-      if (Date.now() - start > ms) throw new Error('condition timeout')
-      await new Promise((resolve) => setTimeout(resolve, 10))
-    }
-  }
   const doneC = (id: string): WorkerCompletion => ({
     exit: 'done',
     report: doneReport(id),
@@ -1432,6 +1433,56 @@ describe('P2 对话式问题通道（task_question 事件）', () => {
     expect((q[0]!.payload as { questions: string[] }).questions).toContain('用 SQLite 还是 LevelDB？')
     expect(q[0]!.task_id).toBe('T-1')
     void summary
+  })
+
+  it('need_clarify ×3 → escalated（烧钱封顶）：恰派发 3 次后转人工，不再无限自动重派', async () => {
+    const needClarify = (): WorkerCompletion => ({
+      exit: 'done',
+      report: doneReport('T-1', { status: 'need_clarify', questions: ['用 SQLite 还是 LevelDB？'] }),
+      usage: { tokens_in: 5, tokens_out: 5, source: 'measured' },
+      artifacts: [],
+    })
+    const orch = makeOrchestrator(fixture, { 'T-1': { completion: needClarify(), next: needClarify() } })
+    orch.launch(launchInput({ cwd: fixture.repo }))
+    orch.createTasks([{ id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'] }])
+    const summary = await orch.run()
+    expect(summary.status).toBe('needs_human')
+    const t1 = fixture.store.getTask('M-1', 'T-1')!
+    expect(t1.status).toBe('escalated')
+    expect(t1.fault).toBe('need_clarify')
+    expect(t1.soft_attempts).toBe(3)
+    // 恰 3 次派发封顶（此前 soft 失败不烧 attempts，无人值守无限重派烧 LLM 调用）
+    expect(fixture.backends.claude!.started.filter((s) => s.task.id === 'T-1').length).toBe(3)
+    expect(fixture.store.listEvents('M-1').some((e) => e.kind === 'task_escalated')).toBe(true)
+  })
+
+  it('steer 答复在 need_clarify 自动重派时注入 spec（问答闭环：提问 → steer 排队 → 重派带答复）', async () => {
+    const needClarify = (): WorkerCompletion => ({
+      exit: 'done',
+      report: doneReport('T-1', { status: 'need_clarify', questions: ['用 SQLite 还是 LevelDB？'] }),
+      usage: { tokens_in: 5, tokens_out: 5, source: 'measured' },
+      artifacts: [],
+    })
+    const doneC = (): WorkerCompletion => ({
+      exit: 'done',
+      report: doneReport('T-1'),
+      usage: { tokens_in: 5, tokens_out: 5, source: 'measured' },
+      artifacts: [],
+    })
+    const orch = makeOrchestrator(fixture, { 'T-1': { completion: needClarify(), next: doneC(), delayMs: 30 } })
+    orch.launch(launchInput({ cwd: fixture.repo }))
+    orch.createTasks([{ id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'] }])
+    // 首次派发后立即 steer：答复排队，等 need_clarify blocked → 自动重派时消费注入
+    // （delayMs 宏任务保证 steer 赶在完成回调/重派之前排队——微任务时序下重派先跑）
+    const runPromise = orch.run()
+    await until(() => fixture.backends.claude!.started.length === 1)
+    orch.steer('S-1', '用 SQLite')
+    await runPromise
+    const started = fixture.backends.claude!.started.filter((s) => s.task.id === 'T-1')
+    expect(started.length).toBe(2)
+    expect(started[1]!.task.spec).toContain('排队指令')
+    expect(started[1]!.task.spec).toContain('用 SQLite')
+    expect(fixture.store.getTask('M-1', 'T-1')!.status).toBe('done')
   })
 })
 
