@@ -154,7 +154,14 @@ export interface Task {
   type: TaskType
   depends_on: string[]
   status: TaskStatus
-  attempts: number  /** 重试不计入的 attempts 计数（429 / need_clarify），仅观察。 */
+  /** 硬失败计数（crash/timeout/idle/silent/mismatch）：重试门控依据，≥3 转人工。 */
+  attempts: number
+  /**
+   * 全部失败计数（hard + 软失败 429/need_clarify 每次都 +1）：因此它恰好 = 任务累计被派发
+   * 过的次数，ledger byAttempt 以它作「本次是第几次被派发」的尝试号（2026-09-03 归因修正，
+   * 见 orchestrator recordUsage 调用点）。软失败升级判定不直接用它（429 会污染提问计数，
+   * 用 need_clarify_count）。
+   */
   soft_attempts: number
   /** need_clarify 独立计数（2026-09-03：与 soft_attempts 分离——后者被 429 共享，
    *  限流穿插会污染「提问无人答复」的升级判定；本字段只数 need_clarify 本身）。 */

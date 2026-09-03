@@ -75,7 +75,9 @@ export class Ledger {
     cacheReadTokens?: number,
     /** prompt cache 写入 token（P0-2，claude result.usage.cache_creation_input_tokens）。 */
     cacheCreationTokens?: number,
-    /** 本次 usage 属于第几次尝试（0=首派，≥1=重试）；失败路径单独计数。 */
+    /** 本次 usage 属于第几次被派发（0=首派，≥1=重派）。调用方传 task.soft_attempts（任务
+     *  累计失败总数——每次失败都 +1，恰好 = 本次之前的派发次数，见 2026-09-03 归因修正：
+     *  软失败 429/need_clarify 的重派也算重试成本，只传硬失败 attempts 会把它记成首派）。 */
     attempts?: number,
   ): LedgerEntry {
     if (!Number.isFinite(tokensIn) || !Number.isFinite(tokensOut) || tokensIn < 0 || tokensOut < 0) {
@@ -180,9 +182,11 @@ export class Ledger {
     /** 按任务类型（= 执行阶段）拆解；查不到任务归入 `unknown`，不静默丢账。 */
     byStage: Record<string, { tokens: number; equiv_usd: number; entries: number }>
     /**
-     * 按尝试次数拆解（失败路径单独计数，与 byStage 正交）：key 为 attempts 数值的字符串
-     * （'0'=首派，'1'/'2'=重试）。查不到 attempts 的老条目归入 `unknown`。重试成本
-     * = 除 '0' 与 'unknown' 之外所有桶之和，即「失败烧掉的钱」。
+     * 按派发次数拆解（失败路径单独计数，与 byStage 正交）：key 为 attempts 数值的字符串
+     * （'0'=首派，'1'/'2'=重派）。查不到 attempts 的老条目归入 `unknown`。重试成本
+     * = 除 '0' 与 'unknown' 之外所有桶之和，即「失败的派发烧掉的钱」（2026-09-03 起含
+     * 软失败重派——429/need_clarify 的重派由 orchestrator 传 task.soft_attempts 归入重试
+     * 桶；此前只传硬失败 attempts，软失败重派被记成首派、重试成本低估）。
      */
     byAttempt: Record<string, { tokens: number; equiv_usd: number; entries: number }>
   } {

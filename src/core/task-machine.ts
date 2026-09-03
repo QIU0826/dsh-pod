@@ -6,11 +6,14 @@
  * LLM / 手动模式 UI）无关——手动模式与 commander 走同一套代码入口。
  *
  * 故障分类全集（3.4 节故障表 + CR-01-6）：
- *   crash/idle_timeout/wall_clock/silent_failure → attempts+1
- *   rate_limited/need_clarify → soft_attempts+1，不计 attempts
+ *   crash/idle_timeout/wall_clock/silent_failure → attempts+1（硬失败，重试门控）
+ *   rate_limited/need_clarify → 不计 attempts（软失败；仅 soft_attempts+1）
  *   auth_expired → slot error，停止重试
  *   mismatch → 直接转人工（escalated）
  *   attempts ≥ 3 → 转人工（escalated，Canvas 弹接管卡）
+ * 注：soft_attempts 对**每次失败**（hard 与软失败）都 +1，是累计失败总数（= 任务被派发过
+ *   的次数，ledger byAttempt 以它作尝试号）；不是「仅软失败的计数」。升级判定用各自独立
+ *   判据：attempts≥3（硬）/ need_clarify_count≥3（提问封顶，429 不共享）。
  */
 
 import {

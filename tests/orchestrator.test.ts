@@ -397,6 +397,31 @@ describe('run 最小可演示链（fake 后端）', () => {
     expect(t1Entries.map((e) => e.attempts).sort()).toEqual([0, 1])
   })
 
+  it('软失败重派归重试桶：need_clarify 首派 0 桶、重派 1 桶（2026-09-03 byAttempt 归因修正）', async () => {
+    const needClarify = (): WorkerCompletion => ({
+      exit: 'done',
+      report: doneReport('T-1', { status: 'need_clarify', questions: ['用 X 还是 Y？'] }),
+      usage: { tokens_in: 5, tokens_out: 5, source: 'measured' },
+      artifacts: [],
+    })
+    const doneC = (): WorkerCompletion => ({
+      exit: 'done',
+      report: doneReport('T-1'),
+      usage: { tokens_in: 10, tokens_out: 5, source: 'measured' },
+      artifacts: [],
+    })
+    const orchestrator = makeOrchestrator(fixture, { 'T-1': { completion: needClarify(), next: doneC(), delayMs: 30 } })
+    orchestrator.launch(launchInput({ cwd: fixture.repo }))
+    orchestrator.createTasks(plan())
+    const summary = await orchestrator.run()
+    expect(fixture.store.getTask('T-1')!.status).toBe('done')
+    const entries = fixture.store.listLedger('M-1').filter((e) => e.task_id === 'T-1')
+    // 首派 need_clarify（0 桶，它确实是首派）→ 软失败重派成功（1 桶）：
+    // 修正前 task.attempts 恒 0（软失败不烧 attempts）→ 两笔都记 0 桶，重试成本被低估
+    expect(entries.map((e) => e.attempts).sort()).toEqual([0, 1])
+    expect(summary.status).toBe('awaiting_approval')
+  })
+
   it('连续失败 3 次 → 转人工 escalated', async () => {
     const script = {
       'T-1': { completion: failedCompletion(), next: failedCompletion() },

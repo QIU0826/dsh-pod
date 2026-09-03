@@ -1223,7 +1223,12 @@ export class MissionOrchestrator {
           completion.usage.source,
           completion.usage.cache_read_tokens,
           completion.usage.cache_creation_tokens,
-          task.attempts,
+          // 本次是第几次被派发（0=首派）：task.soft_attempts 是任务累计失败总数（每次失败都
+          // +1，hard 与软失败一致）——恰好等于「本次之前的派发次数」。只传 task.attempts
+          // （硬失败数）会把软失败（429/need_clarify）后的重派记成 attempts=0（首派桶），
+          // need_clarify/429 循环烧的钱被 byAttempt 低估（2026-09-03）。注意不能加 attempts：
+          // hard 失败同时 +1 attempts 与 soft_attempts，相加会双计。
+          task.soft_attempts,
         )
       } catch (error) {
         if (error instanceof PodError && error.code === 'BUDGET_EXCEEDED') {
