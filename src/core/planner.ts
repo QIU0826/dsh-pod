@@ -203,15 +203,31 @@ export function validatePlanProposal(
       if (!reviewed) errors.push(`implement task ${t.id} has no review task depending on it (quality gate cannot be skipped at plan time)`)
     }
   }
-  // 独立审查可行性（与派发期 DoD-5 质量门一致）：单槽下 review 任务依赖的被审任务
-  // 只能派给唯一槽位，质量门会排除该实现者 → 无人可派，必然 escalate。规划期即应
-  // fail-closed 并给出可自愈反馈（去掉 review 改为自审），而非烧到派发期。
-  if (ctx.slots.length < 2) {
-    for (const t of tasks) {
-      if (t.type === 'review') {
-        errors.push(`independent review infeasible: review task ${t.id} cannot be dispatched with only ${ctx.slots.length} slot(s) (DoD-5 quality gate needs a non-author reviewer)`)
-      }
+  // 独立审查可行性（与派发期 DoD-5 质量门一致）：review 任务需要一个「能审查且
+  // 非被审任务实现者」的槽位。规划期实现者未知，但可做**确定性**判定：若某 review
+  // 的审查者候选里每个槽位都被某个被审任务「独占」（是该被审任务唯一可行实现者，
+  // 派发必选它 → DoD-5 必排除它），则无论路由怎么派都无人可审 → 必然 escalate，
+  // 规划期即应 fail-closed（cb10797 只覆盖名册 <2 槽，此处精确化到多槽独占场景）。
+  // 注意：能审查但「可能被派实现」（非独占）的槽位不算必然失败——路由可能把它留给
+  // 审查（DoD-5 只排除实际 owner），这种「可能失败」交派发期兜底，规划期不误伤。
+  const slotCovers = (slot: { capabilities: string[] }, tags: string[]): boolean =>
+    tags.length === 0 || tags.every((tag) => slot.capabilities.includes(tag))
+  for (const t of tasks) {
+    if (t.type !== 'review') continue
+    const reviewerIdx: number[] = []
+    for (let i = 0; i < ctx.slots.length; i++) if (slotCovers(ctx.slots[i]!, t.skill_tags)) reviewerIdx.push(i)
+    if (reviewerIdx.length === 0) continue // 能力覆盖体检已报 capability gap，不重复
+    // 被审任务被独占的槽位索引（该任务只有这一个可行实现者）
+    const exclusiveOwners = new Set<number>()
+    for (const depId of t.depends_on) {
+      const dep = tasks.find((x) => x.id === depId)
+      if (dep === undefined) continue
+      const coverers: number[] = []
+      for (let i = 0; i < ctx.slots.length; i++) if (slotCovers(ctx.slots[i]!, dep.skill_tags)) coverers.push(i)
+      if (coverers.length === 1) exclusiveOwners.add(coverers[0]!)
     }
+    if (reviewerIdx.some((i) => !exclusiveOwners.has(i))) continue // 存在可独立审查的槽位
+    errors.push(`independent review infeasible: review task ${t.id} cannot be dispatched (every slot covering its skill_tags is the sole implementer of a reviewed task; DoD-5 quality gate needs a non-author reviewer)`)
   }
   if (!tasks.some((t) => t.type === 'implement')) errors.push('plan has no implement task')
 
@@ -293,17 +309,23 @@ export function buildCapabilityFeedback(
 }
 
 /**
- * 独立审查缺口反馈（单槽阵型）：review 任务物理不可派，需引导 planner 改为自审。
- * 与 buildCapabilityFeedback 分列——后者说「名册无槽位覆盖」，而单槽可能声明了审查能力，
- * 只是被 DoD-5 独立性排除，措辞不能混用。
+ * 独立审查缺口反馈：review 任务物理不可派，需引导 planner 自愈。与 buildCapabilityFeedback
+ * 分列——后者说「名册无槽位覆盖」，而独占场景的名册可能声明了审查能力，只是被 DoD-5
+ * 独立性排除，措辞不能混用。按阵型区分自愈路径（与 validatePlanProposal 的配对规则一致）：
+ *   - 单槽（名册 <2）：配对检查已降级为自审，去掉 review 即可通过 → 引导去掉改自审；
+ *   - 多槽独占（审查者被实现者独占）：配对检查仍强制，去掉 review 会触发「无 review 配对」
+ *     死锁 → 引导保留 review 但改用非实现者槽位声明的标签或省略 skill_tags（省略 = 任意槽位
+ *     可审查，路由会避开实现者）。
  */
 export function buildReviewGapFeedback(
   gaps: Array<{ taskId: string }>,
   slots: Array<Pick<AgentSlot, 'id' | 'role' | 'capabilities'>>,
 ): string {
-  const gapLines = gaps.map(
-    (g) => `- ${g.taskId} 需要独立审查，但名册只有 ${slots.length} 名员工（DoD-5 质量门禁止实现者自审，物理上无第二个审查者）——请去掉该 review 任务，改为在对应 implement 任务的 spec 里写明「本任务由实现者自审，无独立审查」，并在 assumptions 里如实注明；`,
-  )
+  const advice =
+    slots.length < 2
+      ? '名册只有 1 名员工，物理上无独立审查者——请去掉该 review 任务，改为在对应 implement 任务的 spec 里写明「本任务由实现者自审，无独立审查」，并在 assumptions 里如实注明'
+      : '审查能力被实现者独占（每个能审查的槽位都是被审任务的唯一实现者，DoD-5 会排除它）——请保留 review 任务但改用「名册中非实现者槽位声明的能力标签」或直接省略 skill_tags（省略 = 任意槽位可审查，路由会避开实现者）'
+  const gapLines = gaps.map((g) => `- ${g.taskId} 需要独立审查但当前不可派：${advice}；`)
   const roster = slots
     .map((s) => `- ${s.id}（${s.role}）：${s.capabilities.join('、') || '（未声明）'}`)
     .join('\n')

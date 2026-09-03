@@ -183,9 +183,54 @@ describe('validatePlanProposal（代码裁决）', () => {
     }
   })
 
-  it('空阵型：任何含 review 的提案都拒绝', () => {
+  it('空阵型：任何提案都被能力缺口拒绝（无槽位覆盖任何标签）', () => {
     const empty = { slots: [], existingTaskIds: new Set<string>() }
     const r = validatePlanProposal(proposal(), empty)
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      // 无槽位 → 能力覆盖体检报 gap（review 无覆盖者即无人可审，无需独立审查缺口类重复）
+      expect(r.errors.some((e) => e.includes('capability gap'))).toBe(true)
+      expect(r.errors.some((e) => e.includes('independent review infeasible'))).toBe(false)
+    }
+  })
+
+  it('多槽但审查能力被独占：review 拒绝（S-1 唯一编码者且唯一审查者，S-2 无法实现）', () => {
+    // S-1 编码+审查、S-2 只声明文档（不能实现 T-1）→ T-1 被 S-1 独占 → T-2 审查者必被 DoD-5 排除
+    const ctx2 = { slots: [{ capabilities: ['编码', '审查'] }, { capabilities: ['文档'] }], existingTaskIds: new Set<string>() }
+    const r = validatePlanProposal(proposal(), ctx2)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.errors.some((e) => e.includes('independent review infeasible'))).toBe(true)
+  })
+
+  it('多槽但审查者非独占：review 通过（两个槽位都能实现 T-1，路由可避开实现者留一个审查）', () => {
+    // S-1 编码+审查、S-2 编码 → T-1 可派 S-1 或 S-2，S-1 未被独占 → 独立审查可能
+    const ctx2 = { slots: [{ capabilities: ['编码', '审查'] }, { capabilities: ['编码'] }], existingTaskIds: new Set<string>() }
+    const r = validatePlanProposal(proposal(), ctx2)
+    expect(r.ok).toBe(true)
+  })
+
+  it('多槽独占但 review 用空标签：通过（任意槽位可审查，路由避开独占实现者）', () => {
+    // planner 听反馈改空标签后：T-2 审查者候选 = 全部槽位，S-2 非独占 → 可行
+    const ctx2 = { slots: [{ capabilities: ['编码', '审查'] }, { capabilities: ['文档'] }], existingTaskIds: new Set<string>() }
+    const r = validatePlanProposal(proposal([{}, { type: 'review', skill_tags: [], depends_on: ['T-1'] }]), ctx2)
+    expect(r.ok).toBe(true)
+  })
+
+  it('多槽：review 审查多个任务时任一独占即可能失败——独占集合取并集', () => {
+    // T-1 只能 S-1（编码+审查独占），T-2 只能 S-2（文档+审查独占）→ review 审查两者，
+    // S-1/S-2 都被独占 → 无人可审
+    const ctx2 = { slots: [{ capabilities: ['编码', '审查'] }, { capabilities: ['文档', '审查'] }], existingTaskIds: new Set<string>() }
+    const r = validatePlanProposal(
+      {
+        tasks: [
+          { id: 'T-1', title: '实现', spec: 's', type: 'implement' as const, skill_tags: ['编码'], depends_on: [] },
+          { id: 'T-2', title: '文档', spec: 's', type: 'doc' as const, skill_tags: ['文档'], depends_on: [] },
+          { id: 'T-3', title: '审查', spec: 'r', type: 'review' as const, skill_tags: ['审查'], depends_on: ['T-1', 'T-2'] },
+        ],
+        assumptions: [],
+      },
+      ctx2,
+    )
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.errors.some((e) => e.includes('independent review infeasible'))).toBe(true)
   })
@@ -255,6 +300,21 @@ describe('classifyPlanErrors（P1 feedback 环：语义 vs 结构分类）', () 
     expect(fb).toContain('只有 1 名员工')
     expect(fb).toContain('自审')
     expect(fb).toContain('S-1（implementer）')
+    expect(fb).not.toContain('无槽位覆盖')
+  })
+
+  it('buildReviewGapFeedback：多槽独占版引导保留 review 改标签（区别于单槽引导去掉）', () => {
+    const fb = buildReviewGapFeedback(
+      [{ taskId: 'T-2' }],
+      [
+        { id: 'S-1', role: 'implementer', capabilities: ['编码', '审查'] },
+        { id: 'S-2', role: 'reviewer', capabilities: ['文档'] },
+      ],
+    )
+    expect(fb).toContain('审查能力被实现者独占')
+    expect(fb).toContain('省略 skill_tags')
+    expect(fb).toContain('保留 review 任务')
+    expect(fb).not.toContain('名册只有 1 名员工')
     expect(fb).not.toContain('无槽位覆盖')
   })
 })

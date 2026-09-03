@@ -1372,6 +1372,45 @@ describe('P1 规划层（goal → DAG 智能分解，AgentScope DAGPlanExecutor 
     expect(fixture.store.listEvents('M-1').some((e) => e.kind === 'plan_rejected')).toBe(false)
   })
 
+  it('多槽独占：review 首次被拒 + 多槽版反馈 → planner 改空标签自愈展开（不再烧到派发期）', async () => {
+    // S-1 编码+审查、S-2 只声明文档：T-1 被 S-1 独占 → planner 首次提议 ['审查'] review 必不可派
+    const roster2 = [
+      { id: 'S-1', vendor: 'claude' as const, role: 'implementer', capabilities: ['规划', '编码', '审查'], model: 'm', session_tier: 'per-mission' as const },
+      { id: 'S-2', vendor: 'claude' as const, role: 'reviewer', capabilities: ['文档'], model: 'm', session_tier: 'transient' as const },
+    ]
+    const exclusivePlan = [
+      { id: 'T-1', title: '实现', spec: 's', type: 'implement' as const, skill_tags: ['编码'], depends_on: [] },
+      { id: 'T-2', title: '独立 review', spec: 'r', type: 'review' as const, skill_tags: ['审查'], depends_on: ['T-1'] },
+    ]
+    const selfHealPlan = [
+      { id: 'T-1', title: '实现', spec: 's', type: 'implement' as const, skill_tags: ['编码'], depends_on: [] },
+      { id: 'T-2', title: '独立 review', spec: 'r', type: 'review' as const, skill_tags: [], depends_on: ['T-1'] },
+    ]
+    const orch = makeOrchestrator(fixture, {
+      'P-1': { completion: planDone('P-1', exclusivePlan), next: planDone('P-1', selfHealPlan) },
+    })
+    orch.launch(launchInput({ cwd: fixture.repo, slots: roster2 }))
+    orch.createPlannerTask('目标')
+    const summary = await orch.run()
+    // 首次被拒：多槽版 reviewGap 反馈写回（引导保留 review 改空标签，措辞区别于单槽）
+    const p1 = fixture.store.getTask('P-1')!
+    expect(p1.spec).toContain('审查能力被实现者独占')
+    expect(p1.spec).toContain('省略 skill_tags')
+    const rej = fixture.store.listEvents('M-1').filter((e) => e.kind === 'plan_rejected')
+    expect(rej.length).toBeGreaterThanOrEqual(1)
+    expect((rej[0]!.payload.semantic as string[]).some((s) => s.includes('independent review infeasible'))).toBe(true)
+    // 自愈：空标签 review 通过裁决 → 展开 → T-1 实现 + T-2 审查全完成 → 审批
+    expect(fixture.store.getTask('P-1')!.status).toBe('done')
+    expect(fixture.store.getTask('T-1')!.status).toBe('done')
+    expect(fixture.store.getTask('T-2')!.status).toBe('done')
+    expect(summary.status).toBe('awaiting_approval')
+    // 审查者确实避开了实现者（DoD-5：T-2 owner ≠ T-1 owner）
+    const t1 = fixture.store.getTask('T-1')!
+    const t2 = fixture.store.getTask('T-2')!
+    expect(t1.owner_slot_id).toBe('M-1-S-1')
+    expect(t2.owner_slot_id).toBe('M-1-S-2')
+  })
+
   it('feedback v2（灰度 feedback-consult）：语义拒绝 → 真咨询最匹配槽位 worker，咨询结果写回 spec', async () => {
     const gapPlan = [
       { id: 'T-1', title: '实现', spec: 's', type: 'implement' as const, skill_tags: ['运维'], depends_on: [] },
