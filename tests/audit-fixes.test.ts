@@ -240,13 +240,21 @@ describe('P1 #5 代际守卫：旧代际迟到退出不改任务状态', () => {
     orch.tickWatchdogs([{ key: 'task-idle:T-1', kind: 'task-idle', mission_id: 'M-1', task_id: 'T-1', deadline: 0 } as never])
     await waitFor(() => backend.starts.length >= 2)
     // 旧进程（第一代）此刻才退出，且是 failed：不得影响第二代尝试
-    backend.fireExit('T-1', { exit: 'failed', usage: { tokens_in: 7, tokens_out: 3, source: 'measured' }, artifacts: [], exit_code: 1, error_detail: 'old gen' })
+    backend.fireExit('T-1', { exit: 'failed', usage: { tokens_in: 7, tokens_out: 3, source: 'measured', cache_read_tokens: 100, cache_creation_tokens: 5 }, artifacts: [], exit_code: 1, error_detail: 'old gen' })
     await new Promise((r) => setTimeout(r, 100))
     expect(fixture.store.listEvents('M-1').some((e) => e.kind === 'task_stale_exit' && e.task_id === 'T-1')).toBe(true)
     const task = fixture.store.getTask('M-1', 'T-1')
     // 第二代按脚本正常完成 → done（而不是被旧失败打回 blocked）
     await waitFor(() => task?.status === 'done' || fixture.store.getTask('M-1', 'T-1')?.status === 'done')
     expect(fixture.store.getTask('M-1', 'T-1')?.status).toBe('done')
+    // 旧代际 usage 全列入账（2026-09-04）：cache 两列不丢——kill+重派是常态路径，
+    // 丢了 debrief 的 total_cache_read/creation 就静默少计。generation 是全局派发序号
+    // 映射不回任务内派发序 → attempts 不猜，落 'unknown' 桶（重试成本口径明确排除它）。
+    const staleEntry = fixture.store.listLedger('M-1').find((e) => e.task_id === 'T-1' && e.tokens_in === 7)
+    expect(staleEntry).toBeDefined()
+    expect(staleEntry!.cache_read_tokens).toBe(100)
+    expect(staleEntry!.cache_creation_tokens).toBe(5)
+    expect(staleEntry!.attempts).toBeUndefined()
   })
 })
 

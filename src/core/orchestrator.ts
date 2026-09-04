@@ -1208,7 +1208,22 @@ export class MissionOrchestrator {
       const ownerSlot = this.store.getSlot(task.owner_slot_id)
       if (ownerSlot !== undefined) {
         try {
-          this.ledger.recordUsage(this.missionId, ownerSlot.id, taskId, ownerSlot.model, completion.usage.tokens_in, completion.usage.tokens_out, completion.usage.source)
+          // 旧代际 usage 照实入账（真实消耗）：cache 两列也必须落账，否则 kill+重派
+          // 场景（watchdog 超时是常态路径）下 debrief 的 total_cache_read/creation
+          // 静默少计（2026-09-04）。attempts 不传：generation 是全局派发序号，映射不回
+          // 任务内派发序，猜一个会污染 byAttempt——落 'unknown' 桶（诚实降级，重试
+          // 成本口径明确排除它）。
+          this.ledger.recordUsage(
+            this.missionId,
+            ownerSlot.id,
+            taskId,
+            ownerSlot.model,
+            completion.usage.tokens_in,
+            completion.usage.tokens_out,
+            completion.usage.source,
+            completion.usage.cache_read_tokens,
+            completion.usage.cache_creation_tokens,
+          )
         } catch {
           /* 旧代际入账失败不追账：账本是尽力而为 */
         }
