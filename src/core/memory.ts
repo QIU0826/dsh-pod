@@ -16,7 +16,7 @@
  *   - 不自动摘要会话日志（违背本设计）；蒸馏/剪枝输入是主动策展记录。
  */
 
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { atomicWrite, sweepStaleTmp } from './atomic-write.js'
 import { resolveConflicts } from './memory-conflict.js'
@@ -152,17 +152,38 @@ export class JsonMemoryPersistence implements MemoryPersistence {
   }
 
   load(): MemoryData | undefined {
+    const parsed = this.loadValidated(this.filePath)
+    if (parsed !== undefined) return parsed
+    // 主文件不存在 → 全新库（fail-closed 空，正常首次启动路径）
     if (!existsSync(this.filePath)) return undefined
+    // 主文件损坏（2026-09-04 修复）：先试 .bak 自愈（atomicWrite 每次写前都把旧主文件
+    // 转存 .bak，.bak = 最后一次成功写的内容），再把损坏主文件改名 .corrupt-* 留证。
+    // 旧实现直接返回 undefined（注释声称「与 store 一致」，但 store.ts 实际是 .bak 自愈
+    // + preserveCorrupt + 抛错）：空库起步后下一次 persist 的 backupPath 转存会把损坏
+    // 主文件盖上 .bak——最后一份好备份被销毁，记忆全损且无证据残留。
+    const fromBackup = this.loadValidated(`${this.filePath}.bak`)
     try {
-      const parsed = JSON.parse(readFileSync(this.filePath, 'utf8')) as Partial<MemoryData>
+      renameSync(this.filePath, `${this.filePath}.corrupt-${Date.now()}`)
+    } catch {
+      // 留证尽力而为；失败则维持现状（下次 persist 仍会把损坏内容转存 .bak）
+    }
+    return fromBackup
+  }
+
+  /** 解析 + 根形状校验（JSON 非法或根非对象 → undefined = 损坏，走 .bak/留证路径）。 */
+  private loadValidated(path: string): MemoryData | undefined {
+    if (!existsSync(path)) return undefined
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined
+      const p = parsed as Partial<MemoryData>
       return {
-        schemaVersion: parsed.schemaVersion ?? 1,
-        records: (parsed.records as Record<string, MemoryRecord>) ?? {},
-        edges: (parsed.edges as MemoryData['edges']) ?? [],
-        history: (parsed.history as Record<string, MemoryChange[]>) ?? {},
+        schemaVersion: p.schemaVersion ?? 1,
+        records: (p.records as Record<string, MemoryRecord> | undefined) ?? {},
+        edges: (p.edges as MemoryData['edges'] | undefined) ?? [],
+        history: (p.history as Record<string, MemoryChange[]> | undefined) ?? {},
       }
     } catch {
-      // 损坏的 memory.json 视为空（fail-closed），不阻断插件启动（与 store 一致）
       return undefined
     }
   }
@@ -373,7 +394,7 @@ export class MemoryStore {
     if (data.records[fromRecord] === undefined || data.records[toRecord] === undefined) {
       throw new Error('memory edge requires both endpoints to exist')
     }
-    const edge = { id: `ME-${this.clock()}-${Math.floor(Math.random() * 1e6)}`, from_record: fromRecord, to_record: toRecord, relation, ts: this.clock() }
+    const edge = { id: `ME-${this.idFn()}`, from_record: fromRecord, to_record: toRecord, relation, ts: this.clock() }
     data.edges.push(edge)
     this.persist()
     return { id: edge.id }
@@ -439,7 +460,11 @@ export class MemoryStore {
     const { edgesToAdd, demotions, candidates } = resolveConflicts(recs, data.edges, { minSharedTags: minShared })
     for (let k = 0; k < edgesToAdd.length; k++) {
       const e = edgesToAdd[k]!
-      data.edges.push({ id: `MC-${now}-${k}`, from_record: e.from_record, to_record: e.to_record, relation: 'contradicts', ts: now })
+      // ID 走 idFn（含随机后缀，与记录 ID 同契约）：旧实现 `MC-${now}-${k}` 计数器每次
+      // run 归零——同毫秒两次 reflection（多实例共享 pod.db / 时钟回拨）产出重复 ID，
+      // SQLite 后端 save 全量重插撞 PRIMARY KEY 抛错，内存态已变异、持久化从此次次
+      // 失败（2026-09-04 修复）。
+      data.edges.push({ id: `MC-${this.idFn()}`, from_record: e.from_record, to_record: e.to_record, relation: 'contradicts', ts: now })
       conflictsResolved++
     }
     for (const d of demotions) {
@@ -465,7 +490,7 @@ export class MemoryStore {
           (e.from_record === a.id && e.to_record === b.id) || (e.from_record === b.id && e.to_record === a.id)
         )
         if (!exists) {
-          data.edges.push({ id: `ME-${now}-${supportsLinked}`, from_record: a.id, to_record: b.id, relation: 'supports', ts: now })
+          data.edges.push({ id: `ME-${this.idFn()}`, from_record: a.id, to_record: b.id, relation: 'supports', ts: now })
           supportsLinked++
         }
       }

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { MemoryStore, TEAM_OWNER_PREFIX, isTeamOwner, teamOwnerId } from '../src/core/memory.js'
@@ -161,6 +161,53 @@ describe('记忆子系统 2.8.1（MemoryStore，主动策展 + 图谱 + reflecti
     const ids = store.all().map((r) => r.id)
     expect(ids).toContain(second.id) // 保留最新
     expect(ids).not.toContain(first.id) // 淘汰最旧
+    rmSync(dir, { recursive: true, force: true })
+  })
+})
+describe('JsonMemoryPersistence 损坏自愈（2026-09-04）', () => {
+  it('主文件损坏 → 从 .bak 自愈；损坏内容改名 .corrupt-* 留证，后续写不销毁好备份', () => {
+    const dir = tempDir()
+    const filePath = join(dir, 'memory.json')
+    const store = new MemoryStore({ filePath, clock: () => 1_700_000_000_000 })
+    store.open()
+    const rec1 = store.write({ owner_slot_id: 'S-1', type: 'fact', importance: 3, tags: ['x'], content_ref: 'v1' })
+    store.write({ owner_slot_id: 'S-1', type: 'fact', importance: 3, tags: ['x'], content_ref: 'v2' })
+    store.close()
+    // 此时 .bak = v1（rec1），主文件 = v2（rec1+rec2）。模拟损坏：垃圾字节覆盖主文件。
+    writeFileSync(filePath, '{"records": {"MEM-1"', 'utf8')
+    const reopened = new MemoryStore({ filePath, clock: () => 1_700_000_000_001 })
+    reopened.open()
+    // 修复前：load 返回 undefined → 空库起步 → rec1 丢失，且下一次写把损坏主文件
+    // 转存为 .bak（最后一份好备份被销毁）。修复后：从 .bak 自愈。
+    expect(reopened.get(rec1.id)).toBeDefined()
+    expect(reopened.all()).toHaveLength(1)
+    // 自愈后正常写入：损坏主文件已改名让位 → persist 不触 backupPath，.bak 保持 v1
+    reopened.write({ owner_slot_id: 'S-1', type: 'fact', importance: 3, tags: ['y'], content_ref: 'v3' })
+    reopened.close()
+    const third = new MemoryStore({ filePath, clock: () => 1_700_000_000_002 })
+    third.open()
+    expect(third.all()).toHaveLength(2)
+    const corruptName = readdirSync(dir).find((n) => n.startsWith('memory.json.corrupt-'))
+    expect(corruptName).toBeDefined()
+    expect(readFileSync(join(dir, 'memory.json.bak'), 'utf8')).toContain('v1')
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('主文件与 .bak 双损坏 → 留证 + 空库起步（fail-closed 不阻断启动），后续写入正常', () => {
+    const dir = tempDir()
+    const filePath = join(dir, 'memory.json')
+    const store = new MemoryStore({ filePath, clock: () => 1_700_000_000_000 })
+    store.open()
+    store.write({ owner_slot_id: 'S-1', type: 'fact', importance: 3, tags: ['x'], content_ref: 'a' })
+    store.close()
+    writeFileSync(filePath, 'not-json{', 'utf8')
+    writeFileSync(`${filePath}.bak`, 'also-bad{', 'utf8')
+    const reopened = new MemoryStore({ filePath, clock: () => 1_700_000_000_001 })
+    reopened.open()
+    expect(reopened.all()).toHaveLength(0)
+    expect(readdirSync(dir).some((n) => n.startsWith('memory.json.corrupt-'))).toBe(true)
+    reopened.write({ owner_slot_id: 'S-1', type: 'fact', importance: 3, tags: ['y'], content_ref: 'b' })
+    expect(reopened.all()).toHaveLength(1)
     rmSync(dir, { recursive: true, force: true })
   })
 })

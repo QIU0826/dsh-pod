@@ -324,4 +324,28 @@ describe('SqliteMemoryPersistence（与 JSON 行为等价）', () => {
     opened.memory.close()
     opened.store.close()
   })
+
+  it('reflection 边 ID 跨次运行不撞车（同毫秒两次 run：SQLite PK 约束下 save 不炸）', () => {
+    // 修复前 MC-/ME- 边 ID 用 `-${k}` 计数器（每次 run 归零）+ 固定时钟 → 同毫秒两次
+    // reflection 的第 1 条边 ID 必然相同 → memory_edges.id PRIMARY KEY INSERT 抛
+    // UNIQUE 错误：runReflection 抛错且内存态已变异、持久化从此每次 save 都炸。
+    // 修复后 ID 走 idFn（随机后缀，与记录 ID 同唯一性契约）。
+    const opened = openPodData({ rootDir: root, clock: () => clockNow })
+    const m = opened.memory
+    // 三条同 owner+type+tags、两两 Dice 相似度 ∈ [0.4,1) 的记录 → run1 收口 3 对
+    m.write({ owner_slot_id: 'S-1', type: 'fact', importance: 3, tags: ['a', 'b'], content_ref: 'alpha beta gamma' })
+    m.write({ owner_slot_id: 'S-1', type: 'fact', importance: 3, tags: ['a', 'b'], content_ref: 'alpha beta delta' })
+    m.write({ owner_slot_id: 'S-1', type: 'fact', importance: 3, tags: ['a', 'b'], content_ref: 'alpha gamma delta' })
+    const r1 = m.runReflection()
+    expect(r1.conflictsResolved).toBe(3)
+    // D 与 A/B 构成新冲突对 → run2 再收口 2 条；修复前 ID 从 MC-<t>-0 重新计数即撞车
+    m.write({ owner_slot_id: 'S-1', type: 'fact', importance: 3, tags: ['a', 'b'], content_ref: 'alpha beta eps' })
+    const r2 = m.runReflection()
+    expect(r2.conflictsResolved).toBe(2)
+    const ids = m.edges().filter((e) => e.relation === 'contradicts').map((e) => e.id)
+    expect(ids).toHaveLength(5)
+    expect(new Set(ids).size).toBe(ids.length)
+    opened.memory.close()
+    opened.store.close()
+  })
 })
