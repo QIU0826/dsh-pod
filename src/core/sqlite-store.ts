@@ -395,9 +395,16 @@ export class SqliteStore implements PodStore {
     const maxRow = db.prepare('SELECT COALESCE(MAX(seq), -1) AS m FROM events WHERE mission_id = ?').get(missionId) as { m: number }
     const nextSeq = maxRow.m + 1
     db.prepare('INSERT INTO events (mission_id, seq, id, data) VALUES (?, ?, ?, ?)').run(missionId, nextSeq, event.id, JSON.stringify({ ...event }))
-    // 上限裁剪（与 JsonStore 同语义：保留最近 MAX_EVENTS_PER_MISSION 条）
-    const del = db.prepare('DELETE FROM events WHERE mission_id = ? AND seq <= ?').run(missionId, nextSeq - MAX_EVENTS_PER_MISSION)
-    void del
+    // 上限裁剪（与 JsonStore 同语义：保留最近 MAX_EVENTS_PER_MISSION **条**）。
+    // 必须按条数裁、不能按 seq 距离裁（seq <= nextSeq - MAX）：dropEvents（每次重派
+    // 删旧 task_context，orchestrator 派发路径常态调用）会留 seq 空洞，按 seq 距离裁
+    // 会把空洞位从保留窗口里浪费掉——事件数远未到上限就开始丢窗口外历史（2026-09-04）。
+    const count = db.prepare('SELECT COUNT(*) AS c FROM events WHERE mission_id = ?').get(missionId) as { c: number }
+    if (count.c > MAX_EVENTS_PER_MISSION) {
+      db.prepare(
+        'DELETE FROM events WHERE mission_id = ? AND seq NOT IN (SELECT seq FROM events WHERE mission_id = ? ORDER BY seq DESC LIMIT ?)',
+      ).run(missionId, missionId, MAX_EVENTS_PER_MISSION)
+    }
   }
 
   listEvents(missionId: string): PodEvent[] {

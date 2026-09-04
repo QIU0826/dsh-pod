@@ -136,6 +136,36 @@ describe('SqliteStore 接口（与 JsonStore 同 PodStore 契约）', () => {
     store.close()
   })
 
+  it('dropEvents 留 seq 空洞后裁剪仍按条数（与 JsonStore 同语义），不提前丢历史（2026-09-04）', () => {
+    const store = new SqliteStore({ rootDir: root, clock: () => clockNow })
+    store.open()
+    store.createMission(makeMission())
+    for (let i = 0; i < 2000; i++) {
+      store.appendEvent('M-1', { id: `E-${i}`, mission_id: 'M-1', ts: clockNow, kind: 'test', payload: { i } })
+    }
+    // 重派删旧 task_context 的真实形态（orchestrator 派发路径常态调用）：删中间一段 → seq 空洞
+    const dropped = store.dropEvents('M-1', (e) => {
+      const i = (e.payload as { i: number }).i
+      return i >= 500 && i < 1000
+    })
+    expect(dropped).toBe(500)
+    // 再追加 1 条：总数 1501 远未到上限——E-0 必须还在。
+    // 修复前按 seq 距离裁（seq <= nextSeq-2000 = 0）→ E-0 被误删：空洞位浪费保留窗口。
+    store.appendEvent('M-1', { id: 'E-2000', mission_id: 'M-1', ts: clockNow, kind: 'test', payload: { i: 2000 } })
+    let events = store.listEvents('M-1')
+    expect(events).toHaveLength(1501)
+    expect(events[0]!.id).toBe('E-0')
+    // 继续追加越过上限：仍按条数裁到最新 2000 条（最老者出局，与空洞位置无关）
+    for (let i = 2001; i <= 2500; i++) {
+      store.appendEvent('M-1', { id: `E-${i}`, mission_id: 'M-1', ts: clockNow, kind: 'test', payload: { i } })
+    }
+    events = store.listEvents('M-1')
+    expect(events).toHaveLength(2000)
+    expect(events[0]!.id).toBe('E-1')
+    expect(events[1999]!.id).toBe('E-2500')
+    store.close()
+  })
+
   it('跨重启持久化：关闭后重开，mission/task/approval/events 从 pod.db 原样重建', () => {
     const store = new SqliteStore({ rootDir: root, clock: () => clockNow })
     store.open()
