@@ -100,8 +100,14 @@ export function checkReportCompleteness(
 /** 叙事与产物一致性（3.4 节 mismatch 判定；写码任务才要求产物非空）。 */
 export function checkNarrativeMatch(task: Task, report: MissionReport): { check: string; detail: string }[] {
   const failures: { check: string; detail: string }[] = []
+  // 防御性取值（2026-09-04）：schema 违规报告（缺 files_changed）在此前只被
+  // checkReportCompleteness 收进 failures，不拦截后续检查——非 dsh 后端
+  // （claude/codex/ark/opencode 解析是类型断言非 schema 校验）可送达畸形报告，
+  // 直接 .length 取值会 TypeError 炸掉 verify → 被误归因为 crash 故障，
+  // 丢失 schema 诊断细节。verifier 是信任边界，必须全纯函数返回 failures。
+  const filesChanged = Array.isArray(report.files_changed) ? report.files_changed : []
   const producesArtifacts = task.type === 'implement' || task.type === 'test'
-  if (producesArtifacts && report.status === 'done' && report.files_changed.length === 0) {
+  if (producesArtifacts && report.status === 'done' && filesChanged.length === 0) {
     failures.push({ check: 'narrative_match', detail: `task ${task.id} claims done but changed no files` })
   }
   if (producesArtifacts && report.status === 'done' && report.test_result === 'fail') {
@@ -176,7 +182,7 @@ export async function verifyTaskArtifacts(
     }
   }
 
-  for (const file of report.files_changed) {
+  for (const file of Array.isArray(report.files_changed) ? report.files_changed : []) {
     if (!isAllowed(file)) {
       failures.push({ check: 'path_whitelist', detail: `file outside whitelist: ${file}` })
     }
@@ -186,7 +192,7 @@ export async function verifyTaskArtifacts(
   // review/doc/plan/research 的 test_evidence 是说明性文本（审查结论/分析），
   // 不要求对应日志文件真实存在（CR-32 实证：review 报告引用测试输出文本被误判为路径）。
   const producesTests = task.type === 'implement' || task.type === 'test'
-  if (producesTests && report.test_result !== 'not_run' && report.test_evidence) {
+  if (producesTests && report.test_result !== 'not_run' && typeof report.test_evidence === 'string' && report.test_evidence.length > 0) {
     // test_evidence 可能是「12/12 ✓（输出路径 out/x.log）」形式，取括号内路径；无括号按原值。
     // 中文输出用全角括号（）、提示词会把「输出路径」前缀带进括号 → 全角/半角都解析，
     // 并剥离前缀与首尾空白（CR-06-12 实证：bakeoff pod 条件 test_log_exists 误判）。

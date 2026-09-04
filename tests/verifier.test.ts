@@ -300,3 +300,31 @@ describe.runIf(gitAvailable)('verifyTaskArtifacts × 真实 git 仓库', () => {
     expect(verdict.ok).toBe(true)
   })
 })
+
+describe('畸形报告不炸 verifier（信任边界全纯函数，2026-09-04）', () => {
+  const stubGit = { commitExists: async () => true, parentOf: async () => 'parent-sha' }
+
+  it('缺 files_changed 的 schema 违规报告 → 结构化 failures（report_schema + narrative_match），不 TypeError', async () => {
+    // 非 dsh 后端（claude/codex/ark/opencode）报告解析是类型断言非 schema 校验，
+    // 畸形报告可直达 verifier——此前 files_changed.length 直接 TypeError，
+    // 被 handleCompletion 兜底误归因为 crash 故障，丢失 schema 诊断细节。
+    const malformed = doneReport({
+      files_changed: undefined as unknown as string[],
+      commit_sha: undefined,
+      test_evidence: undefined,
+    })
+    const verdict = await verifyTaskArtifacts({ git: stubGit, repoDir: 'C:\does-not-matter' }, makeTask(), malformed)
+    expect(verdict.ok).toBe(false)
+    expect(verdict.failures.some((f) => f.check === 'report_schema')).toBe(true)
+    expect(verdict.failures.some((f) => f.check === 'narrative_match')).toBe(true)
+    expect(verdict.mismatch).toBe(true)
+  })
+
+  it('test_evidence 非字符串（schema 违规）→ 跳过日志存在性检查，不抛', async () => {
+    const malformed = doneReport({ test_evidence: 42 as unknown as string, commit_sha: undefined })
+    const verdict = await verifyTaskArtifacts({ git: stubGit, repoDir: 'C:\does-not-matter' }, makeTask(), malformed)
+    expect(verdict.ok).toBe(false)
+    expect(verdict.failures.some((f) => f.check === 'report_schema')).toBe(true)
+    expect(verdict.failures.some((f) => f.check === 'test_log_exists')).toBe(false)
+  })
+})
