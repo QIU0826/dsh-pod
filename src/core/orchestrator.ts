@@ -1971,6 +1971,11 @@ export class MissionOrchestrator {
         // need_clarify 独立计数同步归零（2026-09-03）：授予重试后应开启新一轮提问机会，
         // 否则保留的计数会让下次第 1 次提问就触发升级（need_clarify_count>=3 残留）。
         need_clarify_count: 0,
+        // early-exit 证据链同步清零（同族语义）：人工接管 = 新一轮重试预算，若保留旧
+        // last_failure_signature/no_new_evidence，接管后第 1 次同签名失败就 nne>=threshold-1
+        // 直接 early exit——「转人工唯一恢复路径」被 early-exit 架空（人工改了环境也没用）。
+        last_failure_signature: undefined,
+        no_new_evidence: 0,
       })
     }
     this.store.appendEvent(this.missionId, {

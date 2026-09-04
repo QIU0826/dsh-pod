@@ -792,7 +792,7 @@ describe('humanResolve（3.4 节转人工接管，CR-06-8）', () => {
     expect(fixture.store.listEvents('M-1').some((e) => e.kind === 'task_human_resolved')).toBe(true)
   })
 
-  it('escalated → blocked：保留 attempts 可重试（下一轮派发）', async () => {
+  it('escalated → blocked：状态与 fault 清理，任务回 blocked 可重派', async () => {
     const orchestrator = makeOrchestrator(fixture, {})
     orchestrator.launch(launchInput({ cwd: fixture.repo }))
     makeEscalated(orchestrator)
@@ -803,6 +803,48 @@ describe('humanResolve（3.4 节转人工接管，CR-06-8）', () => {
     const task = fixture.store.getTask('T-1')!
     expect(task.status).toBe('blocked')
     expect(task.fault).toBeUndefined()
+  })
+
+  it('blocked 接管清零 early-exit 证据链：接管后首轮同签名失败不早退（2026-09-03）', async () => {
+    // 灰度开：连续 2 轮同证据硬失败 → 第 2 轮 early exit 转人工（attempts=2，nne=1）。
+    const orchestrator = makeOrchestrator(
+      fixture,
+      { 'T-1': { completion: failedCompletion(), next: failedCompletion() } },
+      'M-1',
+      { experiments: { isEnabled: (key) => key === 'early-exit' } },
+    )
+    orchestrator.launch(launchInput({ cwd: fixture.repo }))
+    orchestrator.createTasks([{ id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'] }])
+    await orchestrator.run()
+    const escalated1 = fixture.store.getTask('T-1')!
+    expect(escalated1.status).toBe('escalated')
+    expect(escalated1.attempts).toBe(2)
+    expect(escalated1.no_new_evidence).toBe(1)
+    expect(escalated1.last_failure_signature).toBeDefined()
+    // 人工接管 = 完整重试预算授予：attempts / need_clarify / 证据链全部清零。
+    // 修复前：last_failure_signature 与 no_new_evidence 残留 → 接管后第 1 次同签名
+    // 失败 nne=2≥1 直接 early exit，「转人工唯一恢复路径」被架空。
+    fixture.clockNow += 1
+    orchestrator.humanResolve('T-1', { outcome: 'blocked', note: '人工修复环境后重试' })
+    const resolved = fixture.store.getTask('T-1')!
+    expect(resolved.status).toBe('blocked')
+    expect(resolved.attempts).toBe(0)
+    expect(resolved.need_clarify_count ?? 0).toBe(0)
+    expect(resolved.last_failure_signature).toBeUndefined()
+    expect(resolved.no_new_evidence ?? 0).toBe(0)
+    // 接管后重跑：首败走新证据链（nne=0 → blocked 正常重试），第 2 败同签名才按阈值早退。
+    const summary2 = await orchestrator.run()
+    const events = fixture.store.listEvents('M-1')
+    const resolvedIdx = events.map((e) => e.kind).lastIndexOf('task_human_resolved')
+    const after = events.slice(resolvedIdx + 1)
+    const blockedAfter = after.find((e) => e.kind === 'task_blocked')
+    expect(blockedAfter).toBeDefined() // 修复前：首败直接 escalated，无 blocked 事件
+    expect(blockedAfter!.payload.no_new_evidence).toBe(0)
+    const escalationsAfter = after.filter((e) => e.kind === 'task_escalated')
+    expect(escalationsAfter).toHaveLength(1) // 阈值语义不变：第 2 败才早退
+    expect(escalationsAfter[0]!.payload.no_new_evidence).toBe(1) // 修复前残留链会是 2
+    expect(escalationsAfter[0]!.payload.attempts).toBe(2)
+    expect(summary2.status).toBe('needs_human')
   })
 
   it('非 escalated 任务不可接管（状态机裁决）', () => {
