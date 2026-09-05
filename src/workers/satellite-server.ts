@@ -36,6 +36,60 @@ export interface SatelliteServerOptions {
   clock?: () => number
 }
 
+/**
+ * 卫星 A2A Agent Card（v0.4 对齐切片：docs/satellite.md §7）。
+ * 发现面如实声明：streaming=false（/events 是轮询拉取非 SSE 推流）、pushNotifications=false、
+ * 无 JSONRPC 端点——preferredTransport 用 HTTPJSON 并把卫星线协议四端点列为 additionalInterfaces，
+ * 供 A2A 生态控制器（Agentforce / Now Assist / Bedrock AgentCore…）发现与评估；完整
+ * message/send 委派语义（worktree 归属等）是下一片，不在本卡虚标。
+ */
+export function buildSatelliteAgentCard(opts: {
+  baseUrl: string
+  backend: WorkerBackend
+  detect?: { installed: boolean; models: string[]; version?: string }
+}): Record<string, unknown> {
+  const base = opts.baseUrl.replace(/\/$/, '')
+  const d = opts.detect
+  const modelSuffix = d !== undefined && d.models.length > 0 ? ` · ${d.models.join('/')}` : ''
+  const versionSuffix = d !== undefined && typeof d.version === 'string' && d.version.length > 0 ? ` · v${d.version}` : ''
+  return {
+    name: 'dsh-pod-satellite',
+    description: `卫星执行节点：托管 ${opts.backend.vendor}${modelSuffix}${versionSuffix} 写码后端，` +
+      `经卫星线协议（${opts.backend.protocol.version}）接受任务委派并回传进度/完成信号`,
+    url: base,
+    version: '0.1.0',
+    // 与主面 buildAgentCard 同一口径（core/a2a.ts）
+    protocolVersion: '0.2.5',
+    capabilities: {
+      streaming: false,
+      pushNotifications: false,
+      stateTransitionHistory: false,
+    },
+    defaultInputModes: ['text/plain'],
+    defaultOutputModes: ['application/json'],
+    skills: [
+      {
+        id: 'remote-execute',
+        name: `远程执行（${opts.backend.vendor}）`,
+        description: `接收 Task（slot/task/worktree）在本机执行并回传 WorkerProgressEvent / WorkerCompletion`,
+        tags: [opts.backend.vendor, opts.backend.protocol.family],
+      },
+    ],
+    security: [{ schemes: [] }],
+    securitySchemes: {},
+    // v1.0 Signed Agent Card 扩展位：与主面同口径，跨机部署时填真实签名（防发现环节投毒）
+    signatures: [],
+    supportsAuthenticatedExtendedCard: false,
+    preferredTransport: 'HTTPJSON',
+    additionalInterfaces: [
+      { transport: 'HTTPJSON', url: `${base}/detect` },
+      { transport: 'HTTPJSON', url: `${base}/start` },
+      { transport: 'HTTPJSON', url: `${base}/events` },
+      { transport: 'HTTPJSON', url: `${base}/kill` },
+    ],
+  }
+}
+
 function readBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
@@ -84,6 +138,24 @@ export function createSatelliteHandler(opts: SatelliteServerOptions): {
     if (req.method === 'GET' && url.pathname === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ ok: true, satellite: 'dsh-pod' }))
+      return
+    }
+    // A2A 发现面（v0.4）：Agent Card 与 /health 同级公开（发现端点鉴权 = 无法被发现）。
+    // baseUrl 从 Host 头派生（客户端实际到达地址；loopback 直连形态下即本机地址）。
+    if (req.method === 'GET' && url.pathname === '/.well-known/agent-card') {
+      const host = req.headers.host ?? '127.0.0.1'
+      let detect: { installed: boolean; models: string[]; version?: string } | undefined
+      try {
+        const raw = await opts.backend.detect()
+        detect = { installed: raw.installed, models: raw.models, ...(raw.version !== undefined ? { version: raw.version } : {}) }
+      } catch {
+        // detect 失败不发卡（诚实化：后端不可用时对外宣称存在会误导路由）
+        res.writeHead(503, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: 'backend detect failed; agent card unavailable' }))
+        return
+      }
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify(buildSatelliteAgentCard({ baseUrl: `http://${host}`, backend: opts.backend, detect })))
       return
     }
     // 双向认证：设了 token 就要求 Bearer 一致（恒时比较）

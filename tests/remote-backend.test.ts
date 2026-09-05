@@ -154,6 +154,59 @@ describe('satellite-server 真实 loopback 链（RemoteBackend <-> HTTP <-> stub
     }
   })
 
+  it('A2A Agent Card（v0.4 对齐）：发现端点公开、形态如实、能力位不虚标', async () => {
+    const satellite = await listenSatellite({ backend: new StubBackend('dsh') })
+    try {
+      // 卡与 /health 同级公开：token 模式下发现面也不拦（无法被发现 = 没有发现面）
+      const res = await fetch(satellite.url + '/.well-known/agent-card')
+      expect(res.status).toBe(200)
+      const card = (await res.json()) as Record<string, unknown>
+      expect(card.name).toBe('dsh-pod-satellite')
+      expect(card.protocolVersion).toBe('0.2.5') // 与主面 buildAgentCard 同口径
+      expect(card.url).toBe(satellite.url.replace(/\/$/, ''))
+      const caps = card.capabilities as Record<string, boolean>
+      expect(caps.streaming).toBe(false) // /events 是轮询，不虚标 SSE
+      expect(caps.pushNotifications).toBe(false)
+      expect(card.preferredTransport).toBe('HTTPJSON')
+      const ifaces = card.additionalInterfaces as Array<{ url: string }>
+      expect(ifaces.map((i) => i.url)).toEqual([
+        satellite.url + '/detect', satellite.url + '/start',
+        satellite.url + '/events', satellite.url + '/kill',
+      ])
+      const skills = card.skills as Array<{ id: string; tags: string[] }>
+      expect(skills[0]!.tags).toContain('dsh')
+      expect(skills[0]!.tags).toContain('native') // protocol.family
+      expect(String(card.description)).toContain('stub-model') // detect 的模型/版本信息进 description
+    } finally {
+      await satellite.close()
+    }
+  })
+
+  it('A2A Agent Card：token 模式下仍公开；后端 detect 抛错 -> 503 不发卡（诚实化）', async () => {
+    const satellite = await listenSatellite({ backend: new StubBackend('dsh'), token: 'secret' })
+    try {
+      const res = await fetch(satellite.url + '/.well-known/agent-card')
+      expect(res.status).toBe(200)
+    } finally {
+      await satellite.close()
+    }
+    // detect 抛错的后端：不发卡（宣称存在会误导路由）
+    const broken: WorkerBackend = {
+      vendor: 'claude',
+      protocol: { family: 'headless-cli', version: 'x', capabilities: { kill: false, session_persist: false, structured_output: false, usage_audit: false } },
+      detect: () => Promise.reject(new Error('boom')),
+      start: () => Promise.reject(new Error('unused')),
+      kill: () => Promise.resolve(),
+    }
+    const sat2 = await listenSatellite({ backend: broken })
+    try {
+      const res = await fetch(sat2.url + '/.well-known/agent-card')
+      expect(res.status).toBe(503)
+    } finally {
+      await sat2.close()
+    }
+  })
+
   it('卫星鉴权：设 token 后无 token 请求 -> 401，正确 Bearer 可访问', async () => {
     const satellite = await listenSatellite({ backend: new StubBackend('dsh'), token: 'secret' })
     try {

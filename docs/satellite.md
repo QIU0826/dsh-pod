@@ -36,5 +36,12 @@
 ## 6. 边界
 
 - **（CR-30 已落地）** `src/workers/remote-backend.ts`：`RemoteBackend`（HttpSatelliteTransport fetch 实现 + 可注入 transport 测试）+ `remoteBackendsFromEnv()`（POD_SATELLITE_URL/VENDOR/TOKEN）；`src/workers/satellite-server.ts`：卫星端 handler（/detect /start /events /kill /health）+ `StubBackend` 确定性桩；`scripts/satellite-worker.mjs`：卫星机入口（stub|ark 后端，POD_SATELLITE_TOKEN 双向认证）。
+- **（v0.4 对齐切片已落地，2026-09-05）** A2A Agent Card 发现面：`GET /.well-known/agent-card`
+  （`buildSatelliteAgentCard`）——与 /health 同级公开（发现端点鉴权 = 无法被发现）；
+  `protocolVersion` 与主面 buildAgentCard 同口径（0.2.5）；能力位如实不虚标
+  （streaming=false：/events 是轮询非 SSE；pushNotifications=false）；
+  preferredTransport=HTTPJSON，additionalInterfaces 列卫星线协议四端点
+  （/detect /start /events /kill）；后端 detect 抛错 → 503 不发卡（诚实化：宣称存在会误导路由）。
+  后续片：message/send 委派语义（worktree 归属设计定后）+ 跨机部署时填 `signatures`（JWS）。
 - 演进方向：多机真机部署（worktree 在 remote 侧共享）、mTLS 强双向认证、卫星机跑真实写码后端。
 - 单机单用户数据量极小（方案书 485 行 SQLite 论证）是当前事实，多机是规模化方向。
