@@ -289,6 +289,9 @@ describe('Commander 降级与 watchdog 语义', () => {
     const stale = machine.tickStaleApprovals()
     expect(stale).toHaveLength(1)
     expect(store.getMission('M-1')!.status).toBe('paused')
+    // 走状态机入口 pause()（2026-09-05 修复：此前直接 updateMission 绕过，
+    // 不发 mission_paused——A2A 对端收不到 paused 信号）
+    expect(store.listEvents('M-1').some((e) => e.kind === 'mission_paused')).toBe(true)
     expect(store.listEvents('M-1').some((e) => e.kind === 'mission_paused_stale_approval')).toBe(true)
   })
 })

@@ -274,7 +274,10 @@ export class MissionMachine {
     const mission = this.getMission()
     const stale = this.approvals.staleCheck(mission.id)
     if (stale.length > 0 && mission.status === 'awaiting_approval') {
-      this.store.updateMission(mission.id, { status: 'paused' })
+      // 走状态机入口 pause()（guard + mission_paused 事件），此前直接 updateMission
+      // 绕过——不发 mission_paused，A2A 对端收不到 paused 信号，且架空「状态迁移
+      // 只走状态机入口」不变量（2026-09-05 修复）。告警明细事件照发（审计面）。
+      this.pause()
       this.emit(mission, 'mission_paused_stale_approval', { stale: stale.map((a) => a.id) })
     }
     return stale

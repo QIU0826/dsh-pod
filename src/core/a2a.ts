@@ -191,6 +191,18 @@ export function internalEventToA2a(event: PodEvent): A2aStreamEvent[] {
       return [statusUpdate(taskId, 'input-required', false, '等待人工审批（合并门）', event.ts)]
     case 'mission_paused':
       return [statusUpdate(taskId, 'input-required', false, '已暂停（等待人工恢复）', event.ts)]
+    case 'mission_paused_stale_approval': {
+      // 审批超期自动暂停（CR-01-7）：停顿明细信号（mission_paused 已给 input-required，
+      // 这里给超期明细——对齐 task_rejected 双信号模式）
+      const stale = Array.isArray(p.stale) ? p.stale.map(String) : []
+      return [
+        statusUpdate(taskId, 'input-required', false, `审批超期，已自动暂停（${stale.length} 张审批卡超期）——恢复后需人工处理`, event.ts),
+        artifactUpdate(taskId, 'approval:stale', `⏰ 审批超期：${stale.join('、')}`.slice(0, 300), event.ts),
+      ]
+    }
+    case 'mission_paused_budget':
+      // 预算短路暂停（与 pause() 的 mission_paused 并发双信号：这里给预算明细）
+      return [statusUpdate(taskId, 'input-required', false, `预算超限，已自动暂停：${textOf(p)}`.slice(0, 300), event.ts)]
     case 'mission_done':
       return [statusUpdate(taskId, 'completed', true, '任务完成（质量门 + 合并门全过）', event.ts)]
     case 'mission_denied':

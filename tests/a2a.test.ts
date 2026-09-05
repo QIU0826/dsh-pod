@@ -234,4 +234,23 @@ describe('停顿需人工的显式状态映射（v1.0 词汇对齐）', () => {
     expect(isFinalA2aEvent(mapped[0]!)).toBe(false)
     expect(mapped[1]!.kind).toBe('artifact-update')
   })
+
+  it('mission_paused_stale_approval（审批超期暂停）→ 非终态 input-required + 超期明细 artifact（2026-09-05）', () => {
+    // 修复前该事件落 default 不映射（[]）——对端看不到「超期自动暂停」进展信号
+    const mapped = internalEventToA2a(ev('mission_paused_stale_approval', { stale: ['A-1', 'A-2'] }))
+    expect(mapped).toHaveLength(2)
+    expect(mapped[0]!.kind).toBe('status-update')
+    expect((mapped[0] as { status: { state: string } }).status.state).toBe('input-required')
+    expect(isFinalA2aEvent(mapped[0]!)).toBe(false)
+    expect((mapped[0] as { status: { message: { parts: Array<{ text: string }> } } }).status.message.parts[0]!.text).toContain('审批超期')
+    expect((mapped[1] as { artifact: { parts: Array<{ text: string }> } }).artifact.parts[0]!.text).toContain('A-1')
+  })
+
+  it('mission_paused_budget（预算短路暂停）→ 非终态 input-required + 预算明细（2026-09-05）', () => {
+    const mapped = internalEventToA2a(ev('mission_paused_budget', { error: 'spent $2.1 > limit $2' }))
+    expect(mapped).toHaveLength(1)
+    expect((mapped[0] as { status: { state: string } }).status.state).toBe('input-required')
+    expect(isFinalA2aEvent(mapped[0]!)).toBe(false)
+    expect((mapped[0] as { status: { message: { parts: Array<{ text: string }> } } }).status.message.parts[0]!.text).toContain('预算超限')
+  })
 })
