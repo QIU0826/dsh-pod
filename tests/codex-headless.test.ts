@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   codexBinaryCandidates,
+  codexJsonlToProgress,
   extractCodexThreadId,
   extractCodexUsage,
   parseCodexJsonlLine,
@@ -8,7 +9,7 @@ import {
   buildCodexArgs,
 } from '../src/workers/codex-headless.js'
 import { CodexHeadlessBackend } from '../src/workers/codex-headless.js'
-import type { AgentSlot } from '../src/core/types.js'
+import type { AgentSlot, WorkerCompletion } from '../src/core/types.js'
 
 function makeSlot(tier: AgentSlot['session_tier'], sessionRef?: string): AgentSlot {
   return {
@@ -296,5 +297,90 @@ describe('buildCodexArgs 注入面收口（P1：win32 shell:true 下 cmd 元字�
   it('合法 model/threadId 正常组装', () => {
     expect(buildCodexArgs({ kind: 'new-thread' }, 'C:/repo/.wt', 'gpt-5.6-sol')).toContain('gpt-5.6-sol')
     expect(buildCodexArgs({ kind: 'resume', threadId: 'th_abc-123' }, 'W', undefined)).toContain('th_abc-123')
+  })
+})
+
+describe('codex 纯函数补充分支（2026-09-05 覆盖加固）', () => {
+  it('parseCodexJsonlLine：BOM 前缀可解析 / 坏 JSON → undefined', () => {
+    expect(parseCodexJsonlLine('\uFEFF{"type":"turn.started"}')).toEqual({ type: 'turn.started' })
+    expect(parseCodexJsonlLine('{"type":')).toBeUndefined()
+  })
+  it('extractCodexThreadId：thread_id 非字符串 → undefined', () => {
+    expect(extractCodexThreadId({ type: 'thread.started', thread_id: 42 })).toBeUndefined()
+  })
+  it('codexJsonlToProgress：function_call → tool_call / error → system / 其他 item → undefined', () => {
+    const base = { slot_id: 'S-1', task_id: 'T-1', ts: 1 }
+    expect(codexJsonlToProgress('S-1', 'T-1', { type: 'item.completed', item: { type: 'function_call', name: 'shell' } }, 1)).toEqual({
+      ...base, kind: 'tool_call', tool: 'shell',
+    })
+    expect(codexJsonlToProgress('S-1', 'T-1', { type: 'item.completed', item: { type: 'command', name: 'ls' } }, 1)).toEqual({
+      ...base, kind: 'tool_call', tool: 'ls',
+    })
+    expect(codexJsonlToProgress('S-1', 'T-1', { type: 'item.completed', item: { type: 'error', message: 'boom' } }, 1)).toEqual({
+      ...base, kind: 'system', text: 'boom',
+    })
+    expect(codexJsonlToProgress('S-1', 'T-1', { type: 'item.completed', item: { type: 'other' } }, 1)).toBeUndefined()
+    expect(codexJsonlToProgress('S-1', 'T-1', { type: 'turn.completed' }, 1)).toBeUndefined()
+  })
+  it('codexBinaryCandidates：POSIX 只有 PATH 候选；win32 含 .sandbox-bin 兜底', () => {
+    expect(codexBinaryCandidates('linux')).toEqual(['codex'])
+    const win = codexBinaryCandidates('win32')
+    expect(win[0]).toBe('codex')
+    expect(win[1]).toContain('.sandbox-bin')
+  })
+  it('resolveCodexMode：per-mission + thread → resume；transient / 无 thread → new-thread', () => {
+    expect(resolveCodexMode(makeSlot('per-mission', 'th-1'))).toEqual({ kind: 'resume', threadId: 'th-1' })
+    expect(resolveCodexMode(makeSlot('transient'))).toEqual({ kind: 'new-thread' })
+    expect(resolveCodexMode(makeSlot('per-mission'))).toEqual({ kind: 'new-thread' })
+  })
+  it('buildCodexArgs：resume 保持 -s read-only 不降级沙箱（审计 P2-4）', () => {
+    const args = buildCodexArgs({ kind: 'resume', threadId: 'th-9' }, 'C:/repo')
+    expect(args).toContain('resume')
+    expect(args).toContain('read-only')
+    expect(args).toContain('th-9')
+  })
+})
+
+describe('真实子进程链（2026-09-05 覆盖加固：StringDecoder 跨块重组 + close 残尾冲刷）', () => {
+  it('真 spawn：CJK 字符跨 stdout 块边界被 decoder 正确重组；末行无换行经 close 冲刷不丢', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const dir = mkdtempSync(join(tmpdir(), 'pod-codex-fixture-'))
+    try {
+      const fixtureLines = [
+        'if (process.argv.includes(\'--version\')) { console.log(\'codex 0.148.0-fixture\'); process.exit(0) }',
+        'const report = {task_id:\'T-1\',task_type:\'implement\',status:\'done\',summary:\'完成 中文摘要\',files_changed:[],test_result:\'not_run\',decisions:[],blockers:[],questions:[]}',
+        'const fenced = \'```json\\n\' + JSON.stringify(report) + \'\\n```\'',
+        'const buf = Buffer.from(JSON.stringify({type:\'item.completed\',item:{type:\'agent_message\',text:fenced}}) + \'\\n\', \'utf8\')',
+        'const cjkStart = buf.indexOf(Buffer.from(\'完\', \'utf8\'))',
+        'process.stdout.write(\'{"type":"thread.started","thread_id":"th-e2e"}\\n\')',
+        'process.stdout.write(buf.subarray(0, cjkStart + 1))',
+        'setTimeout(() => {',
+        '  process.stdout.write(buf.subarray(cjkStart + 1))',
+        '  process.stdout.write(Buffer.from(JSON.stringify({ type: \'turn.completed\', usage: { input_tokens: 7, output_tokens: 3 } }), \'utf8\'))',
+        '  process.exit(0)',
+        '}, 80)',
+      ]
+      const fixture = join(dir, 'fixture.js')
+      writeFileSync(fixture, fixtureLines.join('\n'), 'utf8')
+      const backend = new CodexHeadlessBackend({ binary: 'node ' + fixture, clock: () => Date.now() })
+      const progressTexts: Array<string | undefined> = []
+      let captured: WorkerCompletion | undefined
+      await backend.start(makeSlot('transient'), { id: 'T-1', mission_id: 'M-1', title: 't', spec: 's', skill_tags: [], type: 'implement', depends_on: [], status: 'ready', attempts: 0, soft_attempts: 0, max_wall_clock_ms: 60_000, created_at: 0, updated_at: 0 } as never, dir, {
+        onProgress: (ev) => { if (ev.kind === 'text') progressTexts.push(ev.text) },
+        onExit: (c) => { captured = c },
+      })
+      await vi.waitFor(() => expect(captured).toBeDefined(), { timeout: 10_000 })
+      const c = captured!
+      expect(c.exit).toBe('done')
+      // decoder 重组：摘要里的 CJK 完好（旧实现逐块 toString 会产出 U+FFFD → 报告丢失）
+      expect(c.report?.summary).toBe('完成 中文摘要')
+      expect(progressTexts.some((t) => t?.includes('中文摘要'))).toBe(true)
+      // close 冲刷：末行无换行的 turn.completed 仍被解析 → usage 实测入账
+      expect(c.usage).toEqual({ tokens_in: 7, tokens_out: 3, source: 'measured' })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
