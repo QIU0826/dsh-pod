@@ -110,6 +110,39 @@ describe('MCP Gateway（AgentScope-J）', () => {
     expect(() => makeMcpGateway({ servers: [{ id: 'fs' }], connections: [] })).toThrow(/无连接/)
   })
 
+  it('重复 server id 声明 / 重复连接 id → 构造即失败（2026-09-05：此前 Map.set 静默覆盖）', () => {
+    expect(() =>
+      makeMcpGateway({ servers: [{ id: 'fs' }, { id: 'fs' }], connections: [conn('fs', [{ name: 'read' }])], now: () => NOW }),
+    ).toThrow(/重复声明/)
+    expect(() =>
+      makeMcpGateway({
+        servers: [{ id: 'fs' }],
+        connections: [conn('fs', [{ name: 'read' }]), conn('fs', [{ name: 'write' }])],
+        now: () => NOW,
+      }),
+    ).toThrow(/连接 id 重复/)
+  })
+
+  it('审批钩子自身抛错 → fail-closed 拒绝执行 + 审计留痕（2026-09-05：此前异常裸传播无审计）', async () => {
+    const audits: Array<{ approved: boolean; ok: boolean; error?: string }> = []
+    const spy = vi.fn(async () => 'written')
+    const gw = makeMcpGateway({
+      servers: [{ id: 'fs', gatedTools: ['write'] }],
+      connections: [conn('fs', [{ name: 'write' }], spy)],
+      beforeCall: async () => {
+        throw new Error('approval service down')
+      },
+      audit: (e) => audits.push({ approved: e.approved, ok: e.ok, error: e.error }),
+      now: () => NOW,
+    })
+    await expect(gw.callTool('fs__write', { path: 'x' })).rejects.toThrow(/审批钩子执行失败/)
+    expect(spy).not.toHaveBeenCalled() // 工具未执行（fail-closed：钩子异常 = 未获批）
+    expect(audits).toHaveLength(1) // 审批决策失败有留痕
+    expect(audits[0]!.approved).toBe(false)
+    expect(audits[0]!.ok).toBe(false)
+    expect(audits[0]!.error).toContain('approval hook failed')
+  })
+
   it('大输出被截断（防灌爆上下文与事件流）', async () => {
     const gw = makeMcpGateway({
       servers: [{ id: 'fs' }],

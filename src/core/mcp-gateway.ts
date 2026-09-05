@@ -114,9 +114,19 @@ export class McpGateway {
       if (s.id.length === 0 || s.id.includes('__')) {
         throw new McpGatewayError(`非法 MCP server id（非空且不含 __）: ${JSON.stringify(s.id)}`)
       }
+      // 重复声明显式暴露（2026-09-05）：此前 Map.set 静默覆盖（后者胜出），与下方
+      // 「声明了但无连接必须显式暴露」的 fail-closed 纪律不对称——配置歧义必须抛错
+      if (this.specs.has(s.id)) {
+        throw new McpGatewayError(`MCP server id 重复声明: ${JSON.stringify(s.id)}`)
+      }
       this.specs.set(s.id, s)
     }
-    for (const c of opts.connections) this.conns.set(c.id, c)
+    for (const c of opts.connections) {
+      if (this.conns.has(c.id)) {
+        throw new McpGatewayError(`MCP server 连接 id 重复: ${JSON.stringify(c.id)}`)
+      }
+      this.conns.set(c.id, c)
+    }
     this.beforeCall = opts.beforeCall
     this.audit = opts.audit
     this.maxOutputChars = opts.maxOutputChars ?? DEFAULT_MAX_OUTPUT_CHARS
@@ -174,10 +184,15 @@ export class McpGateway {
         this.audit?.({ ts: this.now(), serverId, tool: toolName, gated, approved: false, ok: false, error: 'approval hook not wired' })
         return { ok: false, error: '写类工具未配置审批钩子，已拒绝执行（fail-closed）' }
       }
-      approved = await this.beforeCall(
-        { ref, serverId, name: toolName, gated },
-        args,
-      )
+      // 审批钩子自身抛错（审批服务抖动）= 未获批（fail-closed）+ 必须留痕：
+      // 此前异常裸传播（不在下方 try 块内），gated 工具的审批决策失败无任何审计记录
+      try {
+        approved = await this.beforeCall({ ref, serverId, name: toolName, gated }, args)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        this.audit?.({ ts: this.now(), serverId, tool: toolName, gated, approved: false, ok: false, error: `approval hook failed: ${message}` })
+        throw new McpGatewayError(`审批钩子执行失败 ${ref}: ${message}`)
+      }
       if (!approved) {
         this.audit?.({ ts: this.now(), serverId, tool: toolName, gated, approved: false, ok: false, error: 'approval denied' })
         return { ok: false, error: '调用未获审批（审批门不绕过）' }
