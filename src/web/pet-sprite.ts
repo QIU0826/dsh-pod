@@ -151,6 +151,15 @@ export function initialSequenceState(phase: PetPhase): SequenceState {
 
 // ─── 组件 ──────────────────────────────────────────────────────────────────
 
+export interface Sprite2dAtlas {
+  /** 图集图片源（URL 或 data URL）。缺省内置鲸鱼娘。 */
+  src: string
+  /** 单帧 cell 尺寸（默认鲸鱼娘 192x208）。 */
+  cellWidth?: number
+  cellHeight?: number
+  columns?: number
+}
+
 export interface PetSpriteProps {
   phase: PetPhase
   /** 显示高度 px（宽度按 cell 比例 192:208）。 */
@@ -159,20 +168,26 @@ export interface PetSpriteProps {
   filter?: string
   className?: string
   style?: CSSProperties
+  /** 外部图集（生态 sprite2d 角色，如 ouo-neko/whale-refined）；缺省内置鲸鱼娘。 */
+  atlas?: Sprite2dAtlas
 }
 
 /** 桌宠精灵：atlas 帧动画。prefers-reduced-motion 时保持首帧（无动画）。 */
 export function PetSprite(props: PetSpriteProps): ReactElement {
-  const { phase, size = 128, filter, className, style } = props
+  const { phase, size = 128, filter, className, style, atlas } = props
   const spriteRef = useRef<HTMLDivElement | null>(null)
   const seqRef = useRef<SequenceState>(initialSequenceState(phase))
+  const cellW = atlas?.cellWidth ?? CELL.width
+  const cellH = atlas?.cellHeight ?? CELL.height
+  const columns = atlas?.columns ?? COLUMNS
+  const atlasSrc = atlas?.src ?? WHALE_ATLAS_DATA_URL
 
   useEffect(() => {
     const el = spriteRef.current
     if (el === null) return
-    const scale = size / CELL.height
-    el.style.backgroundImage = 'url(' + WHALE_ATLAS_DATA_URL + ')'
-    el.style.backgroundSize = CELL.width * COLUMNS * scale + 'px ' + CELL.height * 9 * scale + 'px'
+    const scale = size / cellH
+    el.style.backgroundImage = 'url(' + atlasSrc + ')'
+    el.style.backgroundSize = cellW * columns * scale + 'px ' + cellH * 9 * scale + 'px'
     el.style.backgroundRepeat = 'no-repeat'
     if (filter !== undefined) el.style.filter = filter
     const reduceMotion =
@@ -200,13 +215,13 @@ export function PetSprite(props: PetSpriteProps): ReactElement {
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [phase, size, filter])
+  }, [phase, size, filter, atlasSrc, cellW, cellH, columns])
 
   return createElement('div', {
     ref: spriteRef,
     className,
     style: {
-      width: Math.round((size * CELL.width) / CELL.height) + 'px',
+      width: Math.round((size * cellW) / cellH) + 'px',
       height: size + 'px',
       imageRendering: 'auto',
       pointerEvents: 'none',

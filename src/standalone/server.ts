@@ -9,7 +9,7 @@
  * 安全（CR-29 同款纪律）：默认 loopback-only；--host 0.0.0.0 时必须 --token（Bearer）。
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { writeFileSync, existsSync, readFileSync } from 'node:fs'
+import { writeFileSync, existsSync, readFileSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createPodRuntime, type PodRuntime } from '../core/pod-runtime.js'
@@ -71,6 +71,37 @@ function defaultStaticDir(): string {
 }
 
 /** 静态资源：/ 与 /index.html 回 index 壳；/standalone.js 回打包产物。其余 404。 */
+const PET_ASSET_MIME: Record<string, string> = {
+  '.webp': 'image/webp',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.json': 'application/json; charset=utf-8',
+}
+
+/** 桌宠资产静态面：pet-assets/<character>/**（dataDir 内，防穿越；不存在 → 404 由回落机制兜底）。 */
+function servePetAsset(res: ServerResponse, petRoot: string, relPath: string): void {
+  const safe = relPath.split('/').filter((seg) => seg.length > 0 && seg !== '.' && seg !== '..')
+  if (safe.length === 0) {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+    res.end('not found')
+    return
+  }
+  const p = join(petRoot, ...safe)
+  try {
+    if (!existsSync(p) || !statSync(p).isFile()) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+      res.end('not found')
+      return
+    }
+    const ext = p.slice(p.lastIndexOf('.')).toLowerCase()
+    res.writeHead(200, { 'content-type': PET_ASSET_MIME[ext] ?? 'application/octet-stream', 'cache-control': 'no-store' })
+    res.end(readFileSync(p))
+  } catch {
+    res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
+    res.end('internal error')
+  }
+}
+
 function serveStatic(res: ServerResponse, pathname: string, staticDir: string): boolean {
   if (pathname === '/' || pathname === '/index.html') {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
@@ -170,6 +201,12 @@ export function createStandaloneServer(options: StandaloneOptions = {}): Standal
     }
     if (pathname === '/standalone.js') {
       serveStatic(res, pathname, staticDir)
+      return
+    }
+    // 桌宠角色资产静态面（2026-09-05 多角色切片）：<dataDir>/pet-assets/<character>/**。
+    // 客户端同源优先加载（生态 raw.githubusercontent 在部分网络不可达）；路径穿越有守卫。
+    if (pathname.startsWith('/pet-assets/')) {
+      servePetAsset(res, join(runtime.dataDir, 'pet-assets'), pathname.slice('/pet-assets/'.length))
       return
     }
     // 员工侧 MCP 端点（2026-09-03）：pod_* 工具面（含 pod_mem_* 三件套）经 streamable HTTP

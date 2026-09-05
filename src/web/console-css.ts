@@ -657,4 +657,33 @@ export const CONSOLE_CSS = `
 .dsh-pet-detail-send { flex: none; padding: 6px 12px; border-radius: 8px; font-size: 12px; cursor: pointer;
   background: rgba(34,211,238,.16); border: 1px solid rgba(34,211,238,.45); color: var(--primary); }
 .dsh-pet-detail-send:disabled { opacity: .4; cursor: default; }
+/* ─── 多角色桌宠增量样式（2026-09-05）：frames2d 形象 / 对峙抖动 / 女仆工坊主题 ─── */
+.dsh-pet-frames2d { position: relative; z-index: 2; user-select: none; -webkit-user-drag: none; }
+@keyframes dsh-pet-duel-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-3px) rotate(-1.2deg); }
+  75% { transform: translateX(3px) rotate(1.2deg); }
+}
+.dsh-pet-shaking { animation: dsh-pet-duel-shake .5s ease-in-out infinite; }
+.dsh-pet-station.in-duel .dsh-pet-nameplate { border-color: #c5a468; box-shadow: 0 0 0 1px #c5a46866, 0 6px 18px #0f1e4833; }
+.dsh-pet-station.implementer .dsh-pet-bubble { border-color: #e2cfaa; }
+.dsh-pet-station.reviewer .dsh-pet-bubble { border-color: #8ea5da; }
+
+/* 女仆工坊主题（借 dsh-web market maid-atelier 调色板：深海蓝 + 陶瓷白 + 长春花蓝 + 柔金）。
+   由 room 容器附加 .maid 类启用（桌宠房间设置项），未附加时保持深海原主题。 */
+.dsh-pet-room.maid .dsh-pet-room-wall { background:
+  radial-gradient(1100px 460px at 50% -12%, rgba(142,165,218,.16), transparent 62%),
+  linear-gradient(180deg, #091333 0%, #10204d 68%, #1c326b 100%); }
+.dsh-pet-room.maid .dsh-pet-room-floor { background: linear-gradient(180deg, #14284f 0%, #091333 100%); }
+.dsh-pet-room.maid .dsh-pet-room-floor::after { background-image:
+  linear-gradient(rgba(142,165,218,.10) 1px, transparent 1px),
+  linear-gradient(90deg, rgba(197,164,104,.08) 1px, transparent 1px); }
+.dsh-pet-room.maid .dsh-pet-room-title { color: #e2cfaa; }
+.dsh-pet-room.maid .dsh-pet-bubble { background: #f8f6f0f2; border-color: #c5a46866; color: #172347; }
+.dsh-pet-room.maid .dsh-pet-bubble.bad { border-color: #b4544f; }
+.dsh-pet-room.maid .dsh-pet-nameplate { background: #f8faffad; border-color: #c5a46855; }
+.dsh-pet-room.maid .dsh-pet-vendor { color: #1c326b; }
+.dsh-pet-room.maid .dsh-pet-zone-title { color: #8ea5da; }
+.dsh-pet-room.maid .dsh-pet-room-legend { color: #8ea5dab0; }
+
 `
