@@ -359,7 +359,7 @@ describe('真实子进程链（2026-09-05 覆盖加固：StringDecoder 跨块重
         'setTimeout(() => {',
         '  process.stdout.write(buf.subarray(cjkStart + 1))',
         '  process.stdout.write(Buffer.from(JSON.stringify({ type: \'turn.completed\', usage: { input_tokens: 7, output_tokens: 3 } }), \'utf8\'))',
-        '  process.exit(0)',
+        '  process.stdout.end(\'\', () => process.exit(0))  // 等 pipe 写回调再退出：Linux 上 process.exit 会截断未刷出的缓冲（CI 实证）',
         '}, 80)',
       ]
       // 跨平台（2026-09-05 CI 实证）：POSIX shell:false 下 binary 整串被当可执行文件名
