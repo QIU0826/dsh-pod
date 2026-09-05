@@ -134,9 +134,15 @@ export function validateLaunch(body: LaunchRouteBody): { ok: true; value: { name
 /** A2A 对外基址（loopback-only 部署的固定形态）。 */
 const A2A_BASE_URL = 'http://127.0.0.1:3930'
 
-/** A2A 调用方未指定名册时的默认员工面（实现 + 独立审查，质量门默认开）。 */
+/**
+ * A2A 调用方未指定名册时的默认员工面（实现 + 独立审查，质量门默认开）。
+ * 能力词汇必须与规划器提案契约对齐（planner.ts：plan 任务 skill_tags=['规划']、
+ * 实现=['编码']、审查=['审查']）——2026-09-05 实测修复：旧值 ['实现','测试'] 与
+ * ['审查','文档'] 既盖不住 plan 任务（无「规划」，plan 派发即 escalate），也盖不住
+ * planner 标准产出的「编码」任务，默认 A2A 启动 100% 转人工。
+ */
 const A2A_DEFAULT_SLOTS: Array<{ id: string; vendor: Vendor; role: string; capabilities: string[] }> = [
-  { id: 'S-1', vendor: 'claude', role: '实现工程师', capabilities: ['实现', '测试'] },
+  { id: 'S-1', vendor: 'claude', role: '实现工程师', capabilities: ['编码', '规划', '测试'] },
   { id: 'S-2', vendor: 'claude', role: '审查员', capabilities: ['审查', '文档'] },
 ]
 
@@ -190,7 +196,7 @@ async function handleA2aSend(
   req: IncomingMessage,
   res: ServerResponse,
   service: () => PodService | undefined,
-  opts: { stream: boolean; jsonRpcId?: unknown },
+  opts: { stream: boolean; jsonRpcId?: unknown; body?: Record<string, unknown> | undefined },
 ): Promise<void> {
   if (!isLoopback(req)) {
     writeJson(res, 403, { error: 'forbidden: loopback-only' })
@@ -201,7 +207,7 @@ async function handleA2aSend(
     writeJson(res, 503, { error: 'pod runtime not initialized' })
     return
   }
-  const body = await readJsonBody(req)
+  const body = opts.body ?? await readJsonBody(req)
   const params = body !== undefined && body.params !== null && typeof body.params === 'object'
     ? (body.params as Record<string, unknown>)
     : body
@@ -847,6 +853,12 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
           writeJson(res, 403, { error: 'forbidden: loopback-only' })
           return
         }
+        // 只允许 POST（2026-09-05 CSRF 加固）：dispatch 无 body，裸 GET 可被跨站 <img>
+        // 直接触发真实派发（烧 LLM 成本）；与 /pause /resume /plan 同一口径。
+        if (req.method !== 'POST') {
+          writeJson(res, 405, { error: 'method not allowed' })
+          return
+        }
         const current = service()
         if (current === undefined) {
           writeJson(res, 503, { error: 'pod runtime not initialized' })
@@ -1020,6 +1032,12 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
       handler: async (req, res) => {
         if (!isLoopback(req)) {
           writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        // 只允许 POST（2026-09-05 CSRF 加固）：裸 GET 也会以默认 reason 中止 mission
+        //（readJsonBody 对空 body 返回 undefined → 走默认 reason），与 /pause 同一口径。
+        if (req.method !== 'POST') {
+          writeJson(res, 405, { error: 'method not allowed' })
           return
         }
         const current = service()
@@ -1328,7 +1346,10 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
           writeJson(res, 400, { jsonrpc: '2.0', id: body?.id ?? null, error: { code: -32601, message: `method not found: ${method}` } })
           return
         }
-        await handleA2aSend(req, res, service, { stream: method === 'message/stream', jsonRpcId: body?.id ?? null })
+        // body 复用（2026-09-05 修复）：req 流已被上面的 readJsonBody 消费，handleA2aSend
+        // 再读一次得到 undefined → 所有 message/send 422（Agent Card 主 URL 形同虚设）。
+        // 把已解析的 body 透传下去，/a2a/sendMessage 等旧入口仍自行读流。
+        await handleA2aSend(req, res, service, { stream: method === 'message/stream', jsonRpcId: body?.id ?? null, body })
       },
     },
   ]

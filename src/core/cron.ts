@@ -49,6 +49,9 @@ export interface CronFireResult {
  * 简单 Cron 调度器：tick(now) 扫描到期 job 并触发。
  * 纯 tick 驱动（与 watchdog 同风格），不持有定时器；宿主周期调用（maintenanceTick 同源）。
  */
+/** 历史记录上限（2026-09-05）：1s 间隔 job 在长驻进程里每天写 ~8.6 万条，无上限即慢性内存泄漏。 */
+const HISTORY_MAX = 500
+
 export class CronScheduler {
   private readonly jobs = new Map<string, CronJob>()
   private readonly clock: () => number
@@ -77,6 +80,11 @@ export class CronScheduler {
     return this.history.slice(-limit)
   }
 
+  private pushHistory(record: CronFireResult): void {
+    this.history.push(record)
+    if (this.history.length > HISTORY_MAX) this.history.splice(0, this.history.length - HISTORY_MAX)
+  }
+
   /**
    * 周期巡检：触发所有到期且 enabled 的 job（节流：interval 内不重复）。
    * 返回本次触发结果。默认门：无 gate 时全部放行。
@@ -89,7 +97,7 @@ export class CronScheduler {
       const last = job.lastFiredAt ?? 0
       if (t - last < job.intervalMs) continue
       if (this.gate !== undefined && !this.gate(job, t)) {
-        this.history.push({ job_id: job.id, fired: false, reason: 'gated', ts: t })
+        this.pushHistory({ job_id: job.id, fired: false, reason: 'gated', ts: t })
         continue
       }
       // 触发前先更新 lastFiredAt（防重入/超时重跑造成重复触发）
@@ -100,13 +108,13 @@ export class CronScheduler {
           job_id: job.id, fired: true, reason: 'fired',
           reply_text: reply.text, reply_ok: reply.ok, ts: t,
         }
-        this.history.push(record)
+        this.pushHistory(record)
         fired.push(record)
       } catch (error) {
         const record: CronFireResult = {
           job_id: job.id, fired: false, reason: 'error: ' + (error instanceof Error ? error.message : String(error)), ts: t,
         }
-        this.history.push(record)
+        this.pushHistory(record)
         fired.push(record)
       }
     }

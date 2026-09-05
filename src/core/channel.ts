@@ -91,8 +91,10 @@ export function parseInstruction(text: string): ChannelCommand {
 }
 
 function matchApprovalId(lower: string): string | undefined {
-  // 匹配 A- 前缀 id（A-1 / A-123）
-  const m = lower.match(/a-\d+/)
+  // 完整 id（2026-09-05 修复）：生产审批 id 是 A-<clock毫秒>-<随机数>（approvals.ts idFn），
+  // 旧 /a-\d+/ 在第一个连字符截断——IM 里回复「批准 A-1735680000000-123456」永远
+  // approval not found（审批链路对生产 id 形同虚设）。可选第二段兼容旧短 id A-1。
+  const m = lower.match(/a-\d+(?:-\d+)?/)
   return m ? m[0].toUpperCase() : undefined
 }
 function matchSlotId(lower: string): string | undefined {

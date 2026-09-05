@@ -176,7 +176,15 @@ export function createStandaloneServer(options: StandaloneOptions = {}): Standal
     // 暴露给 worker 子进程（claude --mcp-config 指向 worker-mcp.json）。guard 已在此前
     // 统一执行（loopback + Host + Origin 校验同主面）。
     if (pathname === '/mcp' || pathname.startsWith('/mcp/')) {
-      void mcp.handle(req, res)
+      // .catch 兜底（2026-09-05 修复）：handle 内部只包了 transport.handleRequest，
+      // initialize 的 server.connect 与 DELETE 的 server.close 可在 try 外 reject——
+      // 无 catch 的 floating promise 会以 unhandledRejection 终止整个 standalone 进程。
+      void mcp.handle(req, res).catch(() => {
+        if (!res.headersSent) {
+          res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({ error: 'internal error' }))
+        }
+      })
       return
     }
     // A2A 协议面路径（发现端点 + sendMessage/Stream + JSON-RPC）与既有 API 前缀并列放行

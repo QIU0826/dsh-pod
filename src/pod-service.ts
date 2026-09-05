@@ -1213,11 +1213,39 @@ export class PodService {
     // 合并成功才 mission done；失败回滚卡 pending（可重试或驳回）。
     // AS-3（AgentScope-C）：批准可携带人工编辑参数（如 merge_note），审计留痕。
     // W4「记住规则」：rememberRule=false 时批准不生成同类免弹卡规则。
-    orch.approveCard(approvalId, by, editedParams, rememberRule)
+    // 冲突结构化（2026-09-05）：双击/IM+UI 并发批准、stale 卡裁决 → ApprovalConflictError
+    // 转结构化 {ok:false,conflict:true}（HTTP 409 / IM 文本回复），不再以 500 伪装内部错误。
+    try {
+      orch.approveCard(approvalId, by, editedParams, rememberRule)
+    } catch (error) {
+      if (error instanceof PodError && (error.code === 'APPROVAL_CONFLICT' || error.code === 'INVALID_TRANSITION')) {
+        return Promise.resolve({ ok: false, conflict: true, message: error.message })
+      }
+      throw error
+    }
     const applyPatch = new ApplyPatch({ store: this.store, git: execGitRunner() })
     return applyPatch.apply(approval.mission_id, approval).then((result) => {
       if (result.ok) {
-        orch.completeAfterMerge(approvalId, by)
+        // 合并后状态分歧（2026-09-05）：merge 进行中（git + 锁重试可达数秒）mission 被
+        // 并发 pause/abort（awaiting_approval 允许这两者）→ completeAfterMerge 的
+        // approve guard 抛 InvalidTransitionError，但合并已写进主树。如实落一致性事件，
+        // 按合并结果返回，不再把「已合并」伪装成 500（abort 场景也不回滚主树——用户
+        // 已看到合并落地，回滚与否应留给人工显式操作）。
+        try {
+          orch.completeAfterMerge(approvalId, by)
+        } catch (error) {
+          if (error instanceof PodError && error.code === 'INVALID_TRANSITION') {
+            this.store.appendEvent(approval.mission_id, {
+              id: `ev-merge-divergence-${approvalId}-${this.clock()}`,
+              mission_id: approval.mission_id,
+              ts: this.clock(),
+              kind: 'merge_state_divergence',
+              payload: { approval_id: approvalId, merge_commit: result.mergeCommit.slice(0, 12), reason: error.message },
+            })
+          } else {
+            throw error
+          }
+        }
       } else {
         orch.rollbackApproval(approvalId)
       }

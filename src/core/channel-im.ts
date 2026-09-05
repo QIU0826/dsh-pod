@@ -410,6 +410,16 @@ export async function handleImRequest(
     throw error
   }
   const outbound = buildImOutbound(inbound, reply)
-  if (send !== undefined) await send(outbound)
+  // 出站投递失败（2026-09-05）：指令已执行（可能已批准/合并），但用户永远看不到回复——
+  // 释放重放标记让 vendor 重试时能把同一段指令的回复送达；重试会再次执行指令，但
+  // handleChannelCommand 的裁决面（审批冲突 409 / 状态机守卫）全部幂等拒绝，安全。
+  if (send !== undefined) {
+    try {
+      await send(outbound)
+    } catch (error) {
+      if (verified.eventId !== undefined) opts.replayGuard?.release(verified.eventId)
+      throw error
+    }
+  }
   return { handled: true, outbound }
 }
