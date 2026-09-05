@@ -33,7 +33,7 @@ export const inject = ['webServer', 'tools', 'systemPrompt']
 /** Announcement section order within the tool-guidance band. */
 const SECTION_ORDER = 140
 
-export const POD_VERSION = '0.1.0-w2'
+export const POD_VERSION = '0.3.0-alpha.2'
 
 export const POD_GUIDANCE =
   '本机已安装 dsh-pod 插件（Pod 鲸群：DSH Web 里的多智能体驾驶舱，DSH 原生）。' +

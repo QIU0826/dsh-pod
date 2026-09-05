@@ -166,6 +166,14 @@ export function makeMemoryEmbedderFromEnv(env: NodeJS.ProcessEnv = process.env):
       model: (env.POD_MEMORY_EMBEDDING_MODEL ?? '').trim() || undefined,
     })
   }
+  // Ollama 一键本地免费嵌入（2026-09-06）：ollama pull nomic-embed-text 后即开即用，
+  // OpenAI 兼容 /v1/embeddings（实测 768 维批量）。完全本地零成本，无网络依赖。
+  if ((env.POD_MEMORY_EMBEDDING ?? '').trim() === 'ollama') {
+    return new HttpEmbedder({
+      endpoint: (env.POD_MEMORY_EMBEDDING_OLLAMA_URL ?? 'http://localhost:11434/v1/embeddings').trim(),
+      model: (env.POD_MEMORY_EMBEDDING_MODEL ?? 'nomic-embed-text').trim(),
+    })
+  }
   if ((env.POD_MEMORY_EMBEDDING ?? '').trim() === 'local-hash') return localHashEmbedder()
   return undefined
 }
@@ -180,7 +188,8 @@ export interface HybridRankOptions {
 }
 
 const DEFAULT_ALPHA = 0.5
-const DEFAULT_COSINE_GATE = 0.35
+/** 余弦信号门槛：cosine 池内 min-max 归一后的相对值（0-1），与具体模型解耦。 */
+const DEFAULT_COSINE_GATE = 0.5
 
 /**
  * BM25 + cosine 混合排序（异步）：嵌入一次批量调用（[query, ...candidates]，同空间），
@@ -211,12 +220,18 @@ export async function rankMemoriesHybrid<T extends RankableMemory>(
 
   const scored = scoreMemories(candidates, query)
   const maxBm25 = scored.reduce((mx, s) => Math.max(mx, s.score), 0)
+  // 余弦池内 min-max 归一（2026-09-06，真实模型冒烟实证）：真实 embedding 模型存在
+  // 各向异性——同语言无关文本对的 cosine 基线也有 0.5+，绝对门槛（0.35）形同虚设，
+  // importance 平局决胜会压过语义序。池内相对化后门槛与模型解耦（nomic-embed-text 实测通过）。
+  const cosines = scored.map((_, i) => cosineSimilarity(queryVec, vectors[i + 1]!))
+  const minCos = cosines.reduce((mn, c) => Math.min(mn, c), Number.POSITIVE_INFINITY)
+  const maxCos = cosines.reduce((mx, c) => Math.max(mx, c), Number.NEGATIVE_INFINITY)
+  const cosSpread = maxCos - minCos
   const hybrid = scored.map((s, i) => {
-    const cos = cosineSimilarity(queryVec, vectors[i + 1]!)
-    // BM25 池内归一（max>0 才有意义；全 0 时分量置 0，余弦主导）
+    // BM25 池内 max 归一（全 0 时分量置 0）；余弦池内 min-max 归一（退化池给中性 0.5）
     const bm25Norm = maxBm25 > 0 ? s.score / maxBm25 : 0
-    const cosNorm = (cos + 1) / 2
-    const hasSignal = s.hasSignal || cos >= cosineGate
+    const cosNorm = cosSpread > 1e-9 ? (cosines[i]! - minCos) / cosSpread : 0.5
+    const hasSignal = s.hasSignal || cosines[i]! - minCos >= cosineGate * cosSpread || cosSpread <= 1e-9
     return { m: s.m, score: alpha * bm25Norm + (1 - alpha) * cosNorm, hasSignal }
   })
 

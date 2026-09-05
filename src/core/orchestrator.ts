@@ -56,6 +56,7 @@ import { UNLIMITED_BUDGET_USD,
   NEGOTIATION_HEALTH_TTL_MS,
   SAFE_ENTITY_ID,
 } from './types.js'
+import { vendorSessionTier } from './vendor-registry.js'
 import { Watchdog, type FiredWatchdog } from './watchdog.js'
 
 export interface SlotInput {
@@ -390,7 +391,7 @@ export class MissionOrchestrator {
         model: slotInput.model ?? '',
         avatar: slotInput.avatar,
         effort: 'medium',
-        session_tier: slotInput.session_tier ?? DEFAULT_SESSION_TIERS[slotInput.vendor],
+        session_tier: slotInput.session_tier ?? DEFAULT_SESSION_TIERS[slotInput.vendor] ?? vendorSessionTier(slotInput.vendor),
         status: 'idle',
         tokens_in: 0,
         tokens_out: 0,

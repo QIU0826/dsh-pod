@@ -18,6 +18,7 @@ import { resolveAsset, contentTypeFor } from './core/asset-whitelist.js'
 import { allowsJsonBody } from './core/http-guard.js'
 import { NotFoundError, PodError } from './core/errors.js'
 import { browseDirectories } from './core/fs-browse.js'
+import { isKnownVendor } from './core/vendor-registry.js'
 import { createAgUiStreamMapper, formatAgUiSseFrame } from './core/agui.js'
 import type { PlanTaskInput } from './core/orchestrator.js'
 import { buildAgentCard, internalEventToA2a, isFinalA2aEvent, missionToA2aTask, parsePushConfig } from './core/a2a.js'
@@ -108,7 +109,7 @@ export function validateLaunch(body: LaunchRouteBody): { ok: true; value: { name
     if (typeof slot.id !== 'string' || typeof slot.vendor !== 'string' || typeof slot.role !== 'string') {
       return { ok: false, error: 'each slot needs id/vendor/role' }
     }
-    if (!['claude', 'codex', 'dsh', 'ark', 'opencode'].includes(slot.vendor)) return { ok: false, error: `unknown vendor: ${slot.vendor}` }
+    if (!isKnownVendor(slot.vendor)) return { ok: false, error: `unknown vendor: ${slot.vendor}（外部平台先经 registerVendor 注册，见 docs/harness-接入指南.md）` }
     slots.push({
       id: slot.id,
       vendor: slot.vendor as Vendor,

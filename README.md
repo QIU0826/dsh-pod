@@ -1,8 +1,8 @@
 # dsh-pod（Pod 鲸群）
 
 [![CI](https://github.com/QIU0826/dsh-pod/actions/workflows/ci.yml/badge.svg)](https://github.com/QIU0826/dsh-pod/actions/workflows/ci.yml)
-![tests](https://img.shields.io/badge/tests-1005%20passed-brightgreen)
-![version](https://img.shields.io/badge/version-v0.3.0--alpha.1-blue)
+![tests](https://img.shields.io/badge/tests-1013%20passed-brightgreen)
+![version](https://img.shields.io/badge/version-v0.3.0--alpha.2-blue)
 ![node](https://img.shields.io/badge/node-22%2B-green)
 
 > **在 DSH Web UI 里一键组队、看得见、管得住的多智能体驾驶舱。**

@@ -179,7 +179,7 @@ describe('createPodRuntime', () => {
     expect(podPlugin.name).toBe('pod')
     expect(podPlugin.inject).toContain('webServer')
     expect(typeof podPlugin.apply).toBe('function')
-    expect(podPlugin.POD_VERSION).toMatch(/^\d+\.\d+\.\d+-w\d+$/)
+    expect(podPlugin.POD_VERSION).toMatch(/^\d+\.\d+\.\d+(-[A-Za-z0-9.]+)?$/)
     expect(POD_GUIDANCE).toContain('dsh-pod')
   })
 })

@@ -234,7 +234,23 @@ export function ChatView(props: ChatViewProps): ReactElement {
   const items = buildThread(events, userMessages)
   const noiseFloor = settings.density === 'compact' ? 1 : settings.density === 'standard' ? 2 : 3
   const visible = items.filter((it) => (it.k !== 'sys' && it.k !== 'relay') || it.noise < noiseFloor)
-  const openQuestion = items.find((it) => it.k === 'question' && !answered.has(it.key) && !dismissed.has(it.key))
+  // 问题关闭判定（2026-09-05 修复「弹窗残留」）：不只看客户端 answered——刷新即丢、
+  // 答复请求失败即永久残留。服务端证据同样闭门：任务已人工裁决 / 任务已 done /
+  // mission 已终态（中止或完成）。纯函数 questionClosed 可单测。
+  const resolvedTaskIds = new Set<string>()
+  for (const e of events) {
+    if (e.kind === 'task_human_resolved' && e.task_id !== undefined) resolvedTaskIds.add(e.task_id)
+  }
+  for (const t of tasks) {
+    if (t.status === 'done') resolvedTaskIds.add(t.id)
+  }
+  const missionTerminal = mission?.status === 'done' || mission?.status === 'aborted'
+  const isQuestionClosed = (it: ThreadItem): boolean =>
+    it.k === 'question' &&
+    (answered.has(it.key) ||
+      missionTerminal ||
+      (it.ev.task_id !== undefined && resolvedTaskIds.has(it.ev.task_id)))
+  const openQuestion = items.find((it) => it.k === 'question' && !isQuestionClosed(it) && !dismissed.has(it.key))
 
   // 失败路径成本：除 '0'（首派）与 'unknown'（老条目）之外所有 attempts 桶之和。
   // 有重试才显示，没有则归 null（不渲染一行「重试成本 0」）。
@@ -348,7 +364,7 @@ export function ChatView(props: ChatViewProps): ReactElement {
         createElement('span', { className: 'note' }, it.note.length > 64 ? `${it.note.slice(0, 64)}…` : it.note)))
     } else if (it.k === 'question') {
       const q = it.ev.payload as { questions?: string[] }
-      const done = answered.has(it.key)
+      const done = answered.has(it.key) || (it.ev.task_id !== undefined && resolvedTaskIds.has(it.ev.task_id)) || missionTerminal
       threadChildren.push(createElement('div', { className: 'dsh-msg', key: it.key, style: done ? { opacity: .55 } : undefined },
         createElement('div', { className: 'dsh-msg-avatar info' }, Icon('helpCircle', 15)),
         createElement('div', { className: 'dsh-msg-body' },

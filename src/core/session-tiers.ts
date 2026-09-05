@@ -21,7 +21,8 @@ import { CONTENT_DENSITY_REVIEW, CTX_RESET_REVIEW_THRESHOLD_PCT, CTX_RESET_THRES
  * 现在改为从常量派生，只保留一个事实源。
  */
 export function tierDefaults(vendor: Vendor): SessionTier {
-  return DEFAULT_SESSION_TIERS[vendor]
+  // 自定义 vendor（vendor-registry 注册）无常量档位 → 回退 transient
+  return DEFAULT_SESSION_TIERS[vendor] ?? 'transient'
 }
 
 /** 上下文占用估算（tokens_in+out / 窗口大小，封顶 100%）。 */

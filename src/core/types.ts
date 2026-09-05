@@ -5,7 +5,15 @@
 
 import type { WorkerErrorEnvelope } from './error-envelope.js'
 
-export type Vendor = 'dsh' | 'claude' | 'codex' | 'ark' | 'opencode'
+/**
+ * 员工厂商标识（2026-09-06 开放化）：内置五家保留字面量联合（补全/校验友好），
+ * 自定义 harness（workbuddy / zcode / 未来的任何平台）经 vendor-registry 注册后
+ * 以字符串通过——类型上仍是 Vendor，编排/存储/事件面零改动。接入路径见
+ * docs/harness-接入指南.md。
+ */
+export const BUILT_IN_VENDORS = ['dsh', 'claude', 'codex', 'ark', 'opencode'] as const
+export type BuiltInVendor = (typeof BUILT_IN_VENDORS)[number]
+export type Vendor = BuiltInVendor | (string & {})
 
 /** 会话生命周期三档（方案书 3.2 节 / D2）。 */
 export type SessionTier = 'transient' | 'per-mission' | 'auto-reset'
@@ -499,8 +507,11 @@ export interface WorkerHandle {
   session_ref?: string
 }
 
-/** 默认档位（2.3 节⑤ / O7）：claude=per-mission 持久，codex=瞬时。 */
-export const DEFAULT_SESSION_TIERS: Record<Vendor, SessionTier> = {
+/**
+ * 默认档位（2.3 节⑤ / O7）：claude=per-mission 持久，codex=瞬时。
+ * 自定义 vendor 无缺省档位 → 使用处回退 'transient'（vendor-registry 可覆盖）。
+ */
+export const DEFAULT_SESSION_TIERS: Partial<Record<Vendor, SessionTier>> = {
   claude: 'per-mission',
   codex: 'transient',
   dsh: 'transient',
