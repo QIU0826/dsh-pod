@@ -87,6 +87,13 @@ export interface PodStore {
   updateHandoff(missionId: string, id: string, patch: Partial<Handoff>): void
   addLedgerEntry(entry: LedgerEntry): void
   listLedger(missionId: string): LedgerEntry[]
+  /**
+   * 账本入账 + mission 花费更新单笔持久化（2026-09-05）：recordUsage 此前是两次独立
+   * persist（JSON 两次全量写 / SQLite 两个 autocommit），中间崩溃留下「账本已记、
+   * mission.spent 未涨」的永久分歧——budgetStatus（按 mission 字段）永远低估，
+   * 熔断晚触发。实现此方法的 store 供 Ledger 优先使用；未实现的（测试桩）回落两笔。
+   */
+  recordUsageAtomic?(entry: LedgerEntry, missionId: string, spentTokens: number, spentUsd: number): void
   /** P1-1 delta 账本：重置摘要增量条目。 */
   listResetEntries(missionId: string, slotId?: string): ResetEntry[]
   addResetEntry(entry: ResetEntry): void
@@ -398,6 +405,16 @@ export class JsonStore implements PodStore {
 
   addLedgerEntry(entry: LedgerEntry): void {
     this.requireData().ledger.push({ ...entry })
+    this.persist()
+  }
+
+  recordUsageAtomic(entry: LedgerEntry, missionId: string, spentTokens: number, spentUsd: number): void {
+    const data = this.requireData()
+    const mission = data.missions[missionId]
+    if (mission === undefined) throw new NotFoundError('mission', missionId)
+    data.ledger.push({ ...entry })
+    data.missions[missionId] = { ...mission, spent_tokens: spentTokens, spent_equiv_usd: spentUsd, updated_at: this.clock() }
+    // 单次 persist：账本与花费同帧落盘，消除「记了账没记账」分歧窗口
     this.persist()
   }
 

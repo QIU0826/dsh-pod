@@ -104,11 +104,16 @@ export class Ledger {
       price_known: priceKnown,
       usage_source: source,
     }
-    this.store.addLedgerEntry(entry)
-
     const spentTokens = mission.spent_tokens + tokensIn + tokensOut
     const spentUsd = mission.spent_equiv_usd + equivUsd
-    this.store.updateMission(missionId, { spent_tokens: spentTokens, spent_equiv_usd: spentUsd })
+    // 原子入账（2026-09-05）：账本与 mission 花费同帧落盘。测试桩等未实现该方法的
+    // store 回落两笔独立写（行为不变）。
+    if (this.store.recordUsageAtomic !== undefined) {
+      this.store.recordUsageAtomic(entry, missionId, spentTokens, spentUsd)
+    } else {
+      this.store.addLedgerEntry(entry)
+      this.store.updateMission(missionId, { spent_tokens: spentTokens, spent_equiv_usd: spentUsd })
+    }
 
     const status = this.budgetStatus(missionId)
     if (status.over) {

@@ -13,6 +13,7 @@
  */
 
 import { spawn } from 'node:child_process'
+import { StringDecoder } from 'node:string_decoder'
 import { killTree } from './kill-tree.js'
 import { assertSafeArgvPath, assertSafeArgvToken } from './argv-guard.js'
 import { homedir } from 'node:os'
@@ -191,7 +192,10 @@ export class OpenCodeHeadlessBackend implements WorkerBackend {
       detached: process.platform !== 'win32',
       stdio: ['pipe', 'pipe', 'pipe'],
     })
+    // StringDecoder（2026-09-05）：管道按字节切块，CJK 多字节字符跨块边界时
+    // 逐块 toString 产出 U+FFFD → JSONL 解析静默失败。decoder 跨块拼接后再解码。
     let buffer = ''
+    const decoder = new StringDecoder('utf8')
     let lineHandler: (line: string) => void = () => {}
     const spawned = {
       pid: child.pid,
@@ -205,7 +209,7 @@ export class OpenCodeHeadlessBackend implements WorkerBackend {
       },
       exited: new Promise<{ code: number | null; signal: string | null; timedOut: boolean; spawnFailed: boolean }>((resolve) => {
         const consume = (chunk: Buffer): void => {
-          buffer += chunk.toString('utf8')
+          buffer += decoder.write(chunk)
           let index: number
           while ((index = buffer.indexOf('\n')) >= 0) {
             const line = buffer.slice(0, index)
@@ -215,6 +219,12 @@ export class OpenCodeHeadlessBackend implements WorkerBackend {
         }
         child.stdout?.on('data', consume)
         child.stderr?.on('data', consume)
+        // 残尾冲刷：无换行的最后一行不能丢
+        child.on('close', () => {
+          const rest = buffer + decoder.end()
+          buffer = ''
+          if (rest.length > 0) lineHandler(rest)
+        })
         let timedOut = false
         const timer = setTimeout(() => {
           timedOut = true

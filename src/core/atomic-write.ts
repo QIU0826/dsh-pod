@@ -76,8 +76,11 @@ export function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0)
     return true
-  } catch {
-    return false
+  } catch (error) {
+    // ESRCH = 进程不存在（真死）；EPERM = 进程存在但无权限发信号（活着，如
+    // 提权/受保护进程）——按死处理会让 sweep 误删存活进程在途的 tmp（2026-09-05）。
+    const code = (error as NodeJS.ErrnoException | undefined)?.code
+    return code === 'EPERM'
   }
 }
 

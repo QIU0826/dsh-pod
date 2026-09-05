@@ -69,6 +69,9 @@ interface RemoteEventBatch {
   completion: WorkerCompletion | null
 }
 
+/** 卫星事件轮询连续失败上限：超过即合成 failed completion 收口（防任务槽永久挂死）。 */
+const REMOTE_POLL_MAX_FAILURES = 60
+
 /** 卫星事件轮询结果：会话是否已完成。 */
 interface PollResult {
   events: WorkerProgressEvent[]
@@ -84,6 +87,8 @@ export class RemoteBackend implements WorkerBackend {
   }
   private readonly transport: SatelliteTransport
   private readonly pollMs: number
+  /** 本地已 kill 的 session（kill 请求失败时轮询循环的退出依据）。 */
+  private readonly killedSessions = new Set<string>()
 
   constructor(options: RemoteBackendOptions) {
     this.vendor = options.vendor
@@ -144,14 +149,40 @@ export class RemoteBackend implements WorkerBackend {
     // 游标增量（审计修复 #15）：不带 after 的全量轮询会把同一批进度事件每 pollMs
     // 重放一次（10min 任务 ≈ 每条事件重复投递上千次），本地事件洪峰挤出审计窗口
     let cursor = -1
+    // 连续失败上限（2026-09-05）：卫星消失（重启清 session map / 下线）时 /events 恒 404，
+    // 旧实现无限重试且 onExit 永不触发——编排器任务槽永久挂死，每次丢失任务泄漏一个
+    // 不死的轮询循环。连续 REMOTE_POLL_MAX_FAILURES 次失败 → 合成 failed completion 收口。
+    let consecutiveFailures = 0
     while (completion === null) {
+      if (this.killedSessions.has(handle.session_ref ?? '')) {
+        completion = {
+          exit: 'failed',
+          fault: 'crash',
+          error_detail: 'remote task killed locally',
+          usage: { tokens_in: 0, tokens_out: 0, source: 'measured' },
+          artifacts: [],
+        }
+        break
+      }
       let batch: PollResult
       try {
         const q = '/events?session_ref=' + encodeURIComponent(handle.session_ref ?? '') + (cursor >= 0 ? '&after=' + cursor : '')
         const raw = (await this.transport.request('GET', q)) as RemoteEventBatch & { next?: number }
         batch = { events: raw.events ?? [], completion: raw.completion ?? null }
         if (typeof raw.next === 'number') cursor = raw.next
-      } catch {
+        consecutiveFailures = 0
+      } catch (error) {
+        consecutiveFailures += 1
+        if (consecutiveFailures >= REMOTE_POLL_MAX_FAILURES) {
+          completion = {
+            exit: 'failed',
+            fault: 'crash',
+            error_detail: `satellite unreachable after ${consecutiveFailures} consecutive polls: ${error instanceof Error ? error.message : String(error)}`,
+            usage: { tokens_in: 0, tokens_out: 0, source: 'measured' },
+            artifacts: [],
+          }
+          break
+        }
         // 网络抖动：sleep 后重试，不误报完成
         await sleep(this.pollMs)
         continue
@@ -164,6 +195,9 @@ export class RemoteBackend implements WorkerBackend {
   }
 
   async kill(handle: WorkerHandle): Promise<void> {
+    // 本地标记先落（2026-09-05）：卫星不可达时 kill 请求本身会 reject，但轮询循环
+    // 必须能自行退出，不得依赖卫星回执。
+    this.killedSessions.add(handle.session_ref ?? '')
     await this.transport.request('POST', '/kill', { session_ref: handle.session_ref })
   }
 }

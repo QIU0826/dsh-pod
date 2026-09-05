@@ -17,7 +17,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { dirname, basename } from 'node:path'
 import { atomicWrite, sweepStaleTmp } from './atomic-write.js'
 import { resolveConflicts } from './memory-conflict.js'
 import type Database from 'better-sqlite3'
@@ -147,15 +147,24 @@ export class JsonMemoryPersistence implements MemoryPersistence {
   open(): void {
     const dir = dirname(this.filePath)
     mkdirSync(dir, { recursive: true })
-    // 扫掉崩溃进程遗留的 tmp 残骸（只删 pid 已死的），与 store.json 同源处置
-    sweepStaleTmp(dir, '.memory.tmp-')
+    // 扫掉崩溃进程遗留的 tmp 残骸（只删 pid 已死的），与 store.json 同源处置。
+    // 前缀必须是 tmpPathFor 的产物 `memory.json.tmp-`（2026-09-05：旧值 '.memory.tmp-'
+    // 永不匹配，残骸只增不减——共享内核抽掉后又从写入侧复发）。
+    sweepStaleTmp(dir, `${basename(this.filePath)}.tmp-`)
   }
 
   load(): MemoryData | undefined {
     const parsed = this.loadValidated(this.filePath)
     if (parsed !== undefined) return parsed
-    // 主文件不存在 → 全新库（fail-closed 空，正常首次启动路径）
-    if (!existsSync(this.filePath)) return undefined
+    // 主文件不存在 ≠ 一定是全新库（2026-09-05）：atomicWrite 的「main→bak」与「tmp→main」
+    // 两次 rename 之间崩溃，磁盘上正是「main 缺失而 .bak 完好」——与 store.ts 的崩溃窗口
+    // 恢复同款处置：回读 .bak 并立即原子写回主文件（自愈不依赖上层调用方 persist），
+    // 绝不让整层记忆静默清零。真·首次启动（.bak 也不存在）才返回 undefined。
+    if (!existsSync(this.filePath)) {
+      const fromBackup = this.loadValidated(`${this.filePath}.bak`)
+      if (fromBackup !== undefined) this.save(fromBackup)
+      return fromBackup
+    }
     // 主文件损坏（2026-09-04 修复）：先试 .bak 自愈（atomicWrite 每次写前都把旧主文件
     // 转存 .bak，.bak = 最后一次成功写的内容），再把损坏主文件改名 .corrupt-* 留证。
     // 旧实现直接返回 undefined（注释声称「与 store 一致」，但 store.ts 实际是 .bak 自愈

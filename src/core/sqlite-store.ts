@@ -64,13 +64,21 @@ export class SqliteStore implements PodStore {
   open(): void {
     mkdirSync(this.rootDir, { recursive: true })
     const dbPath = join(this.rootDir, 'pod.db')
-    const fresh = !existsSync(dbPath)
     const db = new Database(dbPath)
     db.pragma('journal_mode = WAL')
     db.pragma('synchronous = NORMAL')
     this.db = db
     this.createTables()
-    if (fresh) this.migrateFromJsonStore()
+    // 迁移判定（2026-09-05）：不再只看 pod.db 文件是否存在——首启迁移中途崩溃（断电/kill）
+    // 会留下已建表的 pod.db 而 store.json 未迁，旧判定 fresh=false 永久跳过迁移 = 静默空库。
+    // 改按 meta 标志：无标志且 missions 为空才尝试迁移（正常二次启动有标志直接跳过；
+    // 迁移插入用 OR IGNORE 保证「tx 已提交但 rename 未完成」窗口的重入安全）。
+    const migrated = db.prepare("SELECT value FROM meta WHERE key = 'json_migrated'").get() as { value: string } | undefined
+    if (migrated === undefined) {
+      const count = (db.prepare('SELECT COUNT(*) AS n FROM missions').get() as { n: number }).n
+      if (count === 0) this.migrateFromJsonStore()
+      db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('json_migrated', '1')").run()
+    }
     this.migrateTaskKeys()
     this.ensureSchemaVersion()
   }
@@ -107,16 +115,16 @@ export class SqliteStore implements PodStore {
     legacy.open()
     const db = this.requireDb()
     const tx = db.transaction(() => {
-      const insMission = db.prepare('INSERT INTO missions (id, data) VALUES (?, ?)')
+      const insMission = db.prepare('INSERT OR IGNORE INTO missions (id, data) VALUES (?, ?)')
       for (const m of legacy.listMissions()) insMission.run(m.id, JSON.stringify(m))
-      const insSlot = db.prepare('INSERT INTO slots (id, data) VALUES (?, ?)')
-      const insTask = db.prepare('INSERT INTO tasks (id, data) VALUES (?, ?)')
-      const insHandoff = db.prepare('INSERT INTO handoffs (id, data) VALUES (?, ?)')
-      const insLedger = db.prepare('INSERT INTO ledger (data) VALUES (?)')
-      const insReset = db.prepare('INSERT INTO reset_entries (id, data) VALUES (?, ?)')
-      const insApproval = db.prepare('INSERT INTO approvals (id, data) VALUES (?, ?)')
-      const insRule = db.prepare('INSERT INTO rules (id, data) VALUES (?, ?)')
-      const insEvent = db.prepare('INSERT INTO events (mission_id, seq, id, data) VALUES (?, ?, ?, ?)')
+      const insSlot = db.prepare('INSERT OR IGNORE INTO slots (id, data) VALUES (?, ?)')
+      const insTask = db.prepare('INSERT OR IGNORE INTO tasks (id, data) VALUES (?, ?)')
+      const insHandoff = db.prepare('INSERT OR IGNORE INTO handoffs (id, data) VALUES (?, ?)')
+      const insLedger = db.prepare('INSERT OR IGNORE INTO ledger (data) VALUES (?)')
+      const insReset = db.prepare('INSERT OR IGNORE INTO reset_entries (id, data) VALUES (?, ?)')
+      const insApproval = db.prepare('INSERT OR IGNORE INTO approvals (id, data) VALUES (?, ?)')
+      const insRule = db.prepare('INSERT OR IGNORE INTO rules (id, data) VALUES (?, ?)')
+      const insEvent = db.prepare('INSERT OR IGNORE INTO events (mission_id, seq, id, data) VALUES (?, ?, ?, ?)')
       for (const m of legacy.listMissions()) {
         for (const s of legacy.listSlots(m.id)) insSlot.run(s.id, JSON.stringify(s))
         for (const t of legacy.listTasks(m.id)) insTask.run(`${t.mission_id}::${t.id}`, JSON.stringify(t))
@@ -316,6 +324,16 @@ export class SqliteStore implements PodStore {
 
   addLedgerEntry(entry: LedgerEntry): void {
     this.requireDb().prepare('INSERT INTO ledger (data) VALUES (?)').run(JSON.stringify({ ...entry }))
+  }
+
+  recordUsageAtomic(entry: LedgerEntry, missionId: string, spentTokens: number, spentUsd: number): void {
+    const db = this.requireDb()
+    if (this.getMission(missionId) === undefined) throw new NotFoundError('mission', missionId)
+    // 单事务：账本行与 mission 花费同帧提交（2026-09-05，与 JsonStore.recordUsageAtomic 同语义）
+    db.transaction(() => {
+      db.prepare('INSERT INTO ledger (data) VALUES (?)').run(JSON.stringify({ ...entry }))
+      this.upsertJson('missions', missionId, { ...(this.getMission(missionId)!), spent_tokens: spentTokens, spent_equiv_usd: spentUsd, updated_at: this.clock() })
+    })()
   }
 
   listLedger(missionId: string): LedgerEntry[] {

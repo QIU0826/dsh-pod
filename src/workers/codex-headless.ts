@@ -13,6 +13,7 @@
  */
 
 import { spawn } from 'node:child_process'
+import { StringDecoder } from 'node:string_decoder'
 import { killTree } from './kill-tree.js'
 import { assertSafeArgvPath, assertSafeArgvToken } from './argv-guard.js'
 import { homedir } from 'node:os'
@@ -225,9 +226,12 @@ export class CodexHeadlessBackend implements WorkerBackend {
         stdin.end()
       },
       exited: new Promise<{ code: number | null; signal: string | null; timedOut: boolean; spawnFailed: boolean }>((resolve) => {
+        // StringDecoder（2026-09-05）：管道按字节切块，CJK 多字节字符跨块边界时
+        // 逐块 toString 产出 U+FFFD → JSONL 解析静默失败。decoder 跨块拼接后再解码。
         let buffer = ''
+        const decoder = new StringDecoder('utf8')
         const consume = (chunk: Buffer): void => {
-          buffer += chunk.toString('utf8')
+          buffer += decoder.write(chunk)
           let index: number
           while ((index = buffer.indexOf('\n')) >= 0) {
             const line = buffer.slice(0, index)
@@ -237,13 +241,20 @@ export class CodexHeadlessBackend implements WorkerBackend {
         }
         child.stdout?.on('data', consume)
         // stderr：同流解析之外保留尾随（codex 的 API/鉴权错误行走这里）
+        const stderrDecoder = new StringDecoder('utf8')
         child.stderr?.on('data', (chunk: Buffer) => {
-          for (const line of chunk.toString('utf8').split('\n')) {
+          for (const line of stderrDecoder.write(chunk).split('\n')) {
             const t = line.trim()
             if (t.length > 0) stderrTail.push(t)
           }
           if (stderrTail.length > 12) stderrTail.splice(0, stderrTail.length - 12)
           consume(chunk)
+        })
+        // 残尾冲刷：无换行的最后一行（codex 最终 agent/de Complete 行）不能丢
+        child.on('close', () => {
+          const rest = buffer + decoder.end()
+          buffer = ''
+          if (rest.length > 0) lineHandler(rest)
         })
         let timedOut = false
         const timer = setTimeout(() => {

@@ -128,9 +128,11 @@ describe('接入点：JsonStore / MemoryStore open() 扫残骸', () => {
     expect(existsSync(join(dir, 'store.json'))).toBe(true)
   })
 
-  it('MemoryStore.open() 清掉崩溃残留的 .memory.tmp-<pid>', () => {
+  it('MemoryStore.open() 清掉崩溃残留的 memory.json.tmp-<pid>（真实 tmpPathFor 前缀）', () => {
     const dir = tempDir()
-    const stale = join(dir, `.memory.tmp-${deadPid()}`)
+    // 前缀必须是 tmpPathFor(memory.json) 的产物 `memory.json.tmp-`——旧用例跟着实现里
+    // 的错误字面量 '.memory.tmp-' 一起写错，清扫是死代码（2026-09-05 修正后同步用例）。
+    const stale = join(dir, `memory.json.tmp-${deadPid()}`)
     writeFileSync(stale, '{}', 'utf8')
     new MemoryStore({ filePath: join(dir, 'memory.json'), clock: () => 1_700_000_000_000 }).open()
     expect(existsSync(stale)).toBe(false)

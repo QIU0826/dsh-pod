@@ -7,6 +7,7 @@ import { existsSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import type Database from 'better-sqlite3'
 import { JsonStore, type PodStore } from './store.js'
+import { StoreCorruptError } from './errors.js'
 import { SqliteStore } from './sqlite-store.js'
 import { JsonMemoryPersistence, MemoryStore, SqliteMemoryPersistence, type MemoryPersistence } from './memory.js'
 
@@ -57,9 +58,17 @@ export function openPodData(options: OpenPodDataOptions): OpenPodDataResult {
     memory.open()
     return { store: sqlite, memory, engine: 'sqlite', db, rootDir }
   } catch (error) {
-    // R12 回退：native 不可用 → JSON，绝不静默开空库；先释放半开的 SQLite 句柄
-    console.error('[dsh-pod] sqlite open failed, falling back to JSON:', error)
+    // 先释放半开的 SQLite 句柄（2026-09-05：rethrow 分支此前跳过 close，pod.db 句柄
+    // 泄漏 → Windows 上目录删不掉 EBUSY）；两条分支都要释放。
     if (sqlite !== undefined) { try { sqlite.close() } catch { /* best effort */ } }
+    // STORE_CORRUPT 不回退（2026-09-05 修复）：损坏源自 JsonStore.open()（SQLite 首启
+    // 迁移内部读 store.json）——它已把损坏主文件改名 .corrupt-* 留证后抛错。此处若照
+    // R12 再开一次 JsonStore，主文件已不存在 → 静默开空库，旧数据永远滞留在 .corrupt-*
+    // 且 pod.db 半建成后下次启动走 sqlite 路径不再迁移。fail-fast 交上层处置
+    // （plugin.apply 的 try/catch 捕获后降级 503，宿主不受影响——R6/R10 仍成立）。
+    if (error instanceof StoreCorruptError) throw error
+    // R12 回退：native 不可用 → JSON，绝不静默开空库
+    console.error('[dsh-pod] sqlite open failed, falling back to JSON:', error)
     const store = new JsonStore({ rootDir, clock })
     store.open()
     const memory = openMemoryJson(rootDir, clock, options.memoryMigrateFrom)

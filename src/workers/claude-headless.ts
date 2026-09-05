@@ -14,6 +14,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process'
+import { StringDecoder } from 'node:string_decoder'
 import { existsSync } from 'node:fs'
 import { killTree } from './kill-tree.js'
 import { assertSafeArgvPath, assertSafeArgvToken } from './argv-guard.js'
@@ -367,6 +368,8 @@ export interface SpawnedClaude {
   onLine(line: string): void
   /** 进程退出（code/signal/timedOut；spawnFailed = 二进制启动失败，如 ENOENT）。 */
   exited: Promise<{ code: number | null; signal: string | null; timedOut: boolean; spawnFailed?: boolean }>
+  /** stdio 全部冲刷完毕（'close'；exit 可先于最后一批 stdout data——结果行迟到防丢）。 */
+  closed?: Promise<void>
   /** prompt 经 stdin 注入（短固定 argv，无引号/长度风险）。 */
   writeStdin(text: string): void
 }
@@ -468,6 +471,7 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
   private readonly pluginDir: string | undefined
   /** 员工侧 MCP 接线：worker-mcp.json 路径（存在才注入 --mcp-config，见 buildClaudeArgs）。 */
   private readonly mcpConfigPath: string | undefined
+  private readonly registry: ProcessRegistry | undefined
   private readonly taskTimeoutMs: number
 
   constructor(options: ClaudeBackendOptions = {}) {
@@ -478,6 +482,7 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
     // pluginDir 默认不传（保持原状：--bare 跳过 plugin sync）；未来上游兼容后经此显式启用
     this.pluginDir = options.pluginDir
     this.mcpConfigPath = options.mcpConfigPath
+    this.registry = options.registry
     this.taskTimeoutMs = options.taskTimeoutMs ?? 15 * 60_000
     // 默认探测复用 preflight 的 shell-fallback runner（.cmd 包装器兼容）
     this.detectRunner = options.detectRunner ?? execCommandRunner
@@ -525,12 +530,29 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
       mcpConfigPath: this.mcpConfigPath,
     })
     const env = this.envForSlot !== undefined ? this.envForSlot(slot) : undefined
+    // 基线 HEAD 必须在 spawn 前捕获（2026-09-05 修复）：基线的语义是「任务开始前的
+    // HEAD」，此后任务的新 commit 才算本任务产物。旧实现在 exited 之后才读——那时
+    // HEAD 已是（可能存在的）任务产物 commit，`headSha !== baselineHead` 恒 false，
+    // commit_sha 校正分支整段死代码（模型虚报 sha 的 ~19% 实证场景永不校正）。
+    const baselineHead = await this.currentHead(worktree)
     const spawned = this.spawnClaude(args, worktree, env)
     spawned.writeStdin(prompt)
     const handle: WorkerHandle = { pid: spawned.child.pid }
-    const session = this.collect(slot, task, worktree, spawned, callbacks)
+    // 进程治理（方案书 3.2）：pid↔slot↔task 注册，完成即注销（2026-09-05 接线——
+    // 此前 registry 选项被声明但从未读取，调用方以为有跟踪，实际是静默 no-op）。
+    const pid: number | undefined = spawned.child.pid
+    const trackable = this.registry !== undefined && pid !== undefined && Number.isInteger(pid) && pid > 0
+    if (this.registry !== undefined && trackable) {
+      try {
+        this.registry.register({ pid: pid!, slot_id: slot.id, task_id: task.id })
+      } catch {
+        // DUPLICATE_PID（pid 复用窗口）等注册失败不阻断派发；kill 语义仍由 killTree 兜底
+      }
+    }
+    const session = this.collect(slot, task, worktree, spawned, callbacks, baselineHead)
     session.then(({ sessionRef, completion }) => {
       handle.session_ref = sessionRef
+      if (this.registry !== undefined && trackable) this.registry.unregister(pid!)
       callbacks.onExit?.(completion)
     })
     return handle
@@ -562,28 +584,6 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
         stdin.end()
       },
       exited: new Promise<{ code: number | null; signal: string | null; timedOut: boolean; spawnFailed: boolean }>((resolve) => {
-        let buffer = ''
-        const consume = (chunk: Buffer): void => {
-          buffer += chunk.toString('utf8')
-          let index: number
-          while ((index = buffer.indexOf('\n')) >= 0) {
-            const line = buffer.slice(0, index)
-            buffer = buffer.slice(index + 1)
-            lineHandler(line)
-          }
-        }
-        child.stdout?.on('data', consume)
-        // stderr：除同流解析外，单独保留尾随（CLI 的 API 报错/鉴权失败走这里——
-        // 审计实证：401 时 collect 只看得到 exit 1，根因被静默丢弃）
-        child.stderr?.on('data', (chunk: Buffer) => {
-          for (const line of chunk.toString('utf8').split('\n')) {
-            const t = line.trim()
-            if (t.length === 0) continue
-            stderrTail.push(t)
-          }
-          if (stderrTail.length > 12) stderrTail.splice(0, stderrTail.length - 12)
-          consume(chunk)
-        })
         const timer = setTimeout(() => {
           // 树杀：shell 包装下 child.kill() 只杀到 cmd.exe，CLI 孙进程会继续烧 token
           void killTree(child.pid)
@@ -600,7 +600,59 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
           resolve({ code, signal, timedOut: false, spawnFailed: false })
         })
       }),
+      // 'close' = stdio 全部冲刷完毕（2026-09-05 修复）：Node 的 'exit' 可先于最后一批
+      // stdout 'data' 触发——最终 result 行（含 MISSION_REPORT）迟到会被判 silent_failure
+      // 白烧重试（真实 mission 观察到的「偶发无报告退出」与此同征）。collect 等 closed
+      // 再收尾，2s 兜底防病理悬挂（流被继承/泄漏时不 endless 等）。
+      closed: new Promise<void>((resolve) => {
+        const guard = setTimeout(() => resolve(), 2_000)
+        child.on('close', () => {
+          clearTimeout(guard)
+          resolve()
+        })
+      }),
     }
+    // 行缓冲 + StringDecoder（2026-09-05 修复）：管道按字节切块，多字节字符（CJK 3 字节）
+    // 跨块边界时逐块 toString 会产出 U+FFFD → JSON.parse 失败 → 事件静默丢弃。
+    // decoder 保证跨块序列拼接后再解码。
+    let buffer = ''
+    const decoder = new StringDecoder('utf8')
+    const consume = (chunk: Buffer): void => {
+      buffer += decoder.write(chunk)
+      let index: number
+      while ((index = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, index)
+        buffer = buffer.slice(index + 1)
+        lineHandler(line)
+      }
+    }
+    // 流收尾：残尾（无换行的最后一行）+ 解码器残留必须冲进行处理，否则最终 result 行丢失
+    const flushTail = (): void => {
+      const rest = buffer + decoder.end()
+      buffer = ''
+      if (rest.length > 0) lineHandler(rest)
+    }
+    child.stdout?.on('data', consume)
+    // stderr：除同流解析外，单独保留尾随（CLI 的 API 报错/鉴权失败走这里——
+    // 审计实证：401 时 collect 只看得到 exit 1，根因被静默丢弃）
+    const stderrDecoder = new StringDecoder('utf8')
+    child.stderr?.on('data', (chunk: Buffer) => {
+      for (const line of stderrDecoder.write(chunk).split('\n')) {
+        const t = line.trim()
+        if (t.length === 0) continue
+        stderrTail.push(t)
+      }
+      if (stderrTail.length > 12) stderrTail.splice(0, stderrTail.length - 12)
+      consume(chunk)
+    })
+    child.stderr?.on('close', () => {
+      const rest = stderrDecoder.end()
+      if (rest.length > 0) {
+        const t = rest.trim()
+        if (t.length > 0) stderrTail.push(t)
+      }
+    })
+    child.on('close', flushTail)
     Object.defineProperty(spawned, 'onLine', {
       set(fn: (line: string) => void) {
         lineHandler = fn
@@ -631,6 +683,8 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
     callbacks: {
       onProgress?(event: WorkerProgressEvent): void
     },
+    /** 任务开始前的 HEAD（start() 在 spawn 前捕获；空串 = 无基线，按旧行为放行）。 */
+    baselineHead: string,
   ): Promise<{ sessionRef?: string; completion: WorkerCompletion }> {
     // 环形缓冲（审计修复）：--include-partial-messages 下事件行数远超最终行数，
     // 无界 push 使长任务内存线性膨胀；保留尾部窗口已覆盖解析需求
@@ -651,6 +705,10 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
       }
     }
     const exit = await spawned.exited
+    // 等 stdio 冲刷（'close'）再收尾：exit 先于最后一批 data 时，最终 result 行
+    //（含 MISSION_REPORT/usage）尚未进 lines——收早了就是一次「无报告退出」误判。
+    // 旧测试桩无 closed 字段：Promise.resolve 立即通过，行为不变。
+    await (spawned.closed ?? Promise.resolve())
     const parsedLines = lines.map(parseStreamJsonLine)
     // 用副本反转取「最后一条」：原代码两次 reverse() 原地反转再反转回来互相抵消，
     // 一旦中间插入新的取数就会静默取错方向。ES2022 无 findLast，故显式副本。
@@ -667,7 +725,7 @@ export class ClaudeHeadlessBackend implements WorkerBackend {
       : undefined
     // 基线 HEAD（审计修复）：校正只信「任务期间新产生」的 commit。同 worktree 串行复用
     // 时前一任务的 HEAD 若被当作本任务的 sha，会拿别人的 diff 参与本任务裁决。
-    const baselineHead = await this.currentHead(worktree)
+    // （2026-09-05：捕获点移到 start() spawn 前——进程退出后再读恒等于结果 HEAD，校正如死代码。）
     const usage = resultEvent === undefined ? { tokens_in: 0, tokens_out: 0, source: 'measured' as const } : (extractUsage(resultEvent) ?? { tokens_in: 0, tokens_out: 0, source: 'measured' as const })
     const errorInfo = resultEvent === undefined ? { isError: false } : resultErrorInfo(resultEvent)
     // spawn 失败显式归为 failed(crash)：不标则 code=null 走不到任何故障分支，会被误判 done
