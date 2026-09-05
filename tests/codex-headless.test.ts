@@ -343,7 +343,7 @@ describe('codex 纯函数补充分支（2026-09-05 覆盖加固）', () => {
 
 describe('真实子进程链（2026-09-05 覆盖加固：StringDecoder 跨块重组 + close 残尾冲刷）', () => {
   it('真 spawn：CJK 字符跨 stdout 块边界被 decoder 正确重组；末行无换行经 close 冲刷不丢', async () => {
-    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs')
+    const { mkdtempSync, writeFileSync, chmodSync, rmSync } = await import('node:fs')
     const { tmpdir } = await import('node:os')
     const { join } = await import('node:path')
     const dir = mkdtempSync(join(tmpdir(), 'pod-codex-fixture-'))
@@ -362,9 +362,17 @@ describe('真实子进程链（2026-09-05 覆盖加固：StringDecoder 跨块重
         '  process.exit(0)',
         '}, 80)',
       ]
+      // 跨平台（2026-09-05 CI 实证）：POSIX shell:false 下 binary 整串被当可执行文件名
+      // （ENOENT → failed）——改为 shebang + chmod 直接执行；Windows shell:true 用 node 前缀。
+      const isWin = process.platform === 'win32'
       const fixture = join(dir, 'fixture.js')
-      writeFileSync(fixture, fixtureLines.join('\n'), 'utf8')
-      const backend = new CodexHeadlessBackend({ binary: 'node ' + fixture, clock: () => Date.now() })
+      if (isWin) {
+        writeFileSync(fixture, fixtureLines.join('\n'), 'utf8')
+      } else {
+        writeFileSync(fixture, '#!/usr/bin/env node\n' + fixtureLines.join('\n'), 'utf8')
+        chmodSync(fixture, 0o755)
+      }
+      const backend = new CodexHeadlessBackend({ binary: isWin ? 'node ' + fixture : fixture, clock: () => Date.now() })
       const progressTexts: Array<string | undefined> = []
       let captured: WorkerCompletion | undefined
       await backend.start(makeSlot('transient'), { id: 'T-1', mission_id: 'M-1', title: 't', spec: 's', skill_tags: [], type: 'implement', depends_on: [], status: 'ready', attempts: 0, soft_attempts: 0, max_wall_clock_ms: 60_000, created_at: 0, updated_at: 0 } as never, dir, {
