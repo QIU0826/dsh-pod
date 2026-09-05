@@ -16,6 +16,7 @@ import { ApplyPatch, execGitRunner, type ApplyResult } from './core/apply-patch.
 import { BackendsLock } from './core/backends-lock.js'
 import { Experiments } from './core/experiments.js'
 import { MemoryStore, type ReflectionResult } from './core/memory.js'
+import { makeMemoryEmbedderFromEnv } from './core/memory-embed.js'
 import { PodError, NotFoundError } from './core/errors.js'
 import { Ledger } from './core/ledger.js'
 import { Notifier } from './core/notifier.js'
@@ -300,8 +301,33 @@ export class PodService {
     this.commanderLauncher = launcher
   }
 
+  private missionStageListener: (() => void) | undefined
+
+  /**
+   * P0-1 宿主侧接线（tool-restrict）：mission 阶段变化的同步通知——deny 掩码在
+   * launch/abort/pause/resume/deny/approve 这些 commander 自己发起的动作上**零滞后**
+   * 跟随生命周期（纯轮询会让「launch → 立刻 dispatch」热路径出现最长一个 tick 的
+   * UNKNOWN_TOOL 窗口，比 409 更糟）。轮询 maintenanceTick 只作兜底。
+   */
+  setMissionStageListener(listener: (() => void) | undefined): void {
+    this.missionStageListener = listener
+  }
+
+  private notifyStageChange(): void {
+    try {
+      this.missionStageListener?.()
+    } catch {
+      /* 掩码刷新失败不影响业务动作（fail-safe 全量可见） */
+    }
+  }
+
   get activeMissionId(): string | undefined {
     return this.store.getActiveMission()?.id
+  }
+
+  /** 活跃 mission 的状态（P0-1 宿主侧接线：deny 掩码的阶段推导口径）；无活跃 mission → undefined。 */
+  get activeMissionStatus(): string | undefined {
+    return this.store.getActiveMission()?.status
   }
 
   /** 启动 mission：创建编排器（含真实 worktree/diff/verifier）并后台驱动。 */
@@ -411,6 +437,7 @@ export class PodService {
         })
       })
     }
+    this.notifyStageChange()
     return mission
   }
 
@@ -570,11 +597,13 @@ export class PodService {
   /** 暂停当前 mission（W4：运行中可暂停，状态磁盘化）。 */
   pauseMission(): void {
     this.requireOrchestrator().pause()
+    this.notifyStageChange()
   }
 
   /** 恢复当前 mission（paused → 继续；取决于审批卡是否 pending）。 */
   resumeMission(): void {
     this.requireOrchestrator().resume()
+    this.notifyStageChange()
   }
 
   /** 任务级暂停（任务生命周期 InProgress→Paused）：终止在途进程但不消费 attempts。 */
@@ -631,6 +660,9 @@ export class PodService {
       experiments: this.experiments,
       // N2 记忆运行时注入：派发时按槽位/团队拉相关记录（有界、指针式），worker 无需 pod_mem_* 工具
       memoryQuery: (q) => this.memory.query(q as Parameters<MemoryStore['query']>[0]),
+      // P1-4 深化③ 向量召回（2026-09-05）：provider 由 env 装配（POD_MEMORY_EMBEDDING_URL
+      // 或 POD_MEMORY_EMBEDDING=local-hash）；未配置 = undefined = 纯 BM25 现状路径。
+      memoryEmbed: makeMemoryEmbedderFromEnv(),
       // P1 feedback 环 v2（experiments 'feedback-consult' 灰度）：语义类拒绝时真咨询
       // 最匹配槽位的 claude worker 执行侧约束。有界（10s 超时），失败回落 v1 名册反馈。
       consult: (prompt) => this.consultClaude(prompt),
@@ -1249,12 +1281,15 @@ export class PodService {
       } else {
         orch.rollbackApproval(approvalId)
       }
+      // approve/deny 会把 mission 推到 done/running（P0-1 deny 掩码零滞后跟随）
+      this.notifyStageChange()
       return result
     })
   }
 
   deny(approvalId: string, by: string, reason: string): void {
     this.requireOrchestrator().deny(approvalId, by, reason)
+    this.notifyStageChange()
   }
 
   /** 模式 2 派发确认门：人工批准放行 → 授权对应任务派发（灰度）。 */
@@ -1321,6 +1356,7 @@ export class PodService {
 
   abort(reason: string): void {
     this.requireOrchestrator().abortMission(reason)
+    this.notifyStageChange()
   }
 
   waitRun(): Promise<RunSummary> | undefined {

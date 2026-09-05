@@ -19,6 +19,7 @@ import type {} from '@deepseek-ai/dsh-tools'
 import { PodError } from './core/errors.js'
 import { createPodRuntime, type PodRuntime } from './core/pod-runtime.js'
 import { makePodTools, makeCommanderStartTool } from './pod-tools.js'
+import { StageDenyController, missionStatusToStage } from './core/tool-restrict.js'
 import { PodService } from './pod-service.js'
 import { createCommanderSession } from './commander.js'
 import { makePodRoutes } from './routes.js'
@@ -135,13 +136,25 @@ export function apply(ctx: Context, config?: PodConfig): void {
           void session // handle 生命周期随插件卸载（MVP 单 commander）
           return { sessionId }
         })
-        // 周期巡检：watchdog 空闲/墙钟 + 审批超期自动 pause（CR-05-6 / CR-01-7）
+        // 周期巡检：watchdog 空闲/墙钟 + 审批超期自动 pause（CR-05-6 / CR-01-7）。
+        // 同拍接 P0-1 宿主侧 deny 掩码（tool-restrict.ts）：按活跃 mission 阶段隐藏
+        // 「该阶段调用必然失败」的 pod_* 工具；fail-safe（deny 集内调用本就 409/报错）。
+        const denyController = new StageDenyController((deny) => ctx.tools.restrict({ deny: [...deny] }))
+        // 同步刷新（零滞后）：launch/abort/pause/resume/deny/approve 动作内即时跟随
+        const syncDenyMask = (): void => {
+          const sync = denyController.sync(missionStatusToStage(service!.activeMissionStatus))
+          if (sync.changed && sync.denied.length > 0) {
+            console.error('[dsh-pod] tool deny mask applied:', sync.denied.join(','))
+          }
+        }
+        service!.setMissionStageListener(syncDenyMask)
         const maintenanceTimer = setInterval(() => {
           try {
             const result = service!.maintenanceTick()
             if (result.staleApprovals.length > 0) {
               console.error('[dsh-pod] stale approvals paused mission:', result.staleApprovals)
             }
+            syncDenyMask()
           } catch (error) {
             console.error('[dsh-pod] maintenance tick failed:', error)
           }
@@ -164,6 +177,8 @@ export function apply(ctx: Context, config?: PodConfig): void {
         const disposers = [...tools, commanderTool].map((tool) => ctx.tools.register(tool))
         return () => {
           clearInterval(maintenanceTimer)
+          service!.setMissionStageListener(undefined)
+          denyController.dispose()
           for (const dispose of disposers) dispose()
         }
       },

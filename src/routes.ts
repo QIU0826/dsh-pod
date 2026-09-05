@@ -18,6 +18,7 @@ import { resolveAsset, contentTypeFor } from './core/asset-whitelist.js'
 import { allowsJsonBody } from './core/http-guard.js'
 import { NotFoundError, PodError } from './core/errors.js'
 import { browseDirectories } from './core/fs-browse.js'
+import { createAgUiStreamMapper, formatAgUiSseFrame } from './core/agui.js'
 import type { PlanTaskInput } from './core/orchestrator.js'
 import { buildAgentCard, internalEventToA2a, isFinalA2aEvent, missionToA2aTask, parsePushConfig } from './core/a2a.js'
 import { createA2aPushRegistry } from './a2a-push.js'
@@ -446,12 +447,21 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
           connection: 'keep-alive',
         })
         res.write('retry: 2000\n\n')
+        // AG-UI 兼容格式（后续计划 P3，2026-09-05）：?format=agui 时经映射层转换
+        // （文本 chunk 装配 START/CONTENT/END、工具调用三元组、mission 生命周期 RUN_*）；
+        // 缺省 = 原生 Pod 帧不变。断连时冲刷未结束的文本消息。
+        const aguiMode = new URL(req.url ?? '/', 'http://x').searchParams.get('format') === 'agui'
+        const aguiMapper = aguiMode ? createAgUiStreamMapper() : undefined
         // id 游标（审计 P1 修复）：ts 严格比较会同毫秒丢事件，与轮询路径同源
         let lastId = ''
         const push = (events: Array<{ id: string; ts: number; kind: string; task_id?: string; slot_id?: string; payload: Record<string, unknown> }>): void => {
           for (const event of events) {
             if (res.writableEnded) return
-            res.write(formatSseFrame(event))
+            if (aguiMapper !== undefined) {
+              res.write(formatAgUiSseFrame(aguiMapper.convert(event as never)))
+            } else {
+              res.write(formatSseFrame(event))
+            }
             lastId = event.id
           }
         }
@@ -465,8 +475,15 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
             /* 订阅期间 store 读取异常：保持连接，下轮重试 */
           }
         }, 1_000)
-        req.on('close', () => clearInterval(timer))
-        res.on('close', () => clearInterval(timer))
+        const closeHandler = (): void => {
+          clearInterval(timer)
+          if (aguiMapper !== undefined && !res.writableEnded) {
+            const tail = formatAgUiSseFrame(aguiMapper.flush())
+            if (tail.length > 0) res.write(tail)
+          }
+        }
+        req.on('close', closeHandler)
+        res.on('close', closeHandler)
       },
     },
     {

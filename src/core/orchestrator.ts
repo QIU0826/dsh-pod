@@ -25,6 +25,7 @@ import { buildTwoLevelDiff } from './diff-hunks.js'
 import { appendTaskFact, resetSummaryFromStore } from './reset-ledger.js'
 import { teamOwnerId } from './memory.js'
 import { rankMemories } from './memory-rank.js'
+import { rankMemoriesHybrid, type EmbeddingFunction } from './memory-embed.js'
 import { Ledger } from './ledger.js'
 import { MissionMachine } from './mission.js'
 import { PLAN_TASK_SKILL, REPLAN_LIMIT, MAX_CONSULT_FEEDBACK_CHARS, bestConsultSlot, buildCapabilityFeedback, buildConsultPrompt, buildPlannerSpec, buildReviewGapFeedback, classifyPlanErrors, extractPlanProposal, hasPlannerSlot, validatePlanProposal } from './planner.js'
@@ -151,6 +152,12 @@ export interface OrchestratorDeps {
    */
   memoryQuery?: (q: MemoryQueryLike) => MemoryRecordLike[]
   /**
+   * 记忆向量召回（P1-4 深化③ 方向，2026-09-05 落地）：注入后派发注入走 BM25+cosine 混合
+   * 排序（memory-embed.ts）；未注入 = 纯 BM25 现状路径，行为逐字节不变。嵌入失败自动
+   * 回落纯 BM25（召回增强是增益不是依赖）。provider 由部署侧 env 配置（makeMemoryEmbedderFromEnv）。
+   */
+  memoryEmbed?: EmbeddingFunction
+  /**
    * P1 feedback 环 v2 的 LLM 咨询通道（experiments 'feedback-consult' 灰度，默认关）：
    * 规划提案语义类拒绝（能力缺口）时，真咨询相关 worker 的执行侧约束（超出声明标签），
    * 而非 v1 的确定性名册反馈。组装层注入（core 不读 process.env）；未注入 / 咨询失败 /
@@ -257,6 +264,7 @@ export class MissionOrchestrator {
   private readonly pauseMarkers = new Set<string>()
   private readonly credentialHint: ((vendor: Vendor) => boolean) | undefined
   private readonly memoryQuery: ((q: MemoryQueryLike) => MemoryRecordLike[]) | undefined
+  private readonly memoryEmbed: EmbeddingFunction | undefined
   private readonly consult: ((prompt: string) => Promise<{ ok: boolean; text: string }>) | undefined
   private readonly wakeLatch: WakeLatch = { fired: false }
   private stopRequested = false
@@ -293,6 +301,7 @@ export class MissionOrchestrator {
     this.credentialHint = deps.credentialHint
     this.onPlanExpanded = deps.onPlanExpanded
     this.memoryQuery = deps.memoryQuery
+    this.memoryEmbed = deps.memoryEmbed
     this.consult = deps.consult
     this.experiments = deps.experiments ?? { isEnabled: () => false }
     this.approvals = new ApprovalEngine(this.store, { clock: this.clock })
@@ -770,7 +779,7 @@ export class MissionOrchestrator {
     }
     // N2 记忆运行时注入（CR-07-4）：按「槽位 + 团队(team:<mission>)」拉相关记录，
     // 有界 + 指针式（content_ref 非原始对话）；worker 不必有 pod_mem_* 工具——相关经验自动进上下文。
-    const mem = this.injectRelevantMemory(slot.id, task, spec)
+    const mem = await this.injectRelevantMemory(slot.id, task, spec)
     const memoryInjected = mem.injected
     spec = mem.spec
     // P0-5 投递接线：重派任务若有未投递的交接（reassign 产物），按 planDelivery 2×3 矩阵
@@ -1654,7 +1663,7 @@ export class MissionOrchestrator {
    * 相关的记录不再挤掉真正相关的），去重、有界（MAX_MEMORY_INJECT），指针式注入
    * content_ref（非原始对话）。无 memoryQuery / 无记录 → 不注入（零开销）。
    */
-  private injectRelevantMemory(slotId: string, task: Task, spec: string): { spec: string; injected: boolean } {
+  private async injectRelevantMemory(slotId: string, task: Task, spec: string): Promise<{ spec: string; injected: boolean }> {
     if (this.memoryQuery === undefined) return { spec, injected: false }
     // 候选池放宽：去掉 importance 硬门、扩到 MEMORY_CANDIDATE_POOL——相关性裁决交给 rankMemories
     const seen = new Set<string>()
@@ -1672,11 +1681,12 @@ export class MissionOrchestrator {
       seen.add(r.id)
       pool.push(r)
     }
-    const picked = rankMemories(
-      pool,
-      { title: task.title, spec: task.spec, skill_tags: task.skill_tags },
-      MAX_MEMORY_INJECT,
-    )
+    const query = { title: task.title, spec: task.spec, skill_tags: task.skill_tags }
+    // 混合召回（灰度：memoryEmbed 未注入 = 纯 BM25 原路径逐字节不变；嵌入失败自动回落）
+    const picked =
+      this.memoryEmbed !== undefined
+        ? await rankMemoriesHybrid(pool, query, MAX_MEMORY_INJECT, { embedder: this.memoryEmbed })
+        : rankMemories(pool, query, MAX_MEMORY_INJECT)
     if (picked.length === 0) return { spec, injected: false }
     const block = picked
       .map((r) => `- [${r.type}·${r.importance}]${(r.tags ?? []).length > 0 ? ` #${r.tags.join(',')}` : ''} → ${clip(r.content_ref, MAX_MEMORY_REF_CHARS)}`)

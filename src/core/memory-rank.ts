@@ -74,24 +74,32 @@ export const IMPORTANCE_WEIGHT = 0.3
 /** 无任何关键词重叠时的保底门槛：importance≥4 的记忆仍入选（召回兜底，防池空）。 */
 export const MIN_IMPORTANCE_FLOOR = 4
 
-function docOf(m: RankableMemory): string {
-  // tags 权重放大：重复 3 次（词法层面的字段 boost，等价于字段加权）
+/** 候选文档文本（tags 权重放大：重复 3 次 = 词法层面的字段 boost）。嵌入侧同源使用（memory-embed）。 */
+export function docOf(m: RankableMemory): string {
   const tags = m.tags.join(' ').repeat(3)
   return `${tags} ${m.type} ${m.content_ref}`
 }
 
+/** 单条候选的 BM25 综合分与信号判定（混合排序复用，见 memory-embed.ts）。 */
+export interface ScoredMemory<T extends RankableMemory> {
+  m: T
+  /** BM25 relevance + tag 加成 + importance 权重。 */
+  score: number
+  /** 是否有入选信号（词元重叠 / tag 精确命中 / importance 兜底门）。 */
+  hasSignal: boolean
+}
+
 /**
- * BM25 + tag 命中 + importance 的综合排序，返回前 limit 条。
- * 门槛：至少满足其一（查询词重叠 / tag 精确命中 / importance≥MIN_IMPORTANCE_FLOOR）
- * ——无信号的低重要度记忆不入选（旧「importance≥3 硬门」的对应物，池放大后门槛略升）。
- * 确定性：score 降序 → importance 降序 → id 升序。
+ * 对候选池打分（不排序不截断——rankMemories 与 rankMemoriesHybrid 的公共底座）。
+ * 确定性：按 candidates 输入序返回。
  */
-export function rankMemories<T extends RankableMemory>(candidates: readonly T[], query: MemoryRankQuery, limit: number): T[] {
-  if (candidates.length === 0 || limit <= 0) return []
+export function scoreMemories<T extends RankableMemory>(
+  candidates: readonly T[],
+  query: MemoryRankQuery,
+): Array<ScoredMemory<T>> {
   const queryTokens = new Set(tokenize(`${query.title} ${query.spec} ${(query.skill_tags ?? []).join(' ')}`))
   if (queryTokens.size === 0) {
-    // 查询无有效词（空任务文本）：退化为 importance 排序，行为可预测
-    return [...candidates].sort((a, b) => b.importance - a.importance || (a.id < b.id ? -1 : 1)).slice(0, limit)
+    return candidates.map((m) => ({ m, score: m.importance * IMPORTANCE_WEIGHT, hasSignal: m.importance >= MIN_IMPORTANCE_FLOOR }))
   }
 
   const docs = candidates.map((m) => {
@@ -108,7 +116,7 @@ export function rankMemories<T extends RankableMemory>(candidates: readonly T[],
   }
   const nDocs = docs.length
 
-  const scored: { m: T; score: number }[] = []
+  const scored: Array<ScoredMemory<T>> = []
   for (let i = 0; i < candidates.length; i++) {
     const m = candidates[i]!
     const d = docs[i]!
@@ -122,10 +130,28 @@ export function rankMemories<T extends RankableMemory>(candidates: readonly T[],
       relevance += (idf * (f * (BM25_K1 + 1))) / (f + BM25_K1 * (1 - BM25_B + (BM25_B * d.len) / avgLen))
     }
     const tagHit = m.tags.some((tag) => queryTokens.has(tag.toLowerCase())) ? TAG_HIT_BONUS : 0
-    if (overlap === 0 && tagHit === 0 && m.importance < MIN_IMPORTANCE_FLOOR) continue // 无信号不入选
-    scored.push({ m, score: relevance + tagHit + m.importance * IMPORTANCE_WEIGHT })
+    const hasSignal = !(overlap === 0 && tagHit === 0 && m.importance < MIN_IMPORTANCE_FLOOR)
+    scored.push({ m, score: relevance + tagHit + m.importance * IMPORTANCE_WEIGHT, hasSignal })
   }
+  return scored
+}
 
-  scored.sort((a, b) => b.score - a.score || b.m.importance - a.m.importance || (a.m.id < b.m.id ? -1 : 1))
-  return scored.slice(0, limit).map((s) => s.m)
+/**
+ * BM25 + tag 命中 + importance 的综合排序，返回前 limit 条。
+ * 门槛：至少满足其一（查询词重叠 / tag 精确命中 / importance≥MIN_IMPORTANCE_FLOOR）
+ * ——无信号的低重要度记忆不入选（旧「importance≥3 硬门」的对应物，池放大后门槛略升）。
+ * 确定性：score 降序 → importance 降序 → id 升序。
+ */
+export function rankMemories<T extends RankableMemory>(candidates: readonly T[], query: MemoryRankQuery, limit: number): T[] {
+  if (candidates.length === 0 || limit <= 0) return []
+  const queryTokens = new Set(tokenize(`${query.title} ${query.spec} ${(query.skill_tags ?? []).join(' ')}`))
+  if (queryTokens.size === 0) {
+    // 查询无有效词（空任务文本）：退化为 importance 排序，行为可预测
+    return [...candidates].sort((a, b) => b.importance - a.importance || (a.id < b.id ? -1 : 1)).slice(0, limit)
+  }
+  return scoreMemories(candidates, query)
+    .filter((s) => s.hasSignal)
+    .sort((a, b) => b.score - a.score || b.m.importance - a.m.importance || (a.m.id < b.m.id ? -1 : 1))
+    .slice(0, limit)
+    .map((s) => s.m)
 }
