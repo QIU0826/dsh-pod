@@ -264,9 +264,23 @@ export class MissionOrchestrator {
   private stopReason: 'user' | 'budget' | 'abort' | undefined
   /** 在途驱动循环的 promise：run() 重入守卫（防双循环并发派发同一任务，审计 M13）。 */
   private currentRun: Promise<RunSummary> | undefined
-  /** P1 规划层：plan 任务序号（P-1、P-2…）与已用重规划次数（REPLAN_LIMIT 门控）。 */
-  private planSeq = 0
-  private replansUsed = 0
+  /** P1 规划层：plan 任务序号与已用重规划次数均从存储重推导（2026-09-05）——
+   *  实例字段在宿主重启后归零：planSeq 归零 → 重启后 replan 撞 DUPLICATE_TASK，
+   *  replansUsed 归零 → REPLAN_LIMIT 跨重启失效（重启即可无限烧规划）。 */
+  private nextPlanId(): string {
+    let max = 0
+    for (const t of this.store.listTasks(this.missionId)) {
+      const m = /^P-(\d+)$/.exec(t.id)
+      if (m !== null) max = Math.max(max, Number(m[1]))
+    }
+    return `P-${max + 1}`
+  }
+
+  /** 已用重规划次数 = plan_replan_requested 事件数（事件在任务创建成功后才落盘，
+   *  天然幂等：DUPLICATE_TASK 抛出时既不占预算也不计次）。 */
+  private replansUsedInStore(): number {
+    return this.store.listEvents(this.missionId).filter((e) => e.kind === 'plan_replan_requested').length
+  }
 
   constructor(missionId: string, deps: OrchestratorDeps) {
     this.missionId = missionId
@@ -1265,7 +1279,16 @@ export class MissionOrchestrator {
         if (error instanceof PodError && error.code === 'BUDGET_EXCEEDED') {
           this.stopRequested = true
           this.stopReason = 'budget'
-          this.missionMachine.pause()
+          // 并发收口守卫（2026-09-05）：maxParallel≥2 时第二个在途 completion 也可能
+          // 撞 BUDGET_EXCEEDED，而 mission 已被第一个 paused——此时 pause() 会抛
+          // InvalidTransitionError 逃进 handleCompletion，把正常 completion 误判成
+          // crash 并丢弃报告。与 routeAndNegotiate 同款 try/catch：停摆标记已立，
+          // pause 本身不再承载语义。
+          try {
+            this.missionMachine.pause()
+          } catch {
+            /* 已离开 running（并发收口）：停摆标记仍会终止本轮驱动 */
+          }
           this.store.appendEvent(this.missionId, {
             id: `ev-budget-${taskId}`,
             mission_id: this.missionId,
@@ -1308,6 +1331,15 @@ export class MissionOrchestrator {
         if (task.type === 'plan') {
           // 规划任务（P1）：提案先经代码裁决，再报完成——顺序很关键：report() 会把任务
           // 迁到 done，之后再拒绝就无法走 fail/重试路径了
+          // status 先行裁决（2026-09-05）：planner 按报告契约可以输出 need_clarify
+          // （有 questions 无 plan）——此前不走 report()，直接按 plan 缺失判 silent_failure
+          // 硬失败，问题事件也不发（break 在 maybeEmitQuestion 之前）。与其他任务类型
+          // 同口径：need_clarify/blocked 交状态机软/硬失败路径，done 才走提案裁决。
+          if (completion.report.status !== 'done') {
+            await this.taskMachine.report(taskId, completion.report)
+            this.maybeEmitQuestion(task, completion.report)
+            break
+          }
           const proposal = extractPlanProposal(completion.report)
           const validation =
             proposal !== undefined
@@ -1560,7 +1592,7 @@ export class MissionOrchestrator {
 
   /** 剩余可用重规划次数（REPLAN_LIMIT 门控，pod_plan 工具暴露）。 */
   replanRemaining(): number {
-    return Math.max(0, REPLAN_LIMIT - this.replansUsed)
+    return Math.max(0, REPLAN_LIMIT - this.replansUsedInStore())
   }
 
   /**
@@ -1568,7 +1600,7 @@ export class MissionOrchestrator {
    * planner 槽位分解。它就是一个普通任务——路由/watchdog/账本/重试全套走既有资产。
    */
   createPlannerTask(goal: string, replan?: { reason: string }): Task {
-    const id = `P-${(this.planSeq += 1)}`
+    const id = this.nextPlanId()
     const spec = buildPlannerSpec({
       goal,
       taskId: id,
@@ -1587,7 +1619,11 @@ export class MissionOrchestrator {
       ts: this.clock(),
       kind: replan !== undefined ? 'plan_replan_requested' : 'plan_delegation',
       task_id: id,
-      payload: { reason: replan?.reason ?? null, replans_remaining: this.replanRemaining() },
+      payload: {
+        reason: replan?.reason ?? null,
+        // 计次口径：replans_remaining 按本次入账后算（事件本身即将落盘成为第 N 次）
+        replans_remaining: Math.max(0, this.replanRemaining() - (replan !== undefined ? 1 : 0)),
+      },
     })
     return task!
   }
@@ -1706,7 +1742,7 @@ export class MissionOrchestrator {
    * 三重门：REPLAN_LIMIT / planner 槽位在阵 / 预算余量覆盖一次规划成本。
    */
   requestReplan(reason: string): { requested: boolean; remaining: number; message: string } {
-    if (this.replansUsed >= REPLAN_LIMIT) {
+    if (this.replansUsedInStore() >= REPLAN_LIMIT) {
       return { requested: false, remaining: 0, message: `replan limit reached (${REPLAN_LIMIT}); escalate to human` }
     }
     if (!this.hasPlannerCapability()) {
@@ -1727,7 +1763,6 @@ export class MissionOrchestrator {
       })
       return { requested: false, remaining: this.replanRemaining(), message: 'insufficient budget for replan' }
     }
-    this.replansUsed += 1
     this.createPlannerTask(mission.goal, { reason })
     this.ensureDriving()
     return { requested: true, remaining: this.replanRemaining(), message: `replan task created (${reason})` }
@@ -1740,8 +1775,12 @@ export class MissionOrchestrator {
    */
   private maybeAutoReplan(taskId: string): void {
     const after = this.store.getTask(this.missionId, taskId)
-    if (after === undefined || after.type === 'plan' || after.status !== 'escalated') return
-    this.requestReplan(`任务 ${taskId} 转人工（fault=${after.fault ?? 'escalated'}）`)
+    // rejected 也触发（2026-09-05）：rejectTerminal 的两个调用点（无人可派/换尽槽位谢绝）
+    // 语义就是「终局拒绝，转人工/重规划」，此前 guard 只认 escalated——调用点全成死代码，
+    // 能力缺口型拒绝从不自动重规划。plan 任务自身失败不触发（防自我递归）不变。
+    if (after === undefined || after.type === 'plan') return
+    if (after.status !== 'escalated' && after.status !== 'rejected') return
+    this.requestReplan(`任务 ${taskId} 转人工（fault=${after.fault ?? after.status}）`)
   }
 
   /**
@@ -2113,8 +2152,12 @@ export class MissionOrchestrator {
     if (escalated.length > 0) {
       return { status: 'needs_human', doneTasks: done, escalatedTasks: escalated, pendingApprovals: [] }
     }
+    // 退避未到（next_retry_at 在未来）与「现在就可重试」的 blocked 都不算转人工
+    // （2026-09-05）：后者 maintenanceTick 每 30s 停摆补偿会自动重驱，此前落进
+    // tasksCompleted() 的 "task blocked" 异常被误报成 needs_human——操作面显示
+    // 与实际恢复行为矛盾。auth_expired 不重试，仍走 needs_human。
     const waitingBackoff = tasks.filter(
-      (t) => t.status === 'blocked' && (t.next_retry_at ?? 0) > this.clock(),
+      (t) => t.status === 'blocked' && ((t.next_retry_at ?? 0) > this.clock() || this.taskMachine.shouldRetry(t, this.clock())),
     )
     if (waitingBackoff.length > 0) {
       return { status: 'waiting_backoff', doneTasks: done, escalatedTasks: escalated, pendingApprovals: [] }

@@ -48,7 +48,9 @@ export function emitWorkerProgress(
   }
   const seq = nextSeq(progress.slot_id)
   const event: PodEvent = {
-    id: `ev-progress-${progress.ts}-${seq}`,
+    // id 含 slot_id（2026-09-05）：seq 是 per-slot 计数器，maxParallel≥2 时两个槽位同毫秒
+    // + 同 seq 必撞 id（与 memory reflection 边同族缺陷）。前端以 e.id 作列表 key。
+    id: `ev-progress-${progress.slot_id}-${progress.ts}-${seq}`,
     mission_id: missionId ?? '',
     ts: progress.ts,
     kind: 'worker_progress',

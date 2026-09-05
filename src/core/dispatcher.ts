@@ -18,7 +18,16 @@ const UNAVAILABLE_STATUSES: ReadonlySet<AgentSlot['status']> = new Set([
   'waiting_approval',
 ])
 
-const ACTIVE_TASK_STATUSES: ReadonlySet<Task['status']> = new Set(['dispatched', 'running'])
+// negotiating/accepted 必须计入（2026-09-05）：与 orchestrator.activeTasks() 同一口径——
+// 探测 await 窗口（本地 CLI 15s、remote 最长约 5min）内任务只处 negotiating/accepted，
+// HTTP/MCP 的 pod_dispatch 并发调用此刻路由同槽会把第二个 worker 派到同一 per-slot
+// worktree（写冲突/commit 链乱），正是 slot 级互斥要堵的洞。
+const ACTIVE_TASK_STATUSES: ReadonlySet<Task['status']> = new Set([
+  'negotiating',
+  'accepted',
+  'dispatched',
+  'running',
+])
 
 export interface RouteContext {
   slots: AgentSlot[]

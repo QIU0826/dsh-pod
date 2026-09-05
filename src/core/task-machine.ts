@@ -374,11 +374,16 @@ export class TaskMachine {
       this.emit(this.getTask(taskId), 'task_done', { commit_sha: verdict.commit_sha ?? report.commit_sha })
       return
     }
+    // 信任边界（2026-09-05）：questions/blockers 来自 LLM 输出（extractReport 的 isReportLike
+    // 只校验 task_id/status 是 string），畸形报告缺字段/非数组不能让状态机 TypeError——
+    // 那会把 need_clarify/blocker 语义整个炸成 crash，白烧重试。缺省按空数组处理。
+    const questions = Array.isArray(report.questions) ? report.questions : []
+    const blockers = Array.isArray(report.blockers) ? report.blockers : []
     if (report.status === 'need_clarify') {
-      this.applyFailure(task, 'need_clarify', report.questions.join('; ') || 'needs clarification', { soft: true })
+      this.applyFailure(task, 'need_clarify', questions.join('; ') || 'needs clarification', { soft: true })
       return
     }
-    this.applyFailure(task, 'crash', report.blockers.join('; ') || 'reported blocked', { fromReport: true })
+    this.applyFailure(task, 'crash', blockers.join('; ') || 'reported blocked', { fromReport: true })
   }
 
   /** 运行时故障入口（watchdog / worker 层调用）。 */
