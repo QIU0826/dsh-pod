@@ -1336,9 +1336,9 @@ describe('P1 规划层（goal → DAG 智能分解，AgentScope DAGPlanExecutor 
   ]
   // plan 参数放宽为通用 shape（非法提案同样塞进 report，由 validatePlanProposal 裁决）
   type PlanShape = Array<{ id: string; title: string; spec: string; type: 'implement' | 'review' | 'test' | 'doc' | 'research'; skill_tags?: string[]; depends_on?: string[] }>
-  const planDone = (taskId: string, plan: PlanShape | undefined): WorkerCompletion => ({
+  const planDone = (taskId: string, plan: PlanShape | undefined, over: Partial<MissionReport> = {}): WorkerCompletion => ({
     exit: 'done',
-    report: doneReport(taskId, { task_type: 'plan', ...(plan !== undefined ? { plan } : {}) }),
+    report: doneReport(taskId, { task_type: 'plan', ...(plan !== undefined ? { plan } : {}), ...over }),
     usage: { tokens_in: 10, tokens_out: 5, source: 'measured' },
     artifacts: [],
   })
@@ -1357,7 +1357,9 @@ describe('P1 规划层（goal → DAG 智能分解，AgentScope DAGPlanExecutor 
   })
 
   it('规划任务完成 + 提案通过裁决 → expand 为任务 DAG 并走完质量门', async () => {
-    const orch = makeOrchestrator(fixture, { 'P-1': { completion: planDone('P-1', validPlan) } })
+    const orch = makeOrchestrator(fixture, {
+      'P-1': { completion: planDone('P-1', validPlan, { assumptions: ['假设A'], goal_restatement: '目标重述' }) },
+    })
     orch.launch(launchInput({ cwd: fixture.repo, slots: plannerRoster }))
     orch.createPlannerTask('目标')
     const summary = await orch.run()
@@ -1367,6 +1369,11 @@ describe('P1 规划层（goal → DAG 智能分解，AgentScope DAGPlanExecutor 
     expect(fixture.store.getTask('T-2')!.status).toBe('done')
     expect(summary.status).toBe('awaiting_approval')
     expect(fixture.store.listEvents('M-1').some((e) => e.kind === 'plan_expanded')).toBe(true)
+    // assumptions/goal_restatement 透传进 plan_expanded 审计面（2026-09-04 修复前恒 []/null：
+    // extractPlanProposal 硬编码丢弃，spec 契约要求 LLM 输出的诚实假设到不了事件）
+    const expanded = fixture.store.listEvents('M-1').find((e) => e.kind === 'plan_expanded')
+    expect((expanded!.payload as { assumptions: string[] }).assumptions).toEqual(['假设A'])
+    expect((expanded!.payload as { goal_restatement: string | null }).goal_restatement).toBe('目标重述')
     // Context Builder：每次派发落 task_context 事件（实际发给 agent 的完整上下文）
     const ctxEvents = fixture.store.listEvents('M-1').filter((e) => e.kind === 'task_context')
     expect(ctxEvents.length).toBeGreaterThanOrEqual(3) // 每次派发一条（P-1 + 实现任务；重派也各落一条）

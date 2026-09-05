@@ -53,6 +53,11 @@ export const MissionReportSchema = z.object({
       }),
     )
     .optional(),
+  // 仅 plan 任务：planner 的诚实假设与目标重述（buildPlannerSpec 输出契约要求 LLM 输出，
+  // extractPlanProposal 透传进 plan_expanded 审计面）。可选字段——非 plan 任务无此字段；
+  // zod 默认剥离未知键，不声明则 dsh-subagent 校验路径会把它们丢掉（2026-09-04 修复）。
+  assumptions: z.array(z.string()).optional(),
+  goal_restatement: z.string().optional(),
 })
 
 /** 类型 = schema 推断（单一事实源，types.ts 不重复定义）。 */
@@ -91,6 +96,10 @@ const FIELD_ORDER: Array<keyof MissionReport> = [
   'questions',
   'usage',
   'plan',
+  // 仅 plan 任务（与 plan 字段同模式：hint 标注「仅 plan 任务」，非 plan 任务省略）。
+  // 必须进 FIELD_ORDER——「schema 字段与提示词片段同源」是锁定不变量（DoD-16 漂移测试）。
+  'assumptions',
+  'goal_restatement',
 ]
 
 /**
@@ -150,5 +159,11 @@ function fieldHint(key: keyof MissionReport): string {
       return '{ "tokens_in": 0, "tokens_out": 0 }'
     case 'plan':
       return '[{"id":"T-1","title":"…","spec":"…","type":"implement","skill_tags":["编码"],"depends_on":[]}]（仅 plan 任务：任务分解 DAG，其余任务省略此字段）'
+    // 仅保 keyof MissionReport 穷举：不在 FIELD_ORDER 中（提示词片段形状对非 plan 任务
+    // 保持不变），planner 的 assumptions 输出契约由 buildPlannerSpec 单独指示。
+    case 'assumptions':
+      return '["…诚实假设（仅 plan 任务：不确定的技术点如实注明，不冒充事实）"]'
+    case 'goal_restatement':
+      return '"对用户目标的一句话重述（仅 plan 任务，可省略）"'
   }
 }

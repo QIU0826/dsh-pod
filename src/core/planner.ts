@@ -131,10 +131,24 @@ export function buildPlannerSpec(opts: PlannerSpecOptions): string {
 }
 
 /** 从规划任务的报告中提取提案：report.plan 是任务数组，包成提案对象再过 schema
- * （结构校验失败的提取返回 undefined，由调用方裁决）。 */
+ * （结构校验失败的提取返回 undefined，由调用方裁决）。
+ * assumptions/goal_restatement 透传（2026-09-04 修复：此前硬编码 assumptions: []，
+ * spec 输出契约要求 LLM 输出的诚实假设在 plan_expanded 审计面恒空）。形状不合规
+ * 降级丢弃而非拒提案——元数据不是裁决门（裁决只看 tasks），运行时垃圾（cast 路径
+ * 绕过 zod）不炸提取器。 */
 export function extractPlanProposal(report: MissionReport): PlanProposal | undefined {
   if (!Array.isArray(report.plan)) return undefined
-  const parsed = PlanProposalSchema.safeParse({ tasks: report.plan, assumptions: [] })
+  // 运行时防御：MissionReport 的字段类型是编译期契约，headless 后端 `as MissionReport`
+  // 的 cast 路径不保证运行时形状（verifier 同族教训——信任边界对任意输入全纯函数）。
+  const rawAssumptions: unknown = (report as { assumptions?: unknown }).assumptions
+  const rawRestatement: unknown = (report as { goal_restatement?: unknown }).goal_restatement
+  const parsed = PlanProposalSchema.safeParse({
+    tasks: report.plan,
+    assumptions: Array.isArray(rawAssumptions)
+      ? rawAssumptions.filter((a): a is string => typeof a === 'string')
+      : [],
+    goal_restatement: typeof rawRestatement === 'string' ? rawRestatement : undefined,
+  })
   return parsed.success ? parsed.data : undefined
 }
 

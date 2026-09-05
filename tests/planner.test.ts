@@ -100,6 +100,50 @@ describe('extractPlanProposal（报告 plan 字段提取）', () => {
     expect(parsed.tasks[0]!.skill_tags).toEqual([])
     expect(parsed.assumptions).toEqual([])
   })
+
+  it('assumptions/goal_restatement 从报告透传（2026-09-04：此前硬编码 [] 丢弃，plan_expanded 审计面恒空）', () => {
+    // spec 输出契约要求 LLM 输出 assumptions/goal_restatement（buildPlannerSpec），
+    // 报告层此前无此字段 + 提取硬编码 [] → 规划假设到不了 plan_expanded 事件。
+    const report = {
+      task_id: 'P-1',
+      task_type: 'plan',
+      status: 'done',
+      summary: 'ok',
+      files_changed: [],
+      test_result: 'not_run',
+      decisions: [],
+      blockers: [],
+      questions: [],
+      plan: [{ id: 'T-1', title: 't', spec: 's', type: 'implement' }],
+      assumptions: ['假设一', '假设二'],
+      goal_restatement: '目标重述',
+    } as MissionReport
+    const proposal = extractPlanProposal(report)
+    expect(proposal).toBeDefined()
+    expect(proposal!.assumptions).toEqual(['假设一', '假设二'])
+    expect(proposal!.goal_restatement).toBe('目标重述')
+  })
+
+  it('assumptions 形状不合规（运行时垃圾，cast 路径绕过 zod）→ 降级丢弃，不拒提案不炸提取器', () => {
+    const report = {
+      task_id: 'P-1',
+      task_type: 'plan',
+      status: 'done',
+      summary: 'ok',
+      files_changed: [],
+      test_result: 'not_run',
+      decisions: [],
+      blockers: [],
+      questions: [],
+      plan: [{ id: 'T-1', title: 't', spec: 's', type: 'implement' }],
+      assumptions: '不是数组',
+      goal_restatement: 42,
+    } as unknown as MissionReport
+    const proposal = extractPlanProposal(report)
+    expect(proposal).toBeDefined()
+    expect(proposal!.assumptions).toEqual([])
+    expect(proposal!.goal_restatement).toBeUndefined()
+  })
 })
 
 describe('validatePlanProposal（代码裁决）', () => {

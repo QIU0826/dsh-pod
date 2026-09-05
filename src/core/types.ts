@@ -381,6 +381,10 @@ export interface MissionReport {
     skill_tags?: string[]
     depends_on?: string[]
   }>
+  /** 仅 plan 任务：planner 的诚实假设（输出契约要求 LLM 输出，落 plan_expanded 事件审计面）。 */
+  assumptions?: string[]
+  /** 仅 plan 任务：planner 对用户目标的重述。 */
+  goal_restatement?: string
 }
 
 /** Canvas 事件流（team 级事件，磁盘持久化，跨重启可见）。 */
