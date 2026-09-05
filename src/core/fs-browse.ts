@@ -60,8 +60,11 @@ export function browseDirectories(rawPath: string): BrowseResult {
   const dirs = childDirs(path)
   return {
     path,
-    // Windows 盘根（C:\）的 dirname 还是自身 → 上一层是盘符列表（''）
-    parent: parent === path ? '' : parent,
+    // 盘根（dirname 等于自身）：Windows 盘根（C:\）上一层是盘符列表（''，前端据此切
+    // 盘符选择模式）；POSIX 根（/）之上再无层级 → null。2026-09-05 修复：旧实现不分
+    // 平台一律给 ''，Linux CI 上 browseDirectories('/') 的 parent 断言失败，且 '' 会让
+    // 前端按盘符列表模式处理（joinChild('') 还会拼出相对路径）。
+    parent: parent === path ? (process.platform === 'win32' ? '' : null) : parent,
     entries: dirs.entries,
     roots: null,
     home,
