@@ -164,6 +164,21 @@ describe('飞书 adapter（Berd-H）', () => {
     expect(r.inbound).toBeUndefined()
     expect(r.reason).toContain('message type')
   })
+
+  it('加密模式收到 {"encrypt":...} 密文载荷 → 显式诊断（2026-09-05：此前误报 unsupported event type 静默丢弃）', () => {
+    // 飞书加密事件 body 是 {"encrypt":"<AES 密文>"}——验签可过但解密未实现：
+    // 此前直接 parseLark 误报 'unsupported lark event type'，加密通道静默收不到任何指令。
+    const r = verifyAndParseIm(larkReq({ encrypt: 'AES-CIPHERTEXT-BASE64' }), { larkEncryptKey: LARK_KEY, nowMs: NOW })
+    expect(r.ok).toBe(true) // 鉴权已完成（签名可验），非鉴权失败
+    expect(r.inbound).toBeUndefined()
+    expect(r.reason).toContain('decryption is not implemented')
+  })
+
+  it('明文模式收到加密载荷 → fail-closed 明确诊断（token 在密文里无法认证）', () => {
+    const r = verifyAndParseIm(larkReq({ encrypt: 'AES-CIPHERTEXT-BASE64' }), { larkVerificationToken: 'vt-1', nowMs: NOW })
+    expect(r.ok).toBe(false) // 鉴权信号：密文无法认证，需对齐飞书控制台加密配置
+    expect(r.reason).toContain('plaintext mode cannot authenticate')
+  })
 })
 
 describe('端到端：入站 → 指令路由 → 出站（审批门不绕过）', () => {

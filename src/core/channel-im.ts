@@ -85,6 +85,24 @@ function extractLarkToken(body: Record<string, unknown>): string {
   return ''
 }
 
+/** 飞书加密事件 body 形如 {"encrypt":"<base64 AES 密文>"}。 */
+function isLarkEncryptedPayload(raw: Record<string, unknown>): boolean {
+  return typeof raw.encrypt === 'string' && raw.encrypt.length > 0
+}
+
+/** 加密模式能力边界的显式诊断（2026-09-05：此前误报 'unsupported lark event type' 静默丢弃）。 */
+const LARK_ENCRYPTED_UNSUPPORTED =
+  'lark encrypted payload received but decryption is not implemented — configure the Lark app to send plaintext events or disable event encryption'
+
+/** 飞书 lark 分支收尾：解析 + 事件 id 提取（此前对同一 rawBody 重复 parseJson ×3）。 */
+function finishLark(raw: Record<string, unknown>): ImVerification {
+  const parsed = parseLark(raw)
+  const eventId = extractEventId('lark', raw)
+  if (parsed.challenge !== undefined) return { ok: true, challenge: parsed.challenge, eventId }
+  if (parsed.inbound === undefined) return { ok: true, reason: parsed.reason, eventId }
+  return { ok: true, inbound: parsed.inbound, eventId }
+}
+
 /**
  * 重放去重（审计 P2 修复）：vendor 会因超时重投递同一事件（Slack 官方明确会重试），
  * 暂停/恢复/派发这类非幂等指令会被重复执行。按 vendor 事件 id 做有界 TTL 去重，
@@ -126,7 +144,9 @@ export interface ImCredentials {
   /**
    * 飞书 verification token：明文模式（无 encryptKey）时**必配**——此时签名不可校验，
    * token 比对是唯一的入站鉴权手段（审计 P1 修复：此前明文模式完全跳过验签）。
-   * 加密模式下作为挑战握手回显用（可选）。
+   * 注意（2026-09-05 能力边界）：加密模式（配置 larkEncryptKey）当前只做验签，
+   * AES 解密未实现——加密事件被显式拒绝并给出可行动诊断（而非此前误报
+   * 'unsupported lark event type' 静默丢弃）。生产部署请用明文模式 + token。
    */
   larkVerificationToken?: string
 }
@@ -292,19 +312,28 @@ export function verifyAndParseIm(req: ImRequest, opts: ImOptions): ImVerificatio
     // TLS 终结侧泄露）在重放去重 TTL 之外可无限重放非幂等指令；与加密分支同窗校验
     if (!withinWindow(timestamp, opts.nowMs, tolerance)) return { ok: false, reason: 'lark timestamp out of window (plaintext mode)' }
     const raw = parseJson(req.rawBody)
+    // 加密载荷在明文模式下无法认证（token 在密文里）→ fail-closed 明确诊断，
+    // 引导对齐飞书控制台的加密配置（2026-09-05：此前误报 'missing lark verification token'）
+    if (isLarkEncryptedPayload(raw)) {
+      return {
+        ok: false,
+        reason: 'lark encrypted payload received but plaintext mode cannot authenticate it (verification token is inside the ciphertext) — align Lark event encryption with the plugin credentials',
+      }
+    }
     const presented = extractLarkToken(raw)
     if (presented.length === 0) return { ok: false, reason: 'missing lark verification token' }
     if (!constantEquals(presented, configured)) return { ok: false, reason: 'lark verification token mismatch' }
-    const parsed = parseLark(raw)
-    if (parsed.challenge !== undefined) return { ok: true, challenge: parsed.challenge, eventId: extractEventId('lark', raw) }
-    if (parsed.inbound === undefined) return { ok: true, reason: parsed.reason, eventId: extractEventId('lark', raw) }
-    return { ok: true, inbound: parsed.inbound, eventId: extractEventId('lark', raw) }
+    return finishLark(raw)
   }
 
-  const parsed = parseLark(parseJson(req.rawBody))
-  if (parsed.challenge !== undefined) return { ok: true, challenge: parsed.challenge, eventId: extractEventId('lark', parseJson(req.rawBody)) }
-  if (parsed.inbound === undefined) return { ok: true, reason: parsed.reason, eventId: extractEventId('lark', parseJson(req.rawBody)) }
-  return { ok: true, inbound: parsed.inbound, eventId: extractEventId('lark', parseJson(req.rawBody)) }
+  // 加密模式：验签已过（鉴权完成），但本模块未实现 AES 解密——飞书加密事件 body 是
+  // {"encrypt":"<AES-256-CBC 密文>"}，直接 parseLark 只会误报 'unsupported lark event
+  // type' 静默丢弃，加密通道收不到任何指令且无诊断（2026-09-05 修复：显式能力边界，
+  // ok:true 与 'unsupported type' 同族——vendor 不再对永远无法处理的事件重试）。
+  // 解密实现需对照飞书真实流量验证密钥派生（MD5(key+nonce)/IV 约定）后另行落地。
+  const raw = parseJson(req.rawBody)
+  if (isLarkEncryptedPayload(raw)) return { ok: true, reason: LARK_ENCRYPTED_UNSUPPORTED }
+  return finishLark(raw)
 }
 
 /** 出站回复体（vendor 无关的中间表示，由 sender 转成具体 API 调用）。 */
