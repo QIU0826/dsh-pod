@@ -34,7 +34,8 @@ const client = defineConfig({
 
 const standaloneUi = defineConfig({
   entry: { standalone: 'src/web/standalone.ts' },
-  deps: { alwaysBundle: [/^react/, /^scheduler/] },
+  // react/scheduler/qrcode.react 必须内联（浏览器解析不了 bare import）
+  deps: { alwaysBundle: [/^react/, /^scheduler/, /^qrcode\.react/] },
   format: 'esm',
   platform: 'browser',
   outDir: 'dist',

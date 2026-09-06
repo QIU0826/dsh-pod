@@ -488,3 +488,47 @@ export async function fetchCron(): Promise<{ jobs: CronJobView[]; recent: CronFi
 export async function saveCron(jobs: unknown): Promise<{ ok: boolean; message: string }> {
   return postJson<{ ok: boolean; message: string }>('/api/dsh-pod/cron', { jobs })
 }
+
+// ─── 设备配对（远程访问片 A/B，2026-09-06）──────────────────────────────────
+
+/** 已配对设备（列表面；凭据字段服务端已剥离）。 */
+export interface PairDevice {
+  id: string
+  name: string
+  pairedAt: number
+  lastSeenAt: number
+  revoked: boolean
+}
+
+/** 铸造一次性配对令牌（loopback-only；同时仅一枚，TTL 10min）。 */
+export async function postPairMint(): Promise<{ token: string; expiresAt: number; url: string }> {
+  return postJson('/api/pair/mint', {})
+}
+
+/** 手机侧配对：一次性令牌 → 设备会话 Cookie（HttpOnly）。 */
+export async function postPairAccept(token: string): Promise<{ ok: boolean; deviceId: string; name: string }> {
+  return postJson('/api/pair/accept', { token })
+}
+
+/** 撤销设备（deviceId 缺省 = 全部；loopback-only）。 */
+export async function postPairRevoke(deviceId?: string): Promise<{ ok: boolean; revoked: number }> {
+  return postJson('/api/pair/revoke', deviceId !== undefined ? { deviceId } : {})
+}
+
+/** 已配对设备列表（loopback-only；凭据剥离）。 */
+export async function listPairDevices(): Promise<{ devices: PairDevice[] }> {
+  return readJson<{ devices: PairDevice[] }>(
+    await fetch('/api/pair/devices'),
+  )
+}
+
+/** 配对 URL（QR 内容）：同源 + ?pair= 令牌。纯函数（单测覆盖）。 */
+export function pairUrl(origin: string, token: string): string {
+  return `${origin.replace(/\/$/, '')}/?pair=${encodeURIComponent(token)}`
+}
+
+/** 从 location.search 提取配对令牌（有则返回并应清理地址栏）。 */
+export function pairTokenFromSearch(search: string): string | undefined {
+  const value = new URLSearchParams(search).get('pair')
+  return value !== null && value.length > 0 ? value : undefined
+}

@@ -91,7 +91,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "better-sqlite3": "^13.0.3"
+    "better-sqlite3": "^13.0.3",
+    "qrcode.react": "^4.2.0"
   },
   "bin": {
     "dsh-pod": "./dist/standalone-server.js"

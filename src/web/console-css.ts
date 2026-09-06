@@ -686,4 +686,38 @@ export const CONSOLE_CSS = `
 .dsh-pet-room.maid .dsh-pet-zone-title { color: #8ea5da; }
 .dsh-pet-room.maid .dsh-pet-room-legend { color: #8ea5dab0; }
 
+/* ─── 远程访问面板（片 B）+ 竖屏触控适配（片 C，参照 dsh-remote-web-ui 手法）─── */
+.dsh-remote-panel { max-width: 560px; margin: 0 auto; padding: 24px 8px; display: flex; flex-direction: column; gap: 14px; }
+.dsh-remote-panel h3 { margin: 0; font-size: 15px; }
+.dsh-remote-hint { font-size: 12px; color: var(--ink-3); line-height: 1.6; margin: 0; }
+.dsh-remote-error { font-size: 12px; color: var(--bad, #e5484d); margin: 0; }
+.dsh-remote-qr-card { display: flex; flex-direction: column; gap: 10px; align-items: center; padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
+.dsh-remote-qr { background: #fff; padding: 10px; border-radius: 10px; }
+.dsh-remote-url { font-family: var(--mono); font-size: 11px; color: var(--ink-2); word-break: break-all; text-align: center; }
+.dsh-remote-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.dsh-btn.danger { color: #e5484d; border-color: #e5484d44; }
+.dsh-remote-devices { display: flex; flex-direction: column; gap: 6px; }
+.dsh-remote-devices-title { font-size: 12px; color: var(--ink-2); margin-bottom: 2px; }
+.dsh-remote-device { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-1); font-size: 12px; }
+.dsh-remote-device.revoked { opacity: .45; }
+.dsh-remote-device-name { font-weight: 600; }
+.dsh-remote-device-meta { color: var(--ink-3); margin-left: auto; font-family: var(--mono); font-size: 11px; }
+.dsh-note.info { border-color: #2e6be655; background: #2e6be614; color: var(--ink-1); }
+
+/* 竖屏触控适配（手机）：视口竖屏 + 宽度 <760px 时生效——
+   折叠侧轨为底部横条（44px 触控目标）、输入 16px（防 iOS 聚焦缩放）、气泡全宽。 */
+@media (max-width: 760px) and (orientation: portrait) {
+  .dsh-shell { flex-direction: column-reverse; }
+  .dsh-rail { flex-direction: row; width: 100%; height: 56px; padding: 4px 6px; gap: 2px; overflow-x: auto; }
+  .dsh-rail-item { min-width: 52px; height: 46px; padding: 6px 8px; }
+  .dsh-rail-label { font-size: 10px; }
+  .dsh-main-col { flex: 1; min-height: 0; }
+  .dsh-composer .dsh-input, .dsh-composer .dsh-composer-ta { font-size: 16px !important; height: auto; min-height: 40px; }
+  .dsh-msg-card { max-width: 100%; }
+  .dsh-topbar { flex-wrap: wrap; padding: 8px 12px; }
+  .dsh-remote-panel { padding: 16px 6px; }
+  .dsh-pet-room-grid { gap: 20px 24px; }
+}
+
+
 `

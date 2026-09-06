@@ -43,6 +43,8 @@ import { BoardView } from './board-view.js'
 import { DagView } from './dag-view.js'
 import { ApprovalView } from './approval-view.js'
 import { PetRoomView } from './pet-room.js'
+import { RemotePanel } from './remote-panel.js'
+import { pairTokenFromSearch, postPairAccept } from './api.js'
 import { SettingsView } from './settings-view.js'
 import { MISSION_LABEL, MISSION_TONE, tokenBudgetPct, rosterToSlots } from './view-helpers.js'
 
@@ -51,7 +53,7 @@ const MISSIONS_POLL_MS = 5000
 /** 单次轮询最多续读的批数（防 has_more 异常时死循环拖垮主线程）。 */
 const MAX_EVENT_PAGES = 10
 
-type ViewKey = 'sessions' | 'chat' | 'board' | 'dag' | 'pets' | 'approval' | 'settings'
+type ViewKey = 'sessions' | 'chat' | 'board' | 'dag' | 'pets' | 'remote' | 'approval' | 'settings'
 
 export function PodPanel(): ReactElement {
   const [status, setStatus] = useState<StatusResponse | null>(null)
@@ -64,6 +66,22 @@ export function PodPanel(): ReactElement {
   const [archive, setArchive] = useState<MissionArchive | null>(null)
   const [userMessages, setUserMessages] = useState<Array<{ id: string; ts: number; text: string }>>([])
   const [answered, setAnswered] = useState<Set<string>>(new Set())
+  // 远程访问（片 B/C）：/api/pair/* 能力探测 + 手机 ?pair= 自动配对 + 已配对提示
+  const [pairingCapable, setPairingCapable] = useState(false)
+  const [pairNotice, setPairNotice] = useState<string | undefined>(undefined)
+
+  useEffect(() => {
+    // 能力探测：/api/pair/devices 存在 = --pairing 已开启（404 = 未开启，面板显示指引）
+    void fetch('/api/pair/devices').then((r) => setPairingCapable(r.ok)).catch(() => setPairingCapable(false))
+    // 手机扫码落地：?pair=<token> → 自动 accept → 清理地址栏 → 顶部提示
+    const token = pairTokenFromSearch(window.location.search)
+    if (token !== undefined) {
+      window.history.replaceState(null, '', window.location.pathname)
+      void postPairAccept(token)
+        .then((d) => setPairNotice('已配对：' + d.name + '（本设备已拥有完整控制台）'))
+        .catch(() => setPairNotice('配对失败：令牌无效或已过期，请在桌面端重新生成二维码'))
+    }
+  }, [])
   const [selectedSlot, setSelectedSlot] = useState('')
   const [approvalId, setApprovalId] = useState('')
   const [ctxTaskId, setCtxTaskId] = useState('')
@@ -335,6 +353,7 @@ export function PodPanel(): ReactElement {
         navItem('board', '任务看板', '看板', 'kanban'),
         navItem('dag', 'DAG 拓扑', 'DAG', 'network'),
         navItem('pets', '桌宠房间', '桌宠', 'paw'),
+        navItem('remote', '远程访问', '远程', 'smartphone'),
         createElement('span', { className: 'dsh-rail-spacer' }),
         navItem('settings', '设置', '设置', 'settings')),
       createElement('div', { className: 'dsh-main-col' },
@@ -344,6 +363,9 @@ export function PodPanel(): ReactElement {
             ? createElement('div', { className: 'dsh-note error', role: 'alert', title: '最近一次会话崩溃的原因' },
                 '上次会话启动失败：', status.last_error)
             : null,
+        pairNotice !== undefined
+          ? createElement('div', { className: 'dsh-note info', role: 'status' }, pairNotice)
+          : null,
         status?.demo === true
           ? createElement('div', { className: 'dsh-note demo', title: 'standalone --demo 启动' },
               createElement('strong', null, '演示模式'),
@@ -451,7 +473,9 @@ export function PodPanel(): ReactElement {
                     events,
                     onSteer: (slotId, instruction) => void runAction(() => postSteer(slotId, instruction)),
                   })
-                  : view === 'approval'
+                  : view === 'remote'
+                    ? createElement(RemotePanel, { pairingEnabled: pairingCapable })
+                    : view === 'approval'
                     ? createElement(ApprovalView, {
                       approvalId,
                       onBack: () => setView('chat'),
