@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url'
 import { createPodRuntime, type PodRuntime } from '../core/pod-runtime.js'
 import { bearerTokenEquals, hasAllowedLoopbackOrigin, isLocalHostHeader, isLoopbackBindHost, isLoopbackRemoteAddress } from '../core/http-guard.js'
 import { PodService } from '../pod-service.js'
+import { PairingStore } from '../core/pairing.js'
 import { makePodRoutes } from '../routes.js'
 import { createMcpHttpServer, type McpHttpHandle } from '../mcp-http.js'
 import { ClaudeHeadlessBackend } from '../workers/claude-headless.js'
@@ -58,6 +59,12 @@ export interface StandaloneOptions {
   staticDir?: string
   /** 演示模式：脚本化 Demo 后端（零 LLM 成本，真实 git/审批/问答链路）。 */
   demo?: boolean
+  /**
+   * 设备配对（远程访问片 A，docs/远程访问-设计.md）：开启后 /api/pair/* 端点族可用，
+   * 且非 loopback 请求可凭有效设备会话放行（替代共享静态 token 的逐设备凭据形态）。
+   * 显式开启才生效——既有 fail-closed 纪律（非 loopback 必须 token 或 pairing）不放松。
+   */
+  pairing?: boolean
 }
 
 /** host 是否 loopback（未指定 = 默认 127.0.0.1）。CLI 启动前置检查与请求守卫共用。 */
@@ -126,7 +133,14 @@ function serveStatic(res: ServerResponse, pathname: string, staticDir: string): 
 /** 守卫：loopback-only 默认；非 loopback 必须 Bearer token（CR-29 同款）。
  * P1 补强：loopback 连接叠加 Host 白名单（堵 DNS rebinding——否则攻击页可读响应）
  * 与 Origin 校验（堵跨站写）；token 比较恒时。 */
-export function guard(req: IncomingMessage, res: ServerResponse, token: string, loopbackOnly: boolean): boolean {
+export function guard(
+  req: IncomingMessage,
+  res: ServerResponse,
+  token: string,
+  loopbackOnly: boolean,
+  /** 远程访问片 A：配对设备会话校验（非 loopback 放行的第二凭据路径）。 */
+  deviceSession?: { validate(deviceId: string, secret: string): boolean },
+): boolean {
   const addr = req.socket.remoteAddress ?? ''
   if (isLoopbackRemoteAddress(addr)) {
     if (!isLocalHostHeader(req)) {
@@ -142,9 +156,125 @@ export function guard(req: IncomingMessage, res: ServerResponse, token: string, 
     return true
   }
   if (!loopbackOnly && token.length > 0 && bearerTokenEquals(token, req)) return true
+  // 配对设备会话（远程访问片 A）：Cookie pod-device=<id>.<secret> 恒时校验
+  if (deviceSession !== undefined) {
+    const raw = readCookie(req, 'pod-device')
+    if (raw !== undefined) {
+      const dot = raw.indexOf('.')
+      if (dot > 0) {
+        const id = raw.slice(0, dot)
+        const secret = raw.slice(dot + 1)
+        if (id.length > 0 && secret.length > 0 && deviceSession.validate(id, secret)) return true
+      }
+    }
+  }
   res.writeHead(403, { 'content-type': 'application/json; charset=utf-8' })
   res.end(JSON.stringify({ error: 'forbidden: loopback-only 或缺少 Bearer token' }))
   return false
+}
+
+/** 读取 Cookie 头中指定项（无 Cookie 头 → undefined）。 */
+export function readCookie(req: IncomingMessage, name: string): string | undefined {
+  const header = req.headers.cookie
+  if (header === undefined || header.length === 0) return undefined
+  for (const part of header.split(';')) {
+    const eq = part.indexOf('=')
+    if (eq === -1) continue
+    if (part.slice(0, eq).trim() === name) return part.slice(eq + 1).trim()
+  }
+  return undefined
+}
+
+/**
+ * 配对端点族（远程访问片 A，docs/远程访问-设计.md）：
+ *   POST /api/pair/mint    — 铸造一次性令牌（**loopback-only**；同时仅一枚，TTL 10min）
+ *   POST /api/pair/accept  — 一次性令牌 → 设备凭据（Set-Cookie pod-device=<id>.<secret>）
+ *   POST /api/pair/revoke  — 撤销设备（**loopback-only**；body.deviceId 缺省=全部）
+ *   GET  /api/pair/devices — 设备列表（**loopback-only**；凭据字段剥离）
+ *
+ * 纪律：accept 是唯一非 loopback 可达端点（凭一次性令牌自证）；mint/revoke/devices
+ * 物理限回环（对齐 dsh-remote-web-ui「铸造面仅限本机」）。Cookie HttpOnly+SameSite=Lax。
+ */
+function handlePairRoute(
+  store: PairingStore,
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+): void {
+  const addr = req.socket.remoteAddress ?? ''
+  const isLoopback = isLoopbackRemoteAddress(addr)
+  const json = (status: number, body: unknown, headers?: Record<string, string>): void => {
+    res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...(headers ?? {}) })
+    res.end(JSON.stringify(body))
+  }
+  const readBody = (): Promise<Record<string, unknown>> =>
+    new Promise((resolve, reject) => {
+      const chunks: Buffer[] = []
+      let total = 0
+      req.on('data', (c: Buffer) => {
+        total += c.length
+        if (total > 64 * 1024) {
+          reject(new Error('body too large'))
+          req.destroy()
+          return
+        }
+        chunks.push(c)
+      })
+      req.on('end', () => {
+        try {
+          const raw = Buffer.concat(chunks).toString('utf8')
+          resolve(raw.length === 0 ? {} : (JSON.parse(raw) as Record<string, unknown>))
+        } catch (e) {
+          reject(e)
+        }
+      })
+      req.on('error', reject)
+    })
+  const loopbackOnlyError = (): void =>
+    json(403, { error: 'pairing management is loopback-only（配对面板仅限本机使用）' })
+
+  if (pathname === '/api/pair/mint' && req.method === 'POST') {
+    if (!isLoopback) return loopbackOnlyError()
+    const { token, expiresAt } = store.mintToken()
+    json(200, { token, expiresAt, url: '/?pair=' + token })
+    return
+  }
+  if (pathname === '/api/pair/accept' && req.method === 'POST') {
+    void readBody()
+      .then((body) => {
+        const token = typeof body.token === 'string' ? body.token : ''
+        if (token.length === 0) return json(422, { error: 'token is required' })
+        const ua = req.headers['user-agent']
+        try {
+          const d = store.accept(token, typeof ua === 'string' ? ua : undefined)
+          // HttpOnly（防 XSS 窃凭据）+ SameSite=Lax + Path 全站 + 30 天会话
+          json(200, { ok: true, deviceId: d.deviceId, name: d.name }, {
+            'set-cookie': `pod-device=${d.deviceId}.${d.secret}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${30 * 24 * 3600}`,
+          })
+        } catch (error) {
+          json(403, { error: error instanceof Error ? error.message : 'pairing failed' })
+        }
+      })
+      .catch(() => json(400, { error: 'invalid json' }))
+    return
+  }
+  if (pathname === '/api/pair/revoke' && req.method === 'POST') {
+    if (!isLoopback) return loopbackOnlyError()
+    void readBody()
+      .then((body) => {
+        const deviceId = typeof body.deviceId === 'string' && body.deviceId.length > 0 ? body.deviceId : undefined
+        const revoked = store.revoke(deviceId)
+        json(200, { ok: true, revoked })
+      })
+      .catch(() => json(400, { error: 'invalid json' }))
+    return
+  }
+  if (pathname === '/api/pair/devices' && req.method === 'GET') {
+    if (!isLoopback) return loopbackOnlyError()
+    json(200, { devices: store.listDevices() })
+    return
+  }
+  json(404, { error: 'not found' })
 }
 
 export interface StandaloneServer {
@@ -190,11 +320,20 @@ export function createStandaloneServer(options: StandaloneOptions = {}): Standal
   })
   // 员工侧 MCP HTTP 端点（/mcp）：pod_mem_* 三件套宿主面。token 与主面同源（guard 先行）。
   const mcp: McpHttpHandle = createMcpHttpServer(service, { token })
+  // 远程访问片 A：设备配对存储（显式 --pairing 才启用；数据落 <dataDir>/pairing.json）
+  const pairingStore = options.pairing === true ? new PairingStore({ dataDir: runtime.dataDir }) : undefined
+  pairingStore?.open()
   const routes = makePodRoutes(() => service)
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost')
     const pathname = url.pathname
-    if (!guard(req, res, token, loopbackOnly)) return
+    // 配对端点族（远程访问片 A）：在主守卫之前处理——accept 凭一次性令牌（无设备会话）、
+    // mint/revoke 自带 loopback-only 自守卫。设计文档 §3 片 A / §4 安全模型。
+    if (pairingStore !== undefined && pathname.startsWith('/api/pair/')) {
+      handlePairRoute(pairingStore, req, res, pathname)
+      return
+    }
+    if (!guard(req, res, token, loopbackOnly, pairingStore)) return
     if (pathname === '/' || pathname === '/index.html') {
       serveStatic(res, pathname, staticDir)
       return

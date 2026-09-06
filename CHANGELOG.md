@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **远程访问片 A（设备配对与可撤销会话）**：`--pairing` 开启后 `/api/pair/mint|accept|revoke|devices`
+  端点族可用；一次性令牌（TTL 10min、同时仅一枚、配对即作废）换发设备凭据
+  （HttpOnly Cookie 恒时校验，逐设备/全部撤销持久化）；guard 新增非 loopback 设备会话
+  放行路径（loopback 恒过不变）。铸造/撤销/列表面物理限回环（对齐 dsh-remote-web-ui 纪律）。
+  手机扫码远程操作的地基就位，QR 渲染与竖屏触控适配为片 B/C。
+- 记忆向量召回接 **Ollama 本地免费嵌入**：`POD_MEMORY_EMBEDDING=ollama`
+  （nomic-embed-text，768 维实测）；混合召回余弦改池内 min-max 归一——真实模型各向异性
+  冒烟实证（无关文本 cosine 基线 0.5+ 使绝对门槛失效、importance 反超语义序）后修正。
+
 ## v0.3.0-alpha.2（2026-09-06）
 
 > 全面代码审查修复轮 + 真实链路验证 + 三个挂起切片 + 多角色桌宠 + 开放式厂商注册。

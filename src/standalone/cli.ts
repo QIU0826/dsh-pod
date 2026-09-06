@@ -50,6 +50,9 @@ export function parseStandaloneArgs(argv: string[]): StandaloneCliArgs {
       case '--demo':
         out.demo = true
         break
+      case '--pairing':
+        out.pairing = true
+        break
       default:
         throw new Error(`cli: 未知参数 ${flag}`)
     }
@@ -68,6 +71,7 @@ export function printUsage(): string {
     '  --token <t>         Bearer token（非 loopback 监听时必填）',
     '  --opencode-bin <p>  opencode 可执行文件路径（缺省走候选探测）',
     '  --demo              演示模式：脚本化后端（零 LLM 成本，真实 git/问答/审批链路）',
+    '  --pairing           设备配对（远程访问片 A）：/api/pair/* 端点族 + 非回环凭设备会话放行',
     '  -h, --help          显示本帮助',
   ].join('\n')
 }
