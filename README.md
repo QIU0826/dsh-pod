@@ -329,3 +329,10 @@ MIT
 - npm install dsh-pod
 - npm run build
 - Node.js >= 20（含 Windows 说明）
+
+
+## 补充环境要求说明（T-2）
+
+- npm install dsh-pod
+- npm run build
+- Node.js >= 20（含 Windows 说明）
