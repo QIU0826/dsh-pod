@@ -323,3 +323,9 @@ vendor 验签失败/时间窗过期/缺凭据一律 401 fail-closed；非 loopba
 ## 许可证
 
 MIT
+
+## 实现 README 安装章节（T-1）
+
+- npm install dsh-pod
+- npm run build
+- Node.js >= 20（含 Windows 说明）
