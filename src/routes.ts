@@ -1177,6 +1177,42 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
       },
     },
     {
+      // 卡死任务强制回收：pod_force_rerun（T2）。任务滞留 negotiating/accepted/dispatched/
+      // running（worker 挂起/误派到耗尽槽位、pod_dispatch 视其为在途而 no-op）时，
+      // kill 在途 worker + 释放槽位 + 置 ready + 立即重驱（含 vendor 硬过滤重新路由）。
+      kind: 'exact',
+      path: '/api/dsh-pod/force-rerun',
+      handler: async (req, res) => {
+        if (!isLoopback(req)) {
+          writeJson(res, 403, { error: 'forbidden: loopback-only' })
+          return
+        }
+        const current = service()
+        if (current === undefined) {
+          writeJson(res, 503, { error: 'pod runtime not initialized' })
+          return
+        }
+        if (req.method !== 'POST') {
+          writeJson(res, 405, { error: 'method not allowed' })
+          return
+        }
+        const body = await readJsonBody(req)
+        const taskId = typeof body?.task_id === 'string' ? body.task_id.trim() : ''
+        const reason = typeof body?.reason === 'string' ? body.reason.trim() : ''
+        if (taskId.length === 0) {
+          writeJson(res, 422, { error: 'task_id is required' })
+          return
+        }
+        try {
+          const r = await current.forceRerun(taskId, reason || 'operator force rerun')
+          writeJson(res, 200, { ok: true, task_id: r.task_id, from: r.from, to: r.to })
+        } catch (error) {
+          console.error('[dsh-pod] route handler failed:', error)
+          writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
       // 长期记忆此前只有工具面（pod_mem_write / query / correct）可达：agent 沉淀的经验
       // 人看不到、也改不了。HTTP 面补齐后 UI 才能呈现记忆图谱并允许人工纠正。
       // 注意：MemoryStore 只提供 correct（保留变更历史，可审计），**没有删除记录的接口**——

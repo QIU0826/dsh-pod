@@ -16,6 +16,7 @@ export const POD_TOOL_STAGES: Record<string, PodToolStage> = {
   pod_launch: 'launch',
   pod_plan: 'plan',
   pod_reassign: 'dispatch',
+  pod_force_rerun: 'dispatch',
   pod_mem_write: 'memory',
   pod_mem_query: 'memory',
   pod_mem_correct: 'memory',
