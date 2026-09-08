@@ -18,6 +18,13 @@ export interface PriceTable {
   version: string
   /** 每百万 token 美元价（in / out），公共 API 价的显式估算快照。 */
   rates: Record<string, { in: number; out: number }>
+  /**
+   * 厂商缺省模型计价键（T5 修复：空 model 槽位不再 equiv_usd 恒 0）。
+   * 槽位 model 留空 = 走后端默认（worker 启动时 slot.model!=='' 才透传 -m），
+   * 该后端默认有一个系统已知的计价键（如 codex 默认 → 'codex-default'）。
+   * 只列出「真的知道默认价格」的厂商；未知厂商不在此表 = 保持 honest unknown（0）。
+   */
+  vendorDefaults?: Record<string, string>
 }
 
 /** 默认价目表：版本号即快照日期；发布前需按当日公共价刷新。 */
@@ -31,6 +38,12 @@ export const DEFAULT_PRICE_TABLE: PriceTable = {
     'deepseek-v4-pro': { in: 0.4, out: 1.6 },
     'codex-default': { in: 2.5, out: 10 },
     'unknown': { in: 0, out: 0 },
+  },
+  // claude 缺省 = 本机实测路由（model-cards 里 claude 卡明确指向 deepseek-v4-pro）；
+  // codex 缺省 = 应用默认（模型留空走 codex 自带默认）。dsh/ark/opencode 无已知价目 → 不编造。
+  vendorDefaults: {
+    claude: 'deepseek-v4-pro',
+    codex: 'codex-default',
   },
 }
 
@@ -84,15 +97,30 @@ export class Ledger {
       throw new PodError('token usage must be finite non-negative numbers', 'INVALID_USAGE', { tokensIn, tokensOut })
     }
     const mission = this.requireMission(missionId)
-    const rate = this.priceTable.rates[model]
+    // 计价键解析（T5）：显式命中的模型优先；未命中时按槽位厂商回落到知名默认键
+    // （slot.model 留空 = 走后端默认，那个默认有一个系统已知的计价键）。这不算编造——
+    // 是厂商缺省模型的规范化计价；确实未知的厂商（无 vendorDefaults 键）保持 unknown(0)。
+    let priceKey = model
+    let rate = this.priceTable.rates[priceKey]
+    if (rate === undefined) {
+      const slot = this.store.getSlot !== undefined ? this.store.getSlot(slotId) : undefined
+      const vendorDefault = slot !== undefined ? this.priceTable.vendorDefaults?.[slot.vendor] : undefined
+      if (vendorDefault !== undefined) {
+        const defaultRate = this.priceTable.rates[vendorDefault]
+        if (defaultRate !== undefined) {
+          priceKey = vendorDefault
+          rate = defaultRate
+        }
+      }
+    }
     const priceKnown = rate !== undefined
-    const equivUsd = priceKnown ? (tokensIn * rate.in + tokensOut * rate.out) / 1_000_000 : 0
+    const equivUsd = rate === undefined ? 0 : (tokensIn * rate.in + tokensOut * rate.out) / 1_000_000
 
     const entry: LedgerEntry = {
       mission_id: missionId,
       slot_id: slotId,
       task_id: taskId,
-      model,
+      model: priceKey,
       ts: this.clock(),
       tokens_in: tokensIn,
       tokens_out: tokensOut,

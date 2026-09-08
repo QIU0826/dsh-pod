@@ -90,6 +90,66 @@ describe('Ledger 双列计费（D7：tokens 实测 + equiv_usd 标注估算）',
   })
 })
 
+describe('厂商缺省计价回落（T5：空 model 槽位不再 equiv_usd 恒 0）', () => {
+  function makeSlot(id: string, vendor: string): void {
+    store.createSlot({
+      id,
+      mission_id: 'M-1',
+      vendor,
+      role: 'implementer',
+      capabilities: ['编码'],
+      model: '',
+      effort: 'medium',
+      session_tier: 'transient',
+      status: 'idle',
+      tokens_in: 0,
+      tokens_out: 0,
+      ctx_usage_pct: 0,
+      window_tokens: 200_000,
+    })
+  }
+
+  it('codex 槽位 model 留空 → 回落 codex-default（1000/500 → 0.0075）', () => {
+    const l = new Ledger(store, { clock: () => now, priceTable: DEFAULT_PRICE_TABLE })
+    makeSlot('C-1', 'codex')
+    const entry = l.recordUsage('M-1', 'C-1', 'T-1', '', 1000, 500, 'measured')
+    expect(entry.price_known).toBe(true)
+    expect(entry.model).toBe('codex-default')
+    // (1000*2.5 + 500*10)/1e6 = 0.0025 + 0.005 = 0.0075
+    expect(entry.equiv_usd).toBeCloseTo(0.0075, 6)
+  })
+
+  it('claude 槽位 model 留空 → 回落 deepseek-v4-pro', () => {
+    const l = new Ledger(store, { clock: () => now, priceTable: DEFAULT_PRICE_TABLE })
+    makeSlot('CL-1', 'claude')
+    const entry = l.recordUsage('M-1', 'CL-1', 'T-1', '', 1000, 500, 'measured')
+    expect(entry.price_known).toBe(true)
+    expect(entry.model).toBe('deepseek-v4-pro')
+    // (1000*0.4 + 500*1.6)/1e6 = 0.0004 + 0.0008 = 0.0012
+    expect(entry.equiv_usd).toBeCloseTo(0.0012, 6)
+  })
+
+  it('无 vendorDefaults 的厂商（dsh）model 留空 → 诚实的 unknown（equiv 0 + price_known=false）', () => {
+    const l = new Ledger(store, { clock: () => now, priceTable: DEFAULT_PRICE_TABLE })
+    makeSlot('D-1', 'dsh')
+    const entry = l.recordUsage('M-1', 'D-1', 'T-1', '', 1000, 500, 'measured')
+    expect(entry.price_known).toBe(false)
+    expect(entry.equiv_usd).toBe(0)
+    expect(entry.model).toBe('')
+    // tokens 权威列照记，不丢账
+    expect(store.getMission('M-1')!.spent_tokens).toBe(1500)
+  })
+
+  it('显式命中的已知模型优先于厂商缺省回落（codex 槽位标 claude-sonnet → 按 sonnet 计价）', () => {
+    const l = new Ledger(store, { clock: () => now, priceTable: DEFAULT_PRICE_TABLE })
+    makeSlot('C-2', 'codex')
+    const entry = l.recordUsage('M-1', 'C-2', 'T-1', 'claude-sonnet', 40_000, 10_000, 'measured')
+    expect(entry.model).toBe('claude-sonnet')
+    expect(entry.equiv_usd).toBeCloseTo(0.27, 6)
+    expect(store.getMission('M-1')!.spent_equiv_usd).toBeCloseTo(0.27, 6)
+  })
+})
+
 describe('预算熔断（2.7 节：超预算自动 pause 的信号源）', () => {
   it('token 预算超限 → BudgetExceededError', () => {
     ledger.recordUsage('M-1', 'S-1', 'T-1', 'claude-sonnet', 90_000, 0, 'measured')
