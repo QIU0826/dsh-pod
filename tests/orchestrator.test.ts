@@ -333,6 +333,16 @@ describe('createTasks（DAG 校验）', () => {
       ]),
     ).toThrowError(/missing/i)
   })
+
+  it('PlanTaskInput.vendor → Task.requested_vendor（T1 派发槽位硬过滤的数据通道）', () => {
+    const orchestrator = makeOrchestrator(fixture, {})
+    orchestrator.launch(launchInput({ cwd: fixture.repo }))
+    orchestrator.createTasks([{ id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'], vendor: 'dsh' }])
+    expect(fixture.store.getTask('T-1')!.requested_vendor).toBe('dsh')
+    // 未声明 vendor → 不设 requested_vendor
+    orchestrator.createTasks([{ id: 'T-2', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'] }])
+    expect(fixture.store.getTask('T-2')!.requested_vendor).toBeUndefined()
+  })
 })
 
 describe('run 最小可演示链（fake 后端）', () => {

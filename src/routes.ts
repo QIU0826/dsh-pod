@@ -688,7 +688,7 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
             }
             const tasks: PlanTaskInput[] = []
             for (const item of raw as Array<Record<string, unknown>>) {
-              const t = item as { id?: unknown; title?: unknown; spec?: unknown; type?: unknown; skill_tags?: unknown; depends_on?: unknown }
+              const t = item as { id?: unknown; title?: unknown; spec?: unknown; type?: unknown; skill_tags?: unknown; depends_on?: unknown; vendor?: Vendor }
               if (typeof t.id !== 'string' || typeof t.title !== 'string' || typeof t.spec !== 'string' || typeof t.type !== 'string') {
                 writeJson(res, 422, { error: 'each task needs id/title/spec/type' })
                 return
@@ -702,6 +702,7 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
                 type: t.type as PlanTaskInput['type'],
                 skill_tags: Array.isArray(t.skill_tags) ? (t.skill_tags as string[]) : [],
                 depends_on: Array.isArray(t.depends_on) ? (t.depends_on as string[]) : [],
+                vendor: t.vendor,
               })
             }
             const created = current.addPlanTasks(tasks)

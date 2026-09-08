@@ -57,6 +57,16 @@ function capabilitiesMatch(slot: AgentSlot, task: Task): boolean {
   return task.skill_tags.every((tag) => caps.has(tag))
 }
 
+/**
+ * 厂商硬过滤（T1：审查派发 vendor 错配根因修复）：任务声明了 requested_vendor 时，
+ * 只路由到同 vendor 槽位。此前两个 capability 相同的 review 槽（codex/dsh）会被
+ * 稳定序（S-B-2 < S-B-3）恒定误派到 codex，dsh 槽永不被选中 → dsh 审卡死。
+ */
+function vendorMatch(slot: AgentSlot, task: Task): boolean {
+  if (task.requested_vendor === undefined) return true
+  return slot.vendor === task.requested_vendor
+}
+
 function activeLoad(slotId: string, tasks: Task[]): number {
   return tasks.filter((t) => t.owner_slot_id === slotId && ACTIVE_TASK_STATUSES.has(t.status)).length
 }
@@ -75,6 +85,7 @@ export function routeTask(task: Task, context: RouteContext): RouteResult {
     if (UNAVAILABLE_STATUSES.has(slot.status)) return false
     if (slot.mission_id !== task.mission_id) return false
     if (!capabilitiesMatch(slot, task)) return false
+    if (!vendorMatch(slot, task)) return false
     if (context.excludeBusy === true && activeLoad(slot.id, context.tasks) > 0) return false
     return true
   })
@@ -86,6 +97,7 @@ export function routeTask(task: Task, context: RouteContext): RouteResult {
         if (UNAVAILABLE_STATUSES.has(slot.status)) return false
         if (slot.mission_id !== task.mission_id) return false
         if (!capabilitiesMatch(slot, task)) return false
+        if (!vendorMatch(slot, task)) return false
         return true
       })
     return {

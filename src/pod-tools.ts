@@ -110,6 +110,7 @@ export function makePodTools(service: PodService): PodToolBundle {
               type: { type: 'string', required: true, enum: ['implement', 'review', 'plan', 'test', 'doc', 'research'] satisfies TaskType[] },
               skill_tags: { type: 'array', items: { type: 'string' } },
               depends_on: { type: 'array', items: { type: 'string' } },
+              vendor: { type: 'string', description: '任务要求的厂商绑定（可选）：派发路由当硬过滤，如 review 锁定 dsh/codex', enum: ['claude', 'codex', 'dsh', 'ark', 'opencode'] satisfies Vendor[] },
             },
           },
         },
@@ -600,6 +601,7 @@ export function makePodTools(service: PodService): PodToolBundle {
               type: { type: 'string', required: true, description: 'implement | review | test | doc | research' },
               skill_tags: { type: 'array', items: { type: 'string' } },
               depends_on: { type: 'array', items: { type: 'string' } },
+              vendor: { type: 'string', description: '任务要求的厂商绑定（可选），如 review 锁定 dsh/codex' },
             },
           },
         },
@@ -617,7 +619,7 @@ export function makePodTools(service: PodService): PodToolBundle {
         },
         render: (_args, value: { ok: boolean; message: string }) => text(value.message),
       },
-      async execute(args: { action: string; tasks?: Array<{ id: string; title: string; spec: string; type: string; skill_tags?: string[]; depends_on?: string[] }>; reason?: string }) {
+      async execute(args: { action: string; tasks?: Array<{ id: string; title: string; spec: string; type: string; skill_tags?: string[]; depends_on?: string[]; vendor?: Vendor }>; reason?: string }) {
         try {
           if (args.action === 'list') {
             const st = service.status()
@@ -635,6 +637,7 @@ export function makePodTools(service: PodService): PodToolBundle {
                 id: t.id, title: t.title, spec: t.spec,
                 type: t.type as PlanTaskInput['type'],
                 skill_tags: t.skill_tags ?? [], depends_on: t.depends_on ?? [],
+                vendor: t.vendor,
               })),
             )
             return { ok: true, message: `已追加 ${created.length} 个任务节点（同一裁决：id 白名单/环 fail-closed）`, tasks: created.map((t) => ({ id: t.id, title: t.title, type: t.type, status: t.status })) }
