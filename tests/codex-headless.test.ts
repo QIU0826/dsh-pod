@@ -7,6 +7,7 @@ import {
   parseCodexJsonlLine,
   resolveCodexMode,
   buildCodexArgs,
+  codexSandboxForTask,
 } from '../src/workers/codex-headless.js'
 import { CodexHeadlessBackend } from '../src/workers/codex-headless.js'
 import type { AgentSlot, WorkerCompletion } from '../src/core/types.js'
@@ -183,7 +184,7 @@ describe('CodexHeadlessBackend（FakeSpawner 集成）', () => {
     expect(detected.authed).toBe(true) // 旧实现只测 stdout → 误判未登录
   })
 
-  it('start 新线程（transient 档）：参数含 --json/-s read-only/-C worktree；流回放产出进度+usage+thread', async () => {
+  it('start 新线程（transient 档）：implement → -s workspace-write；流回放产出进度+usage+thread', async () => {
     const captured: string[][] = []
     const events = [
       '{"type":"thread.started","thread_id":"thread-42"}',
@@ -231,7 +232,8 @@ describe('CodexHeadlessBackend（FakeSpawner 集成）', () => {
     expect(args[1]).toBe('-') // prompt 走 stdin（Windows 引号/长度专项）
     expect(args).toContain('--json')
     expect(args).toContain('--skip-git-repo-check')
-    expect(args).toContain('read-only')
+    expect(args).toContain('workspace-write') // implement 需写工作区产物/commit（修复：read-only 挡写）
+    expect(args).not.toContain('read-only')
     expect(args).toContain('C:\\repo\\.worktrees\\S-1')
     expect(progress).toEqual(['text'])
     expect(completion?.exit).toBe('done')
@@ -239,7 +241,7 @@ describe('CodexHeadlessBackend（FakeSpawner 集成）', () => {
     expect(completion?.report?.commit_sha).toBe('abc')
   })
 
-  it('start resume（per-mission + session_ref）：args 为 exec resume --json <thread> -（prompt 走 stdin）', async () => {
+  it('start resume（per-mission + session_ref）：implement → exec resume --json <thread> -（prompt 走 stdin，沙箱保持 workspace-write）', async () => {
     const captured: string[][] = []
     let stdinText = ''
     const backend = new CodexHeadlessBackend({
@@ -262,8 +264,8 @@ describe('CodexHeadlessBackend（FakeSpawner 集成）', () => {
     const persistent: AgentSlot = { ...slot, session_tier: 'per-mission', session_ref: 'thread-9' }
     await backend.start(persistent, task, 'W')
     const args = captured[0]!
-    // 沙箱不降级（审计 P2-4）：resume 同样锚定 -C worktree + -s read-only
-    expect(args).toEqual(['exec', 'resume', '--json', '-C', 'W', '-s', 'read-only', 'thread-9', '-'])
+    // 沙箱不降级（审计 P2-4）：resume 同样锚定 -C worktree + -s 与启动一致
+    expect(args).toEqual(['exec', 'resume', '--json', '-C', 'W', '-s', 'workspace-write', 'thread-9', '-'])
     expect(stdinText).toContain('T-1')
   })
 
@@ -284,7 +286,7 @@ describe('CodexHeadlessBackend（FakeSpawner 集成）', () => {
 describe('buildCodexArgs 注入面收口（P1：win32 shell:true 下 cmd 元字符即命令注入）', () => {
   it('model 含 cmd 元字符 → 拒绝（& | ^ % < > ! 引号）', () => {
     for (const model of ['x&calc', 'a|b', 'p^wd', '%USERPROFILE%', 'a>b', 'x!y', 'mo"del', "it's"]) {
-      expect(() => buildCodexArgs({ kind: 'new-thread' }, 'C:/repo/.wt', model)).toThrow(/unsafe argv/)
+      expect(() => buildCodexArgs({ kind: 'new-thread' }, 'C:/repo/.wt', { model })).toThrow(/unsafe argv/)
     }
   })
   it('worktree 含元字符 → 拒绝；合法路径（含空格）放行', () => {
@@ -295,8 +297,37 @@ describe('buildCodexArgs 注入面收口（P1：win32 shell:true 下 cmd 元字�
     expect(() => buildCodexArgs({ kind: 'resume', threadId: 't1&calc' }, 'W', undefined)).toThrow(/unsafe argv/)
   })
   it('合法 model/threadId 正常组装', () => {
-    expect(buildCodexArgs({ kind: 'new-thread' }, 'C:/repo/.wt', 'gpt-5.6-sol')).toContain('gpt-5.6-sol')
+    expect(buildCodexArgs({ kind: 'new-thread' }, 'C:/repo/.wt', { model: 'gpt-5.6-sol' })).toContain('gpt-5.6-sol')
     expect(buildCodexArgs({ kind: 'resume', threadId: 'th_abc-123' }, 'W', undefined)).toContain('th_abc-123')
+  })
+})
+
+describe('codex 沙箱按任务类型选择（修复：read-only 挡住 implement 写工作区产物/commit）', () => {
+  it('codexSandboxForTask：implement / test → workspace-write', () => {
+    expect(codexSandboxForTask('implement')).toBe('workspace-write')
+    expect(codexSandboxForTask('test')).toBe('workspace-write')
+  })
+  it('codexSandboxForTask：review / plan / doc / research → read-only（只读履约不松动）', () => {
+    expect(codexSandboxForTask('review')).toBe('read-only')
+    expect(codexSandboxForTask('plan')).toBe('read-only')
+    expect(codexSandboxForTask('doc')).toBe('read-only')
+    expect(codexSandboxForTask('research')).toBe('read-only')
+  })
+  it('buildCodexArgs 按 sandbox 参数组装（新线程）', () => {
+    expect(buildCodexArgs({ kind: 'new-thread' }, 'W', { sandbox: 'workspace-write' })).toEqual([
+      'exec', '-', '--json', '--color', 'never', '--skip-git-repo-check', '-s', 'workspace-write', '-C', 'W',
+    ])
+    expect(buildCodexArgs({ kind: 'new-thread' }, 'W', { sandbox: 'read-only' })).toContain('-s')
+    expect(buildCodexArgs({ kind: 'new-thread' }, 'W', { sandbox: 'read-only' })).toContain('read-only')
+  })
+  it('buildCodexArgs resume 与启动保持一致（P2-4：沙箱不降级）', () => {
+    const impl = buildCodexArgs({ kind: 'resume', threadId: 't-1' }, 'W', { sandbox: 'workspace-write' })
+    expect(impl).toEqual(['exec', 'resume', '--json', '-C', 'W', '-s', 'workspace-write', 't-1', '-'])
+    const review = buildCodexArgs({ kind: 'resume', threadId: 't-1' }, 'W', { sandbox: 'read-only' })
+    expect(review).toContain('read-only')
+  })
+  it('缺省 sandbox → read-only（纯函数不静默放权）', () => {
+    expect(buildCodexArgs({ kind: 'new-thread' }, 'W')).toContain('read-only')
   })
 })
 
