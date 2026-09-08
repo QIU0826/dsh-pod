@@ -100,6 +100,8 @@ export interface PlanTaskInput {
   type: TaskType
   skill_tags?: string[]
   depends_on?: string[]
+  /** 任务要求的厂商绑定（可选）：派发路由当硬过滤用（如 review 锁定 dsh/codex）。 */
+  vendor?: Vendor
 }
 
 export interface WorktreeManager {
@@ -461,6 +463,7 @@ export class MissionOrchestrator {
         title: item.title,
         spec: item.spec,
         skill_tags: item.skill_tags ?? [],
+        requested_vendor: item.vendor,
         type: item.type,
         depends_on: item.depends_on ?? [],
         status: 'ready',

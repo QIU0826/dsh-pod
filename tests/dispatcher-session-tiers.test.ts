@@ -118,6 +118,41 @@ describe('Dispatcher 路由（能力 > 负载 > 单任务成本）', () => {
   })
 })
 
+describe('T1 修复：vendor 硬过滤（review 派发错配）', () => {
+  // 复现实验场景：两个 capability 相同的 review 槽（codex S-B-2 在前、dsh S-B-3 在后），
+  // 修复前稳定序必选 codex（"S-B-2" < "S-B-3"），dsh 审被误派到 codex 槽并卡死。
+  const codex = makeSlot('S-B-2', { vendor: 'codex', capabilities: ['review', 'node', 'javascript'] })
+  const dsh = makeSlot('S-B-3', { vendor: 'dsh', capabilities: ['review', 'node', 'javascript'] })
+
+  it('声明 requested_vendor=dsh → 只路由到 dsh 槽（即使 codex 槽稳定序在前）', () => {
+    const result = routeTask(makeTask('T-B-3', {
+      skill_tags: ['review', 'node', 'javascript'], type: 'review', requested_vendor: 'dsh',
+    }), { slots: [codex, dsh], tasks: [] })
+    expect(result.slotId).toBe('S-B-3')
+  })
+
+  it('声明 requested_vendor=codex → 只路由到 codex 槽', () => {
+    const result = routeTask(makeTask('T-B-2', {
+      skill_tags: ['review', 'node', 'javascript'], type: 'review', requested_vendor: 'codex',
+    }), { slots: [codex, dsh], tasks: [] })
+    expect(result.slotId).toBe('S-B-2')
+  })
+
+  it('未声明 requested_vendor → 行为不变（保持既有稳定序）', () => {
+    const result = routeTask(makeTask('T-x', {
+      skill_tags: ['review', 'node', 'javascript'], type: 'review',
+    }), { slots: [codex, dsh], tasks: [] })
+    expect(result.slotId).toBe('S-B-2') // 旧行为：稳定序选 codex
+  })
+
+  it('requested_vendor 无可匹配槽位 → 不路由（null，非误派他厂商）', () => {
+    const result = routeTask(makeTask('T-x', {
+      skill_tags: ['review'], requested_vendor: 'ark',
+    }), { slots: [codex, dsh], tasks: [] })
+    expect(result.slotId).toBeNull()
+  })
+})
+
 describe('会话档位（3.2 节三档制 / O7）', () => {
   it('默认档：claude=per-mission，codex/dsh=transient', () => {
     expect(tierDefaults('claude')).toBe('per-mission')

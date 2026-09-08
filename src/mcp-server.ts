@@ -21,6 +21,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import type { PodService } from './pod-service.js'
 import type { PlanTaskInput, SlotInput } from './core/orchestrator.js'
+import type { Vendor } from './core/types.js'
 import {
   TOOL_BRIEFS,
   approvalIdSchema,
@@ -74,7 +75,7 @@ interface DenyArgs {
 
 interface PlanArgs {
   action: 'list' | 'add' | 'replan'
-  tasks?: Array<{ id: string; title: string; spec: string; type: string; skill_tags?: string[]; depends_on?: string[] }>
+  tasks?: Array<{ id: string; title: string; spec: string; type: string; skill_tags?: string[]; depends_on?: string[]; vendor?: Vendor }>
   reason?: string
 }
 

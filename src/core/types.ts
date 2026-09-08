@@ -159,6 +159,13 @@ export interface Task {
   spec: string
   skill_tags: string[]
   owner_slot_id?: string
+  /**
+   * 任务要求的厂商绑定（可选）。命中时 dispatch 路由把它当硬过滤：只路由到
+   * vendor === requested_vendor 的槽位。用于异厂商审查/跨厂商分派需锁定特定
+   * vendor（如 dsh 审 vs codex 审）时，避免 capability 相同槽位被稳定序误派。
+   * 来源：PlanTaskInput.vendor → createTasks 落盘。
+   */
+  requested_vendor?: Vendor
   type: TaskType
   depends_on: string[]
   status: TaskStatus
