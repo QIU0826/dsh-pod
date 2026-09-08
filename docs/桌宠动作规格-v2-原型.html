@@ -1,0 +1,1032 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DSH Pod 桌宠动作规格 v2 · 交互预览器</title>
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --paper: #F7F5F0; --card: #FFFFFF; --ink: #2A2E44; --ink-soft: #6B7089;
+    --line: #E4E0D6; --brand: #3A5BA6; --brand-deep: #2E5A9E;
+    --t-accent: #3A5BA6; --t-bg1: #EAF4FC; --t-bg2: #D3E6F8; --t-deep: #2E5A9E;
+    --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+    --sans: "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  }
+  html, body { background: var(--paper); color: var(--ink); font-family: var(--sans); }
+  body { padding: 28px clamp(16px, 4vw, 48px) 60px; }
+
+  /* ── header ── */
+  .hd { max-width: 1180px; margin: 0 auto 22px; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px; }
+  .hd h1 { font-size: clamp(22px, 3vw, 30px); letter-spacing: 0.02em; }
+  .hd h1 .v2 { font-family: var(--mono); font-size: 0.55em; color: var(--t-accent); border: 1px solid currentColor; border-radius: 4px; padding: 1px 7px; vertical-align: 0.4em; margin-left: 8px; }
+  .hd p { color: var(--ink-soft); font-size: 13.5px; margin-top: 6px; max-width: 720px; line-height: 1.7; }
+  .hd-badges { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+  .bdg { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); border: 1px solid var(--line); background: var(--card); border-radius: 100px; padding: 5px 12px; white-space: nowrap; }
+  .bdg b { color: var(--t-accent); font-weight: 600; }
+
+  /* ── main grid ── */
+  .wrap { max-width: 1180px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; align-items: start; }
+  @media (max-width: 980px) { .wrap { grid-template-columns: 1fr; } }
+
+  /* ── stage ── */
+  .stage-card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+  .stage { position: relative; height: 420px; background: linear-gradient(180deg, var(--t-bg1), var(--t-bg2)); transition: background 0.6s ease; overflow: hidden; cursor: default; }
+  .stage:active { cursor: grabbing; }
+  .stage .wall { position: absolute; inset: 0; opacity: 0.55;
+    background-image: radial-gradient(circle at 18% 24%, rgba(255,255,255,0.8) 0 46px, transparent 47px),
+      radial-gradient(circle at 82% 18%, rgba(255,255,255,0.5) 0 70px, transparent 71px),
+      repeating-linear-gradient(90deg, rgba(255,255,255,0.14) 0 2px, transparent 2px 44px); }
+  .stage .floor { position: absolute; left: 0; right: 0; bottom: 0; height: 88px; background: linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,0.5)); border-top: 1px dashed rgba(42,46,68,0.12); }
+  .pet-holder { position: absolute; left: 50%; bottom: 40px; width: 300px; height: 320px; transform: translateX(-50%); touch-action: none; }
+  .pet-holder svg { width: 100%; height: 100%; overflow: visible; display: block; }
+  .stage-tag { position: absolute; top: 14px; left: 16px; font-family: var(--mono); font-size: 11px; color: var(--t-deep); opacity: 0.75; background: rgba(255,255,255,0.55); border-radius: 6px; padding: 4px 10px; }
+  .stage-hint { position: absolute; bottom: 12px; right: 16px; font-size: 11.5px; color: var(--ink-soft); background: rgba(255,255,255,0.6); border-radius: 6px; padding: 4px 10px; }
+
+  /* ── stage footer: current action ── */
+  .now { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 14px 18px; border-top: 1px solid var(--line); }
+  .now .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--t-accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--t-accent) 18%, transparent); }
+  .now b { font-size: 15px; }
+  .now .ev { font-family: var(--mono); font-size: 11.5px; color: var(--ink-soft); }
+  .now .chip { font-family: var(--mono); font-size: 11px; color: var(--t-deep); border: 1px solid var(--t-accent); border-radius: 100px; padding: 2px 10px; opacity: 0.85; }
+  .steps { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 18px 16px; }
+  .steps .st { font-size: 11.5px; color: var(--ink-soft); border: 1px solid var(--line); border-radius: 100px; padding: 3px 10px; background: var(--paper); transition: all 0.25s; }
+  .steps .st::before { content: attr(data-n) " "; font-family: var(--mono); color: var(--ink-soft); opacity: 0.7; }
+  .steps .st.on { color: #fff; background: var(--t-accent); border-color: var(--t-accent); }
+
+  /* ── right panel ── */
+  .panel { display: flex; flex-direction: column; gap: 14px; }
+  .pcard { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px 18px; }
+  .pcard h3 { font-size: 12px; letter-spacing: 0.12em; color: var(--ink-soft); font-weight: 600; margin-bottom: 12px; }
+  .crew { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .crew button { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 4px 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); cursor: pointer; font-family: var(--sans); transition: all 0.18s; }
+  .crew button:hover { border-color: var(--ink-soft); }
+  .crew button.on { background: var(--t-accent); border-color: var(--t-accent); color: #fff; }
+  .crew button.on .cv { color: rgba(255,255,255,0.8); }
+  .crew .mini { width: 34px; height: 38px; }
+  .crew .cn { font-size: 12.5px; font-weight: 600; }
+  .crew .cv { font-size: 10.5px; color: var(--ink-soft); font-family: var(--mono); }
+  .acts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .acts button { position: relative; padding: 9px 6px 7px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); cursor: pointer; font-family: var(--sans); text-align: center; transition: all 0.18s; }
+  .acts button:hover { border-color: var(--ink-soft); }
+  .acts button.on { background: var(--t-accent); border-color: var(--t-accent); color: #fff; }
+  .acts button.on .tr { color: rgba(255,255,255,0.75); border-color: rgba(255,255,255,0.4); }
+  .acts .an { font-size: 13px; font-weight: 600; display: block; }
+  .acts .tr { display: inline-block; margin-top: 3px; font-family: var(--mono); font-size: 9.5px; color: var(--ink-soft); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
+  .acts button.core::after { content: "★"; position: absolute; top: 3px; right: 7px; font-size: 9px; color: var(--t-accent); }
+  .acts button.core.on::after { color: #fff; }
+  .tgl { display: flex; gap: 8px; }
+  .tgl button { flex: 1; padding: 9px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); cursor: pointer; font-family: var(--sans); font-size: 12.5px; font-weight: 600; color: var(--ink); display: flex; align-items: center; justify-content: center; gap: 7px; transition: all 0.18s; }
+  .tgl button:hover { border-color: var(--ink-soft); }
+  .tgl button.on { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .tgl svg { width: 13px; height: 13px; }
+  .info-rows { display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; }
+  .info-rows .ir { display: flex; gap: 10px; }
+  .info-rows .k { min-width: 64px; color: var(--ink-soft); flex-shrink: 0; }
+  .info-rows .v { line-height: 1.55; }
+  .kbd { font-size: 11.5px; color: var(--ink-soft); line-height: 1.8; }
+  .kbd kbd { font-family: var(--mono); font-size: 10px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 1px 5px; background: var(--paper); margin: 0 1px; }
+
+  /* ── doc sections ── */
+  .doc { max-width: 1180px; margin: 26px auto 0; }
+  .sec { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 24px 26px; margin-bottom: 18px; }
+  .sec > h2 { font-size: 17px; margin-bottom: 4px; }
+  .sec > .sub { color: var(--ink-soft); font-size: 13px; margin-bottom: 18px; line-height: 1.7; }
+  table.spec { width: 100%; border-collapse: collapse; font-size: 12.8px; }
+  table.spec th { text-align: left; font-size: 11px; letter-spacing: 0.08em; color: var(--ink-soft); font-weight: 600; padding: 8px 10px; border-bottom: 1.5px solid var(--ink); white-space: nowrap; }
+  table.spec td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; line-height: 1.55; }
+  table.spec tr:hover td { background: color-mix(in srgb, var(--t-accent) 4%, transparent); }
+  table.spec .mono { font-family: var(--mono); font-size: 11.5px; }
+  .roster { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+  .r-card { border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: flex; gap: 14px; background: var(--paper); }
+  .r-card .fig { width: 92px; height: 108px; flex-shrink: 0; }
+  .r-card .fig svg { width: 100%; height: 100%; }
+  .r-card h4 { font-size: 14.5px; margin-bottom: 2px; }
+  .r-card .rv { font-family: var(--mono); font-size: 10.5px; color: var(--ink-soft); margin-bottom: 8px; }
+  .r-card .el { font-size: 12px; color: var(--ink-soft); line-height: 1.7; }
+  .r-card .el b { color: var(--ink); font-weight: 600; }
+  .pals { display: flex; gap: 5px; margin-top: 9px; flex-wrap: wrap; }
+  .pals i { width: 20px; height: 20px; border-radius: 6px; border: 1px solid rgba(0,0,0,0.08); }
+  .pals i::after { content: attr(data-h); display: block; font-style: normal; font-family: var(--mono); font-size: 6.5px; color: rgba(255,255,255,0.9); text-align: center; margin-top: 5px; }
+  .pals i.dk::after { color: rgba(0,0,0,0.55); }
+  .note { border: 1px dashed var(--line); border-radius: 12px; padding: 12px 16px; font-size: 12.5px; color: var(--ink-soft); line-height: 1.75; margin-top: 14px; }
+  .note b { color: var(--ink); }
+
+  /* ── SVG pet animation classes ── */
+  .pet g { transform-box: fill-box; }
+  .pet .anim { transform-origin: center; }
+  .pet .a-armL, .pet .a-armR { transform-origin: 50% 8%; }
+  .pet .a-head { transform-origin: 50% 92%; }
+  .pet .a-body { transform-origin: 50% 100%; }
+  .pet .a-figure { transform-origin: 50% 100%; }
+  .pet .a-eyeL, .pet .a-eyeR { transform-origin: 50% 50%; }
+  .pet .a-legL, .pet .a-legR { transform-origin: 50% 10%; }
+  .pet .a-tail { transform-origin: 30% 80%; }
+  .pet .a-shadow { transform-origin: 50% 50%; }
+  .pet .a-hoodTop { transform-origin: 50% 90%; }
+  .stage.paused .pet * { animation-play-state: paused !important; }
+
+  /* idle — 4.4s 循环：呼吸/眨眼×2/扶帽檐/歪头回正/影子微倾 */
+  [data-act="idle"] .a-body { animation: k-breathe 2.2s ease-in-out infinite; }
+  [data-act="idle"] .a-eyeL, [data-act="idle"] .a-eyeR { animation: k-blink 4.4s linear infinite; }
+  [data-act="idle"] .a-armR { animation: k-idleArmR 4.4s ease-in-out infinite; }
+  [data-act="idle"] .a-head { animation: k-idleTilt 4.4s ease-in-out infinite; }
+  [data-act="idle"] .a-shadow { animation: k-idleShadow 4.4s ease-in-out infinite; }
+  [data-act="idle"] .a-tail { animation: k-tailSway 3s ease-in-out infinite; }
+  @keyframes k-breathe { 0%,100% { transform: scaleY(1); } 50% { transform: scaleY(1.022); } }
+  @keyframes k-blink { 0%, 24%, 28%, 84%, 88%, 100% { transform: scaleY(1); } 26% { transform: scaleY(0.08); } 86% { transform: scaleY(0.08); } }
+  @keyframes k-idleArmR { 0%, 42%, 70%, 100% { transform: rotate(0deg); } 50% { transform: rotate(-160deg); } 62% { transform: rotate(-154deg); } }
+  @keyframes k-idleTilt { 0%, 42%, 70%, 96%, 100% { transform: rotate(0deg); } 76% { transform: rotate(9deg); } 90% { transform: rotate(8deg); } }
+  @keyframes k-idleShadow { 0%, 42%, 70%, 100% { transform: translateX(0) scaleX(1); } 76% { transform: translateX(5px) scaleX(1.045); } }
+  @keyframes k-tailSway { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(6deg); } }
+
+  /* thinking — 气泡弹出 + 元素摇摆 + 头微歪 */
+  [data-act="think"] .a-head { animation: k-thinkHead 3.4s ease-in-out infinite; }
+  [data-act="think"] .a-armR { animation: k-thinkChin 3.4s ease-in-out infinite; }
+  [data-act="think"] .a-body { animation: k-breathe 2.6s ease-in-out infinite; }
+  [data-act="think"] .fx-bubble { animation: k-bubblePop 3.4s cubic-bezier(0.34,1.56,0.64,1) infinite; transform-origin: 30% 100%; }
+  [data-act="think"] .fx-bubble .ic { animation: k-iconWobble 1.7s ease-in-out infinite; transform-origin: center; transform-box: fill-box; }
+  [data-act="think"] .fx-dot1 { animation: k-dotBob 1.7s ease-in-out infinite; }
+  [data-act="think"] .fx-dot2 { animation: k-dotBob 1.7s ease-in-out -0.6s infinite; }
+  @keyframes k-thinkHead { 0%, 100% { transform: rotate(-3deg); } 50% { transform: rotate(5deg); } }
+  @keyframes k-thinkChin { 0%, 20%, 80%, 100% { transform: rotate(112deg); } 50%, 70% { transform: rotate(108deg); } }
+  @keyframes k-bubblePop { 0% { transform: scale(0); opacity: 0; } 12% { transform: scale(1.12); opacity: 1; } 18% { transform: scale(1); } 88% { transform: scale(1); opacity: 1; } 100% { transform: scale(0.7); opacity: 0; } }
+  @keyframes k-iconWobble { 0%, 100% { transform: rotate(-7deg); } 50% { transform: rotate(7deg); } }
+  @keyframes k-dotBob { 0%, 100% { transform: translateY(0); opacity: 0.5; } 50% { transform: translateY(-4px); opacity: 1; } }
+
+  /* typing — 键盘滑入 + 键帽浮起 + 手臂交替 */
+  [data-act="type"] .a-body { animation: k-typeLean 1.1s ease-in-out infinite; transform-origin: 50% 100%; }
+  [data-act="type"] .a-armL { animation: k-typeArmL 0.55s ease-in-out infinite; }
+  [data-act="type"] .a-armR { animation: k-typeArmR 0.55s ease-in-out infinite; }
+  [data-act="type"] .a-head { animation: k-typeNod 1.1s ease-in-out infinite; }
+  [data-act="type"] .prop-keyboard { animation: k-kbIn 0.5s cubic-bezier(0.34,1.4,0.64,1) both; }
+  [data-act="type"] .prop-keyboard .kc { animation: k-keycap 1.2s ease-in-out infinite; animation-delay: calc(var(--i) * 0.1s); transform-origin: center; transform-box: fill-box; }
+  @keyframes k-typeLean { 0%, 100% { transform: rotate(0deg); } 50% { transform: rotate(2.4deg); } }
+  @keyframes k-typeArmL { 0%, 100% { transform: rotate(6deg); } 50% { transform: rotate(-8deg); } }
+  @keyframes k-typeArmR { 0%, 100% { transform: rotate(-8deg); } 50% { transform: rotate(6deg); } }
+  @keyframes k-typeNod { 0%, 100% { transform: rotate(2deg); } 50% { transform: rotate(-3deg); } }
+  @keyframes k-kbIn { from { transform: translateY(26px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  @keyframes k-keycap { 0%, 30%, 100% { transform: translateY(0); } 12% { transform: translateY(-5px); } }
+
+  /* building — 举锤敲击 + 方块落位 + 火花 */
+  [data-act="build"] .a-armR { animation: k-hammer 1.3s cubic-bezier(0.5,0,0.5,1) infinite; }
+  [data-act="build"] .a-body { animation: k-buildLean 1.3s ease-in-out infinite; transform-origin: 50% 100%; }
+  [data-act="build"] .prop-block { animation: k-blockBounce 1.3s ease-out infinite; transform-origin: 50% 100%; }
+  [data-act="build"] .fx-spark { animation: k-spark 1.3s ease-out infinite; transform-origin: center; transform-box: fill-box; }
+  @keyframes k-hammer { 0% { transform: rotate(-95deg); } 34% { transform: rotate(-98deg); } 52% { transform: rotate(18deg); } 60% { transform: rotate(10deg); } 100% { transform: rotate(-95deg); } }
+  @keyframes k-buildLean { 0%, 34% { transform: rotate(-2deg); } 52% { transform: rotate(3deg); } 70% { transform: rotate(0deg); } 100% { transform: rotate(-2deg); } }
+  @keyframes k-blockBounce { 0%, 50% { transform: translateY(0) scaleY(1); } 56% { transform: translateY(2px) scaleY(0.88); } 64% { transform: translateY(-6px) scaleY(1); } 74% { transform: translateY(0) scaleY(1); } 100% { transform: translateY(0); } }
+  @keyframes k-spark { 0%, 50% { transform: scale(0); opacity: 0; } 56% { transform: scale(1.25); opacity: 1; } 70% { transform: scale(0.5); opacity: 0; } 100% { transform: scale(0); opacity: 0; } }
+
+  /* juggling — 三球抛接 */
+  [data-act="juggle"] .a-armL { animation: k-jugArmL 1.15s ease-in-out infinite; }
+  [data-act="juggle"] .a-armR { animation: k-jugArmR 1.15s ease-in-out infinite; }
+  [data-act="juggle"] .a-head { animation: k-jugTrack 1.15s ease-in-out infinite; }
+  [data-act="juggle"] .a-body { animation: k-breathe 2.3s ease-in-out infinite; }
+  [data-act="juggle"] .ball { transform-box: fill-box; transform-origin: center; }
+  [data-act="juggle"] .ball-1 { animation: k-ballArc 1.7s linear infinite; }
+  [data-act="juggle"] .ball-2 { animation: k-ballArc 1.7s linear -0.57s infinite; }
+  [data-act="juggle"] .ball-3 { animation: k-ballArc 1.7s linear -1.13s infinite; }
+  @keyframes k-jugArmL { 0%, 100% { transform: rotate(-16deg); } 50% { transform: rotate(-42deg); } }
+  @keyframes k-jugArmR { 0%, 100% { transform: rotate(42deg); } 50% { transform: rotate(16deg); } }
+  @keyframes k-jugTrack { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(4deg); } }
+  @keyframes k-ballArc { 0% { transform: translate(-52px, -92px) scale(0.94); } 25% { transform: translate(-22px, -150px) scale(1); } 50% { transform: translate(10px, -104px) scale(0.96); } 75% { transform: translate(34px, -148px) scale(1); } 100% { transform: translate(52px, -92px) scale(0.94); } }
+
+  /* conducting — 指挥棒 + 两个子 agent 起伏 */
+  [data-act="conduct"] .a-armR { animation: k-batonWave 2.1s ease-in-out infinite; }
+  [data-act="conduct"] .a-body { animation: k-conductSway 2.1s ease-in-out infinite; transform-origin: 50% 100%; }
+  [data-act="conduct"] .a-head { animation: k-conductHead 2.1s ease-in-out infinite; }
+  [data-act="conduct"] .fx-subA { animation: k-subBob 1.05s ease-in-out infinite; transform-box: fill-box; }
+  [data-act="conduct"] .fx-subB { animation: k-subBob 1.05s ease-in-out -0.52s infinite; transform-box: fill-box; }
+  [data-act="conduct"] .fx-subA .halo, [data-act="conduct"] .fx-subB .halo { animation: k-subPulse 1.05s ease-in-out infinite; transform-origin: center; transform-box: fill-box; }
+  [data-act="conduct"] .fx-subB .halo { animation-delay: -0.52s; }
+  @keyframes k-batonWave { 0% { transform: rotate(134deg); } 30% { transform: rotate(168deg); } 55% { transform: rotate(140deg); } 80% { transform: rotate(172deg); } 100% { transform: rotate(134deg); } }
+  @keyframes k-conductSway { 0%, 100% { transform: rotate(-2.6deg); } 50% { transform: rotate(2.6deg); } }
+  @keyframes k-conductHead { 0%, 100% { transform: rotate(4deg); } 50% { transform: rotate(-4deg); } }
+  @keyframes k-subBob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-9px); } }
+  @keyframes k-subPulse { 0%, 40%, 100% { transform: scale(1); opacity: 0; } 50% { transform: scale(1.3); opacity: 0.9; } 62% { transform: scale(1); opacity: 0; } }
+
+  /* error — ERROR 牌 + 冒烟 + 垂头→蹲下抱头 */
+  [data-act="error"] .prop-sign { animation: k-signDrop 0.7s cubic-bezier(0.34,1.5,0.64,1) both; transform-box: fill-box; transform-origin: 50% 100%; }
+  [data-act="error"] .fx-smoke { animation: k-smoke 1.5s ease-out infinite; transform-box: fill-box; transform-origin: center; }
+  [data-act="error"] .fx-smoke.s2 { animation-delay: 0.5s; }
+  [data-act="error"] .fx-smoke.s3 { animation-delay: 1s; }
+  [data-act="error"] .a-head { animation: k-errDroop 1.1s ease-in-out both; }
+  [data-act="error"] .a-figure { animation: k-errSquat 1.1s cubic-bezier(0.5,0,0.3,1) 0.9s both; }
+  [data-act="error"] .a-armL { animation: k-errHoldL 0.7s ease-in-out 1.3s both; }
+  [data-act="error"] .a-armR { animation: k-errHoldR 0.7s ease-in-out 1.3s both; }
+  [data-act="error"] .a-body { animation: k-errTremble 0.14s linear 2s infinite; }
+  [data-act="error"] .prop-sign { animation: k-signDrop 0.7s cubic-bezier(0.34,1.5,0.64,1) both, k-signShiver 0.2s linear 2s infinite; }
+  @keyframes k-signDrop { 0% { transform: translateY(-46px) rotate(-16deg); opacity: 0; } 100% { transform: translateY(0) rotate(-7deg); opacity: 1; } }
+  @keyframes k-signShiver { 0%, 100% { transform: translateY(0) rotate(-8deg); } 50% { transform: translateY(0) rotate(-6deg); } }
+  @keyframes k-smoke { 0% { transform: translateY(0) scale(0.5); opacity: 0; } 25% { opacity: 0.65; } 100% { transform: translateY(-36px) scale(1.5); opacity: 0; } }
+  @keyframes k-errDroop { 0% { transform: rotate(0); } 100% { transform: rotate(15deg); } }
+  @keyframes k-errSquat { 0% { transform: translateY(0) scaleY(1); } 100% { transform: translateY(17px) scaleY(0.86); } }
+  @keyframes k-errHoldL { 0% { transform: rotate(0); } 100% { transform: rotate(185deg); } }
+  @keyframes k-errHoldR { 0% { transform: rotate(0); } 100% { transform: rotate(-185deg); } }
+  @keyframes k-errTremble { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(1.4px); } }
+
+  /* happy — 蓄力→起跳→彩片炸开→落地欢呼（JS 分相位驱动） */
+  .ph-charge .a-figure { animation: k-happySquash 0.5s ease-in both; }
+  .ph-jump .a-figure { animation: k-happyJump 0.5s cubic-bezier(0.3,1.3,0.5,1) both; }
+  .ph-burst .a-figure { animation: k-happyHang 0.3s ease-out both; }
+  .ph-land .a-figure { animation: k-happyLand 0.35s ease-out both; }
+  .ph-cheer .a-figure { animation: k-happyCheer 0.9s ease-in-out both; }
+  .ph-cheer .a-armL { animation: k-cheerArmL 0.45s ease-in-out infinite; }
+  .ph-cheer .a-armR { animation: k-cheerArmR 0.45s ease-in-out infinite; }
+  .ph-cheer .a-head { animation: k-cheerHead 0.45s ease-in-out infinite; }
+  .ph-jump .a-shadow, .ph-burst .a-shadow { animation: k-shadowUp 0.5s ease-out both; }
+  .ph-land .a-shadow { animation: k-shadowBack 0.35s ease-out both; }
+  .cf { transform-box: fill-box; transform-origin: center; animation: k-cfFly 0.9s cubic-bezier(0.2,0.6,0.4,1) both; }
+  @keyframes k-happySquash { 0% { transform: translateY(0) scaleY(1); } 100% { transform: translateY(6px) scaleY(0.84); } }
+  @keyframes k-happyJump { 0% { transform: translateY(6px) scaleY(0.84); } 40% { transform: translateY(-72px) scaleY(1.06); } 100% { transform: translateY(-72px) scaleY(1); } }
+  @keyframes k-happyHang { 0% { transform: translateY(-72px) scaleY(1); } 100% { transform: translateY(-70px) scaleY(1.02); } }
+  @keyframes k-happyLand { 0% { transform: translateY(-70px); } 70% { transform: translateY(4px) scaleY(0.9); } 100% { transform: translateY(0) scaleY(1); } }
+  @keyframes k-happyCheer { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-7px); } }
+  @keyframes k-cheerArmL { 0%, 100% { transform: rotate(148deg); } 50% { transform: rotate(170deg); } }
+  @keyframes k-cheerArmR { 0%, 100% { transform: rotate(-148deg); } 50% { transform: rotate(-170deg); } }
+  @keyframes k-cheerHead { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(4deg); } }
+  @keyframes k-shadowUp { to { transform: scaleX(0.72); opacity: 0.55; } }
+  @keyframes k-shadowBack { to { transform: scaleX(1); opacity: 1; } }
+  @keyframes k-cfFly { 0% { transform: translate(0,0) rotate(0) scale(0.4); opacity: 1; } 70% { opacity: 1; } 100% { transform: translate(var(--tx), var(--ty)) rotate(var(--rr)) scale(1); opacity: 0; } }
+
+  /* notification — 盾牌 + 对勾气泡 + 晃动 + 指尖点气泡发光 */
+  [data-act="notify"] .a-body { animation: k-notifyShake 4.4s ease-in-out infinite; transform-origin: 50% 100%; }
+  [data-act="notify"] .a-armL { animation: k-notifyShield 0.6s ease-out both; }
+  [data-act="notify"] .a-armR { animation: k-notifyTap 4.4s ease-in-out infinite; }
+  [data-act="notify"] .fx-perm { animation: k-permPop 4.4s cubic-bezier(0.34,1.56,0.64,1) infinite; transform-box: fill-box; transform-origin: 20% 100%; }
+  [data-act="notify"] .fx-glow { animation: k-glowRing 4.4s ease-out infinite; transform-box: fill-box; transform-origin: center; }
+  @keyframes k-notifyShake { 0%, 30%, 42%, 100% { transform: rotate(0); } 33% { transform: rotate(2.2deg); } 37% { transform: rotate(-2.2deg); } }
+  @keyframes k-notifyShield { from { transform: rotate(-90deg); } to { transform: rotate(24deg); } }
+  @keyframes k-notifyTap { 0%, 56%, 76%, 100% { transform: rotate(-14deg); } 62% { transform: rotate(-118deg); } 68% { transform: rotate(-108deg); } }
+  @keyframes k-permPop { 0% { transform: scale(0); opacity: 0; } 8% { transform: scale(1.1); opacity: 1; } 12% { transform: scale(1); } 90% { transform: scale(1); opacity: 1; } 100% { transform: scale(0.85); opacity: 0; } }
+  @keyframes k-glowRing { 0%, 60% { transform: scale(0.6); opacity: 0; } 66% { transform: scale(1.05); opacity: 0.95; } 82% { transform: scale(1.5); opacity: 0; } 100% { opacity: 0; } }
+
+  /* sweeping — 扫帚 + 簸箕 + 像素碎屑 */
+  [data-act="sweep"] .a-armR { animation: k-sweepArm 1.7s ease-in-out infinite; }
+  [data-act="sweep"] .a-armL { animation: k-sweepSteady 1.7s ease-in-out infinite; }
+  [data-act="sweep"] .a-body { animation: k-sweepLean 1.7s ease-in-out infinite; transform-origin: 50% 100%; }
+  [data-act="sweep"] .a-head { animation: k-sweepLook 1.7s ease-in-out infinite; }
+  [data-act="sweep"] .prop-broom { transform-box: fill-box; transform-origin: 80% 85%; animation: k-broomSweep 1.7s ease-in-out infinite; }
+  [data-act="sweep"] .fx-deb { animation: k-debSlide 1.7s ease-in infinite; transform-box: fill-box; }
+  [data-act="sweep"] .fx-deb.d2 { animation-delay: 0.55s; }
+  [data-act="sweep"] .fx-deb.d3 { animation-delay: 1.1s; }
+  @keyframes k-sweepArm { 0%, 100% { transform: rotate(-58deg); } 50% { transform: rotate(-18deg); } }
+  @keyframes k-sweepSteady { 0%, 100% { transform: rotate(-34deg); } 50% { transform: rotate(-24deg); } }
+  @keyframes k-sweepLean { 0%, 100% { transform: rotate(4deg); } 50% { transform: rotate(7deg); } }
+  @keyframes k-sweepLook { 0%, 100% { transform: rotate(8deg); } 50% { transform: rotate(12deg); } }
+  @keyframes k-broomSweep { 0%, 100% { transform: rotate(-14deg); } 50% { transform: rotate(22deg); } }
+  @keyframes k-debSlide { 0%, 8% { transform: translateX(0) translateY(0); opacity: 0; } 14% { opacity: 1; } 46% { transform: translateX(-56px) translateY(-7px); opacity: 1; } 54%, 100% { transform: translateX(-64px) translateY(2px); opacity: 0; } }
+
+  /* carrying — 抱箱→扛肩→走路（JS 分相位） */
+  .ph-holdbox .a-figure { animation: k-carryCrouch 0.55s ease-out both; }
+  .ph-shoulder .a-figure { animation: k-carryLift 0.5s cubic-bezier(0.34,1.4,0.64,1) both; }
+  .ph-walk .a-figure { animation: k-carryBob 0.5s ease-in-out infinite; }
+  .ph-walk .a-legL { animation: k-walkLegL 0.5s ease-in-out infinite; }
+  .ph-walk .a-legR { animation: k-walkLegR 0.5s ease-in-out infinite; }
+  .ph-walk .a-armL { animation: k-carrySteady 0.5s ease-in-out infinite; }
+  .ph-walk .a-armR { animation: k-carryFree 0.5s ease-in-out infinite; }
+  .ph-place .a-figure { animation: k-carryPlace 0.5s ease-out both; }
+  @keyframes k-carryCrouch { 0% { transform: translateY(0) scaleY(1); } 100% { transform: translateY(10px) scaleY(0.92); } }
+  @keyframes k-carryLift { 0% { transform: translateY(10px) scaleY(0.92); } 100% { transform: translateY(0) scaleY(1); } }
+  @keyframes k-carryBob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+  @keyframes k-walkLegL { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(17deg); } }
+  @keyframes k-walkLegR { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(-17deg); } }
+  @keyframes k-carrySteady { 0%, 100% { transform: rotate(160deg); } 50% { transform: rotate(156deg); } }
+  @keyframes k-carryFree { 0%, 100% { transform: rotate(18deg); } 50% { transform: rotate(30deg); } }
+  @keyframes k-carryPlace { 0% { transform: translateY(0); } 100% { transform: translateY(8px) scaleY(0.94); } }
+  .ph-holdbox .a-armL { transform: rotate(-23deg); }
+  .ph-holdbox .a-armR { transform: rotate(23deg); }
+  .ph-shoulder .a-armL { transform: rotate(160deg); }
+
+  /* sleeping — 哈欠→打盹→蜷睡（JS 分相位）+ 鼠标惊醒 */
+  .ph-yawn .a-head { animation: k-yawnTilt 1s ease-in-out both; }
+  .ph-yawn .m-open { opacity: 1; }
+  .ph-doze .a-head { animation: k-dozeNod 2.4s ease-in-out infinite; }
+  .ph-doze .a-body { animation: k-breathe 3.2s ease-in-out infinite; }
+  .ph-curl .a-figure { animation: k-curlDown 0.8s ease-out both; }
+  .ph-curl .a-body { animation: k-breathe 3.6s ease-in-out infinite; }
+  .ph-curl .a-head { animation: k-curlHead 0.8s ease-out both; }
+  .ph-wake .a-figure { animation: k-wakeJump 0.5s cubic-bezier(0.3,1.4,0.5,1) both; }
+  .ph-wake .a-eyeL, .ph-wake .a-eyeR { animation: k-wideEyes 0.25s ease-out both; }
+  .zzz .zb { transform-box: fill-box; animation: k-zFloat 2.6s ease-in-out infinite; }
+  .zzz .zb.z2 { animation-delay: 0.85s; }
+  .zzz .zb.z3 { animation-delay: 1.7s; }
+  @keyframes k-yawnTilt { 0% { transform: rotate(0); } 55% { transform: rotate(-9deg); } 100% { transform: rotate(-4deg); } }
+  @keyframes k-dozeNod { 0%, 100% { transform: rotate(10deg); } 50% { transform: rotate(17deg); } }
+  @keyframes k-curlDown { 0% { transform: translateY(0) scaleY(1); } 100% { transform: translateY(26px) scaleY(0.8); } }
+  @keyframes k-curlHead { 0% { transform: rotate(10deg); } 100% { transform: rotate(26deg); } }
+  @keyframes k-wakeJump { 0% { transform: translateY(26px) scaleY(0.8); } 45% { transform: translateY(-44px) scaleY(1.06); } 100% { transform: translateY(0) scaleY(1); } }
+  @keyframes k-wideEyes { from { transform: scaleY(1.25); } to { transform: scaleY(1); } }
+  @keyframes k-zFloat { 0% { transform: translateY(0) scale(0.8); opacity: 0; } 25% { opacity: 0.9; } 100% { transform: translateY(-22px) scale(1.05); opacity: 0; } }
+
+  /* mini hop（点击彩蛋） */
+  .ph-hop .a-figure { animation: k-miniHop 0.4s cubic-bezier(0.3,1.5,0.5,1) both; }
+  @keyframes k-miniHop { 0% { transform: translateY(0); } 40% { transform: translateY(-20px); } 100% { transform: translateY(0); } }
+
+  /* reduced motion 静态降级（对齐 frames2d 引擎的 prefers-reduced-motion） */
+  @media (prefers-reduced-motion: reduce) {
+    .pet *, .cf, .zzz .zb { animation-duration: 0.001s !important; animation-iteration-count: 1 !important; }
+  }
+</style>
+</head>
+<body>
+
+<header class="hd">
+  <div>
+    <h1>DSH Pod 桌宠动作规格 v2<span class="v2">spec v2</span></h1>
+    <p>六位舱员 × 十二个动作的交互预览器——把驾驶舱事件演给你看。全员形态一致（二头身贴纸风兜帽小人）、元素不同（各有主题道具）。生产口径对齐 <span style="font-family:var(--mono);font-size:12px">docs/桌宠角色生产规格.md</span> 的 frames2d 契约与 pet.json v2。</p>
+  </div>
+  <div class="hd-badges">
+    <span class="bdg"><b>6</b> 角色</span>
+    <span class="bdg"><b>12</b> 动作</span>
+    <span class="bdg"><b>7+5</b> 相位→轨道</span>
+    <span class="bdg"><b>192×208</b> webp</span>
+  </div>
+</header>
+
+<div class="wrap">
+  <section class="stage-card">
+    <div class="stage" id="stage" data-act="idle">
+      <div class="wall"></div>
+      <div class="floor"></div>
+      <span class="stage-tag" id="stageTag">idle · slot 空闲</span>
+      <div class="pet-holder" id="petHolder"></div>
+      <span class="stage-hint">拖动小人换位置 · 点它有惊喜 · 睡觉时动鼠标会惊醒</span>
+    </div>
+    <div class="now">
+      <span class="dot"></span><b id="nowName">发呆</b>
+      <span class="ev" id="nowEvent">slot idle / 无 mission</span>
+      <span class="chip" id="nowLoop">循环 · 4.4s</span>
+    </div>
+    <div class="steps" id="steps"></div>
+  </section>
+
+  <aside class="panel">
+    <div class="pcard">
+      <h3>舱员（点击换人）</h3>
+      <div class="crew" id="crewRow"></div>
+    </div>
+    <div class="pcard">
+      <h3>动作（点击播放）</h3>
+      <div class="acts" id="actGrid"></div>
+    </div>
+    <div class="pcard">
+      <h3>播放控制</h3>
+      <div class="tgl">
+        <button id="tourBtn"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 2.5v11l10-5.5z"/></svg>自动巡演</button>
+        <button id="pauseBtn"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M5 3v10M11 3v10"/></svg>暂停动效</button>
+      </div>
+    </div>
+    <div class="pcard">
+      <h3>当前动作 · 生产参数</h3>
+      <div class="info-rows" id="infoRows"></div>
+    </div>
+    <div class="pcard">
+      <h3>操作说明</h3>
+      <p class="kbd"><kbd>1</kbd>–<kbd>6</kbd> 切换舱员 · <kbd>Q</kbd>–<kbd>A</kbd> 行切换动作也可以用方向键<kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> · <kbd>空格</kbd> 暂停/继续动效 · 拖拽小人在舞台内移动</p>
+    </div>
+  </aside>
+</div>
+
+<div class="doc">
+  <section class="sec">
+    <h2>舱员名册 · 六角色系统</h2>
+    <p class="sub">全员同一套身体骨架与兜帽轮廓（形态一致），六个主题各自替换：帽顶饰 / 帽耳 / 背后尾饰 / 配色 / 胸章 / 全部动作道具（元素不同）。建议厂商绑定可用 <span style="font-family:var(--mono);font-size:12px">localStorage["dsh-pod.petCharacterMap"]</span> 重绑，未注册厂商默认落到猫·麻薯。</p>
+    <div class="roster" id="roster"></div>
+    <div class="note"><b>许可口径</b>：六角色为自产角色包（建议 MIT，pet.json 如实填 author/license）；仅 dsh 位沿用内置鲸鱼娘血统（BSD-3）。生态角色 miku / ouo-neko / whale-refined（MIT）继续可用——v2 轨道是超集，旧角色未注册的轨道自动 fallback，互不影响。</div>
+  </section>
+
+  <section class="sec">
+    <h2>动作 × 事件映射 · 十二轨道总表</h2>
+    <p class="sub">前 7 行对齐现有 <span style="font-family:var(--mono);font-size:12px">pet-room.ts slotPhase()</span> 的七相位词汇（旧角色不注册新轨道则走 fallback，行为不变）；后 5 行是 v2 新增的事件驱动轨道。<b>轨道名即 frames2d 目录名</b>，帧命名 <span style="font-family:var(--mono);font-size:12px">&lt;角色&gt;-pet-&lt;轨道&gt;&lt;序号&gt;.webp</span>。</p>
+    <table class="spec" id="mapTable"></table>
+  </section>
+
+  <section class="sec">
+    <h2>实现口径与已知边界</h2>
+    <p class="sub">本预览器是<b>美术规格的活参考</b>（SVG + CSS 演示每个轨道该画什么），不是渲染引擎替代——生产端仍走 frames2d/sprite2d 双契约。</p>
+    <table class="spec">
+      <tr><th>维度</th><th>口径</th></tr>
+      <tr><td class="mono">轨道帧数</td><td>循环轨 4–8 帧；一次性轨（error 蹲姿前段 / happy / carrying 放箱 / 惊醒）3–5 帧 + fallback idle</td></tr>
+      <tr><td class="mono">帧尺寸</td><td>192×208 webp 透明底（或整倍率），与图集系同比例可混排；帧间头部大小与地平线一致</td></tr>
+      <tr><td class="mono">时长解析</td><td>frameMs[] &gt; 文件名 _&lt;ms&gt; 后缀 &gt; defaultFrameMs（缺省 200ms）——沿用 v1 引擎，无需改代码</td></tr>
+      <tr><td class="mono">phases 映射</td><td>pet.json v2 的 phases 段把 7 相位指到新轨道；5 条新事件轨道由编排层在对应事件窗口内直接点名播放</td></tr>
+      <tr><td class="mono">fallback 链</td><td>未注册轨道 → idle（引擎既有行为）；error 轨播完停在末帧直到相位离开 failed</td></tr>
+      <tr><td class="mono">降级</td><td>prefers-reduced-motion 时全部轨道静态化（本预览器同款行为）</td></tr>
+    </table>
+    <div class="note"><b>与 v1 规格的关系</b>：v1 的六轨（idle/work/drag/success/fail/angry）分别由 idle / think+type+build（work 拆分）/ type+build（drag 并入 tool 语义）/ happy / error / 蜷睡前的惊醒帧 承接；angry 保留给交叉审查对峙编排（reviewDuels）继续使用。历史决策不改写，v2 以扩展轨道集的方式追加。</div>
+  </section>
+</div>
+
+<script>
+/* ══════════════════════════════════════════════════════════════
+   DSH Pod 桌宠动作规格 v2 · 交互预览器
+   六角色 × 12 轨道；SVG 参数化小人 + CSS/JS 分相位动画。
+   ══════════════════════════════════════════════════════════════ */
+'use strict';
+
+/* ── 六角色主题 ── */
+const THEMES = {
+  whale: {
+    id: 'whale', name: '鲸·泊泊', vendor: 'dsh', vendorNote: '驾驶舱本体（内置鲸鱼娘血统 BSD-3）',
+    hairTop: '#A8D9F2', hairMid: '#6FB5E5', hairEnd: '#2E5A9E',
+    hoodie: '#3A5BA6', trim: '#FFFFFF', shade: '#335093',
+    dome: '#F7FAFD', domeTrim: '#4E7FCB', eye: '#3D6EB5', blush: '#F5B8BE',
+    boots: '#4C6EB2', pom: '#FFFFFF', accent: '#3A5BA6', deep: '#2E5A9E', ink: '#2E4468',
+    bg1: '#EAF4FC', bg2: '#CFE5F8',
+    keys: ['#4E9FD6', '#BFE0F5', '#FFFFFF'], keyBase: '#EAF3FB',
+    broom: '#4E7FCB', box: '#3A5BA6',
+    els: '帽顶水花卷 / 鲸鳍帽耳 / 鲸尾尾饰 / 冰晶块 / 水滴球 / 小鲸鱼子Agent'
+  },
+  star: {
+    id: 'star', name: '星花·芒芒', vendor: 'claude', vendorNote: '陶土橙 + 星芒（对齐生产规格 §5.1 Claude 钦定元素 #D97757）',
+    hairTop: '#FFE9C4', hairMid: '#F3BC75', hairEnd: '#D98E3F',
+    hoodie: '#F6EDDF', trim: '#F08C3A', shade: '#E9DCC6',
+    dome: '#FFF7EC', domeTrim: '#F5A623', eye: '#C77B3A', blush: '#FFC2B0',
+    boots: '#F0A954', pom: '#FFF7EC', accent: '#D97757', deep: '#B05C3E', ink: '#6B4A22',
+    bg1: '#FFF6E8', bg2: '#FBE6C8',
+    keys: ['#FFF3DF', '#FFD9A0', '#F59E48'], keyBase: '#FFF9F0',
+    broom: '#F5A623', box: '#E8862E',
+    els: '帽顶八角星 / 星角帽耳 / 星形尾饰 / 木块 / 星花球 / 星花精灵子Agent'
+  },
+  term: {
+    id: 'term', name: '终端·苏苏', vendor: 'opencode', vendorNote: '命令行窗口 + 终端符（对齐生产规格 §5.1 OpenCode 钦定元素）',
+    hairTop: '#B8C4F5', hairMid: '#8B97E0', hairEnd: '#5A64B8',
+    hoodie: '#52589E', trim: '#9AA3D8', shade: '#464C8C',
+    dome: '#3E4373', domeTrim: '#8A90C8', eye: '#6F79C4', blush: '#C9B8F0',
+    boots: '#4A4F7E', pom: '#9BA3E0', accent: '#6F79C4', deep: '#3A3F6E', ink: '#2E3252',
+    bg1: '#EDEFFA', bg2: '#DCDFF3',
+    keys: ['#8F6BE8', '#6E8DF5', '#B9A8F5'], keyBase: '#E7E9F9',
+    broom: '#7B82C8', box: '#52589E',
+    els: '帽顶终端符 &gt;_ / 括号帽耳 / 光标条尾饰 / 代码块 / 六瓣花球 / 终端窗子Agent'
+  },
+  hex: {
+    id: 'hex', name: '六边·六六', vendor: 'codex', vendorNote: '黑白机械极客（对齐生产规格 §5.1 Codex 钦定元素）',
+    hairTop: '#E8EAEE', hairMid: '#C4CAD2', hairEnd: '#9AA3AD',
+    hoodie: '#2E3138', trim: '#E8EAEE', shade: '#26282E',
+    dome: '#26282E', domeTrim: '#565B66', eye: '#7A828E', blush: '#E8B8B8',
+    boots: '#1F2126', pom: '#E8EAEE', accent: '#3A3F4A', deep: '#1F2126', ink: '#1F2126',
+    bg1: '#F0F1F3', bg2: '#DFE2E7',
+    keys: ['#2E3138', '#E8EAEE', '#9AA3AD'], keyBase: '#E9EAEE',
+    broom: '#565B66', box: '#2E3138',
+    els: '帽顶六角螺帽 / 六边帽耳 / 六边棱柱尾饰 / 模块 / 六边球 / 六边模块子Agent'
+  },
+  cat: {
+    id: 'cat', name: '猫·麻薯', vendor: 'ark', vendorNote: '默认后备形象（新厂商未配角色时兜底）；粉紫渐变 + 猫瞳绿（与星花/终端拉开色相）',
+    hairTop: '#F9C9E8', hairMid: '#EE9AC8', hairEnd: '#C77BB0',
+    hoodie: '#F3D7EA', trim: '#EE7FA9', shade: '#E8C6DB',
+    dome: '#FBEAF4', domeTrim: '#EE7FA9', eye: '#2F9E77', blush: '#F6A9B8',
+    boots: '#E884B8', pom: '#FDE9F1', accent: '#EE7FA9', deep: '#C2447E', ink: '#6B3A56',
+    bg1: '#FDF0F7', bg2: '#F9DDEC',
+    keys: ['#EE7FA9', '#C99BE0', '#FFD1E8'], keyBase: '#FDF2F9',
+    broom: '#EE7FA9', box: '#D96FA8',
+    els: '帽顶金铃铛 / 猫耳帽耳 / 卷猫尾尾饰 / 文件夹 / 猫脸球 / 小猫脸子Agent'
+  },
+  zap: {
+    id: 'zap', name: 'Z·小Z', vendor: 'zcode', vendorNote: '智谱蓝电光（Z.ai 元素；对齐生产规格 §5.1 zcode/GLM 钦定元素）',
+    hairTop: '#9FE8FF', hairMid: '#5BC8F5', hairEnd: '#2E9BD8',
+    hoodie: '#1E2A4A', trim: '#35D4FF', shade: '#18223D',
+    dome: '#232F52', domeTrim: '#2FC6FF', eye: '#3FA9E8', blush: '#9FD8F0',
+    boots: '#1A2340', pom: '#2FC6FF', accent: '#2E6BE6', deep: '#173A5E', ink: '#1E2A4A',
+    bg1: '#E8F6FF', bg2: '#D0EBFB',
+    keys: ['#2FC6FF', '#9FE8FF', '#1E2A4A'], keyBase: '#E3F4FD',
+    broom: '#35B8E8', box: '#1E2A4A',
+    els: '帽顶 Z 闪电 / 闪电角帽耳 / Z 形电光尾饰 / 科技块 / Z 电光球 / Z 光片子Agent'
+  }
+};
+const CREW_ORDER = ['whale', 'star', 'term', 'hex', 'cat', 'zap'];
+
+/* ── 每角色主题元素图形（帽顶饰/帽耳/尾饰/胸章/思考图标/球/方块/子Agent/彩片） ── */
+function drop(x, y, s, c) { return `<path d="M${x},${y - 12 * s} C${x + 5 * s},${y - 4 * s} ${x + 7 * s},${y + 2 * s} ${x},${y + 6 * s} C${x - 7 * s},${y + 2 * s} ${x - 5 * s},${y - 4 * s} ${x},${y - 12 * s} Z" fill="${c}"/>`; }
+function star8(x, y, s, c, c2) { return `<g transform="translate(${x},${y})"><rect x="${-7 * s}" y="${-7 * s}" width="${14 * s}" height="${14 * s}" rx="${2 * s}" fill="${c}"/><rect x="${-7 * s}" y="${-7 * s}" width="${14 * s}" height="${14 * s}" rx="${2 * s}" fill="${c2 || c}" transform="rotate(45)"/><circle r="${2.6 * s}" fill="#FFF7EC"/></g>`; }
+function hexShape(x, y, s, c, c2) { return `<g transform="translate(${x},${y})"><polygon points="${hexPts(9 * s)}" fill="${c}"/>${c2 ? `<polygon points="${hexPts(5.4 * s)}" fill="${c2}"/>` : ''}</g>`; }
+function hexPts(r) { const p = []; for (let i = 0; i < 6; i++) { const a = Math.PI / 6 + i * Math.PI / 3; p.push((r * Math.cos(a)).toFixed(1) + ',' + (r * Math.sin(a)).toFixed(1)); } return p.join(' '); }
+function boltZ(x, y, s, c) { return `<path transform="translate(${x},${y}) scale(${s})" d="M3,-13 L-6,1 L-1,1 L-3,13 L6,-2 L1,-2 Z" fill="${c}"/>`; }
+function catFace(x, y, s, c, c2) { return `<g transform="translate(${x},${y}) scale(${s})"><path d="M-9,-6 L-9,-12 L-4,-8 Z" fill="${c}"/><path d="M9,-6 L9,-12 L4,-8 Z" fill="${c}"/><circle r="8.6" fill="${c}"/><circle cx="-3" cy="-1" r="1.4" fill="${c2}"/><circle cx="3" cy="-1" r="1.4" fill="${c2}"/><path d="M-2,2.6 L0,4 L2,2.6" stroke="${c2}" stroke-width="1" fill="none" stroke-linecap="round"/><path d="M-6,-1 L-10,-2 M-6,1.6 L-10,2.6 M6,-1 L10,-2 M6,1.6 L10,2.6" stroke="${c2}" stroke-width="0.9" stroke-linecap="round"/></g>`; }
+function termGlyph(x, y, s, c) { return `<g transform="translate(${x},${y}) scale(${s})" font-family="Cascadia Code,Consolas,monospace" font-weight="700"><text x="-9" y="4" font-size="11" fill="${c}">&gt;_</text></g>`; }
+function bars3(x, y, s, c, c2) { return `<g transform="translate(${x},${y})"><rect x="${-8 * s}" y="${-6 * s}" width="${16 * s}" height="${3 * s}" rx="${1.5 * s}" fill="${c}"/><rect x="${-8 * s}" y="${-1.2 * s}" width="${16 * s}" height="${3 * s}" rx="${1.5 * s}" fill="${c2 || c}"/><rect x="${-8 * s}" y="${3.6 * s}" width="${16 * s}" height="${3 * s}" rx="${1.5 * s}" fill="${c}"/></g>`; }
+function flower6(x, y, s, c, c2) { let g = `<g transform="translate(${x},${y})">`; for (let i = 0; i < 6; i++) { g += `<ellipse cx="0" cy="${-5.4 * s}" rx="${2.7 * s}" ry="${4.4 * s}" fill="${c}" transform="rotate(${i * 60})"/>`; } return g + `<circle r="${2.6 * s}" fill="${c2 || '#FFF'}"/></g>`; }
+function whaleMini(x, y, s, c, c2) { return `<g transform="translate(${x},${y}) scale(${s})"><path d="M-11,3 C-9,-4 -2,-7 4,-6 C10,-5 13,0 12,3 C8,1 4,0 0,1 C-3,2 -6,4 -8,6 L-11,8 C-12,6 -12,5 -11,3 Z" fill="${c}"/><path d="M-11,8 L-15,11 L-12,12 L-13,15 L-9,12 Z" fill="${c2}"/><circle cx="4" cy="-1" r="1.1" fill="#233"/> <path d="M8,-4 C10,-7 13,-7 14,-5" stroke="#233" stroke-width="0.8" fill="none" stroke-linecap="round"/></g>`; }
+function winTerm(x, y, s, c, c2, txt) { return `<g transform="translate(${x},${y}) scale(${s})"><rect x="-10" y="-8" width="20" height="15" rx="2.4" fill="${c}"/><rect x="-10" y="-8" width="20" height="4" rx="2.4" fill="${c2}"/><circle cx="-7.2" cy="-6" r="0.9" fill="#FF8A80"/><circle cx="-4.6" cy="-6" r="0.9" fill="#FFD54F"/><circle cx="-2" cy="-6" r="0.9" fill="#81C784"/><text x="-7" y="3.6" font-family="Cascadia Code,Consolas,monospace" font-size="6" font-weight="700" fill="#9FE8FF">${txt || '&gt;_'}</text></g>`; }
+
+/* 每主题元素包 */
+const ELS = {
+  whale: {
+    hoodTop(c) { return drop(0, 0, 1.15, c.domeTrim === '#4E7FCB' ? '#7FBCE8' : c.accent) + drop(-11, 4, 0.75, c.hairMid) + drop(11, 5, 0.62, c.hairTop); },
+    ear(c, side) { const f = side === 'L' ? 1 : -1; return `<path d="M0,0 C${8 * f},-4 ${13 * f},2 ${10 * f},9 C${5 * f},8 ${2 * f},5 0,3 Z" fill="${c.domeTrim}"/>`; },
+    tail(c) { return `<g transform="rotate(-18)"><path d="M0,0 C-2,-9 -11,-14 -19,-13 C-13,-8 -10,-4 -9,1 C-13,4 -17,9 -16,15 C-8,13 -1,7 0,0 Z" fill="${c.deep}"/><path d="M-8,-1 C-9,3 -11,7 -13,10" stroke="${c.dome}" stroke-width="1.6" fill="none" stroke-linecap="round"/></g>`; },
+    logo(c) { return whaleMini(0, 0, 0.9, c.trim, c.trim); },
+    think(c) { return whaleMini(0, 0, 1.05, c.accent, c.deep); },
+    ball(c) { return drop(0, 0, 1.05, c.hairMid) + `<circle cx="-2" cy="-3" r="1.6" fill="#FFF" opacity="0.85"/>`; },
+    block(c) { return `<g><polygon points="0,-11 10,-4 10,7 0,13 -10,7 -10,-4" fill="#BFE0F5"/><polyline points="0,-11 0,13 -10,-4 M0,3 10,-4" stroke="#7FBCE8" stroke-width="1.4" fill="none"/></g>`; },
+    sub(c) { return whaleMini(0, 0, 1.15, c.accent, c.deep); },
+    cf(c) { return drop(0, 0, 0.85, c.hairMid); },
+    sleep(c) { return whaleMini(0, 0, 1.1, c.accent, c.deep); }
+  },
+  star: {
+    hoodTop(c) { return star8(0, -2, 1.0, c.domeTrim, c.accent); },
+    ear(c, side) { const f = side === 'L' ? 1 : -1; return `<g transform="rotate(${f * 18})"><polygon points="${f * 14},-4 ${f * 5},-1 ${f * 9},8" fill="${c.domeTrim}"/></g>`; },
+    tail(c) { return star8(0, 0, 1.1, c.accent, c.domeTrim); },
+    logo(c) { return star8(0, 0, 0.62, c.accent, c.accent); },
+    think(c) { return star8(0, 0, 1.15, c.domeTrim, c.accent); },
+    ball(c) { return star8(0, 0, 0.95, c.accent, c.domeTrim); },
+    block(c) { return `<g><rect x="-11" y="-7" width="22" height="14" rx="2.5" fill="#D9A05B"/><rect x="-11" y="-7" width="22" height="14" rx="2.5" fill="none" stroke="#B5661F" stroke-width="1.2"/><path d="M-7,0 C-4,-3 4,3 7,-1 M-6,5 C-2,2 2,7 6,3" stroke="#B5661F" stroke-width="0.9" fill="none" opacity="0.6"/></g>`; },
+    sub(c) { return star8(0, 0, 1.05, c.domeTrim, c.accent) + `<circle cx="-11" cy="-6" r="2" fill="${c.accent}" opacity="0.7"/><circle cx="11" cy="5" r="1.6" fill="${c.accent}" opacity="0.55"/>`; },
+    cf(c) { return star8(0, 0, 0.6, c.accent, c.domeTrim); },
+    sleep(c) { return star8(0, 0, 1.0, c.domeTrim, c.accent); }
+  },
+  term: {
+    hoodTop(c) { return `<rect x="-11" y="-9" width="22" height="15" rx="3" fill="#2E3155"/>` + termGlyph(0, -2, 1.0, '#58E6B1'); },
+    ear(c, side) { const f = side === 'L' ? 1 : -1; return `<g transform="rotate(${f * 10})"><rect x="${f > 0 ? 0 : -10}" y="-5" width="10" height="9" rx="2.5" fill="${c.domeTrim}"/><rect x="${f > 0 ? 2 : -8}" y="-2.5" width="6" height="4" rx="1.4" fill="#2E3155"/></g>`; },
+    tail(c) { return `<g transform="rotate(-12)"><rect x="-3" y="-13" width="6" height="24" rx="3" fill="#58E6B1"/><rect x="-3" y="4" width="6" height="7" rx="3" fill="${c.accent}"/></g>`; },
+    logo(c) { return termGlyph(0, 0, 0.85, '#58E6B1'); },
+    think(c) { return winTerm(0, 0, 1.05, '#2E3155', c.accent, '&gt;_'); },
+    ball(c) { return flower6(0, 0, 1.0, c.accent, '#43E3A0'); },
+    block(c) { return `<g><rect x="-11" y="-8" width="22" height="16" rx="3" fill="#2E3155"/><rect x="-8" y="-5" width="8" height="2.2" rx="1.1" fill="#8F6BE8"/><rect x="-8" y="-1" width="13" height="2.2" rx="1.1" fill="#58E6B1"/><rect x="-8" y="3" width="6" height="2.2" rx="1.1" fill="#6E8DF5"/></g>`; },
+    sub(c) { return winTerm(0, 0, 1.15, '#2E3155', c.accent, '&gt;_'); },
+    cf(c) { return `<rect x="-5" y="-4" width="10" height="8" rx="2" fill="${c.accent}"/>`; },
+    sleep(c) { return winTerm(0, 0, 1.0, '#2E3155', c.accent, 'zz'); }
+  },
+  hex: {
+    hoodTop(c) { return hexShape(0, -3, 1.0, '#9AA3AD', '#E8EAEE') + `<circle r="1.8" fill="#565B66"/>`; },
+    ear(c, side) { const f = side === 'L' ? 1 : -1; return hexShape(f * 8, 2, 0.72, c.domeTrim, '#E8EAEE'); },
+    tail(c) { return hexShape(0, 0, 1.05, c.domeTrim, '#E8EAEE') + hexShape(0, -9, 0.7, '#9AA3AD'); },
+    logo(c) { return hexShape(0, 0, 0.62, '#E8EAEE'); },
+    think(c) { return bars3(0, 0, 1.15, '#E8EAEE', '#9AA3AD'); },
+    ball(c) { return hexShape(0, 0, 0.95, '#2E3138', '#E8EAEE'); },
+    block(c) { return `<g>${hexShape(-6, -3, 0.8, '#565B66', '#9AA3AD')}${hexShape(6, 2, 0.8, '#565B66', '#9AA3AD')}${hexShape(0, -6, 0.55, '#9AA3AD')}<rect x="-9" y="8" width="18" height="3" rx="1.5" fill="#2E3138"/></g>`; },
+    sub(c) { return hexShape(0, 0, 1.05, '#2E3138', '#9AA3AD') + `<circle cx="-2.6" cy="-1" r="1.2" fill="#BFE0F5"/><circle cx="2.6" cy="-1" r="1.2" fill="#BFE0F5"/>`; },
+    cf(c) { return hexShape(0, 0, 0.6, '#9AA3AD'); },
+    sleep(c) { return bars3(0, 0, 1.0, '#9AA3AD', '#E8EAEE'); }
+  },
+  cat: {
+    hoodTop(c) { return `<g><path d="M-6,-2 C-6,-8 -2,-10 0,-10 C2,-10 6,-8 6,-2" fill="${c.domeTrim}"/><circle cy="-4" r="4.6" fill="#F5B840"/><rect x="-3" y="-8.6" width="6" height="2.4" rx="1.2" fill="#D99A1F"/><circle cy="0.6" r="1.7" fill="#D99A1F"/></g>`; },
+    ear(c, side) { const f = side === 'L' ? 1 : -1; return `<path d="M0,4 C${2 * f},-2 ${8 * f},-6 ${12 * f},-4 C${11 * f},1 ${6 * f},5 1,7 Z" fill="${c.domeTrim}"/><path d="M${3 * f},3 C${4 * f},0 ${7 * f},-2 ${9 * f},-1.6" stroke="#FFD2BC" stroke-width="1.4" fill="none" stroke-linecap="round"/>`; },
+    tail(c) { return `<path d="M0,4 C-2,-4 6,-12 13,-9 C17,-7 17,-1 13,1 C15,-3 12,-6 9,-5 C5,-3.6 4,2 2,6 Z" fill="${c.domeTrim}"/>`; },
+    logo(c) { return catFace(0, 0, 0.6, c.accent, '#FFF7EC'); },
+    think(c) { return catFace(0, 0, 1.05, c.domeTrim, c.deep); },
+    ball(c) { return catFace(0, 0, 0.9, c.accent, '#FFF7EC'); },
+    block(c) { return `<g><path d="M-11,-4 L-5,-4 L-3,-7 L9,-7 L9,7 L-11,7 Z" fill="#F5C86B"/><rect x="-11" y="-1" width="20" height="8" rx="1.5" fill="#EDB84F"/><rect x="-7" y="1.6" width="8" height="2" rx="1" fill="#D99A1F" opacity="0.6"/></g>`; },
+    sub(c) { return catFace(0, 0, 1.1, c.domeTrim, c.deep); },
+    cf(c) { return `<circle r="4" fill="${c.accent}"/><path d="M-2,1.6 L0,3 L2,1.6" stroke="#FFF7EC" stroke-width="1.1" fill="none" stroke-linecap="round"/>`; },
+    sleep(c) { return catFace(0, 0, 1.0, c.domeTrim, c.deep); }
+  },
+  zap: {
+    hoodTop(c) { return boltZ(0, -1, 1.15, c.domeTrim); },
+    ear(c, side) { const f = side === 'L' ? 1 : -1; return `<g transform="scale(${f},1)"><path d="M1,5 C1,-1 4,-6 10,-7 C8,-2 7,3 3,8 Z" fill="${c.domeTrim}"/></g>`; },
+    tail(c) { return `<g transform="rotate(14) scale(1.2)"><path d="M2,-10 L-4,0 L0,0 L-2,10 L5,-2 L1,-2 Z" fill="${c.domeTrim}"/><path d="M2,-10 L-4,0 L-2,0.6 L3,-6 Z" fill="#9FE8FF"/></g>`; },
+    logo(c) { return boltZ(0, 0, 0.75, c.domeTrim); },
+    think(c) { return `<g transform="scale(1.5)" font-family="Cascadia Code,Consolas,monospace" font-weight="800"><text x="-5" y="5" font-size="12" fill="${c.domeTrim}">Z</text></g>`; },
+    ball(c) { return `<circle r="9" fill="#173A5E"/><circle r="9" fill="none" stroke="${c.domeTrim}" stroke-width="1.6"/>` + boltZ(0, 0, 0.72, c.domeTrim); },
+    block(c) { return `<g><rect x="-10" y="-8" width="20" height="16" rx="3" fill="#173A5E"/><rect x="-10" y="-8" width="20" height="16" rx="3" fill="none" stroke="${c.domeTrim}" stroke-width="1.1"/><path d="M-6,-4 L-2,-4 M-6,0 L4,0 M-6,4 L0,4" stroke="#9FE8FF" stroke-width="1.4" stroke-linecap="round"/><circle cx="6" cy="-4" r="1.4" fill="${c.domeTrim}"/></g>`; },
+    sub(c) { return `<rect x="-9" y="-8" width="18" height="16" rx="4" fill="#173A5E"/><rect x="-9" y="-8" width="18" height="16" rx="4" fill="none" stroke="${c.domeTrim}" stroke-width="1.2"/>` + boltZ(0, 0, 0.68, c.domeTrim); },
+    cf(c) { return boltZ(0, 0, 0.7, c.domeTrim); },
+    sleep(c) { return `<g transform="scale(1.4)" font-family="Cascadia Code,Consolas,monospace" font-weight="800"><text x="-5" y="5" font-size="12" fill="${c.domeTrim}">Z</text></g>`; }
+  }
+};
+
+/* ── 参数化小人 SVG（全员形态一致；主题换元素） ── */
+function buildPet(t) {
+  const E = ELS[t.id];
+  const hairId = 'hair-' + t.id;
+  return `
+<svg class="pet" viewBox="0 0 220 270" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${t.name}桌宠">
+  <defs>
+    <linearGradient id="${hairId}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="${t.hairTop}"/><stop offset="0.55" stop-color="${t.hairMid}"/><stop offset="1" stop-color="${t.hairEnd}"/>
+    </linearGradient>
+  </defs>
+  <ellipse class="a-shadow" cx="110" cy="256" rx="58" ry="9" fill="rgba(31,41,66,0.18)"/>
+  <g class="piv" transform="translate(110,256)"><g class="a-figure">
+    <g class="piv" transform="translate(-110,-252)">
+      <!-- 背后尾饰（帽后） -->
+      <g class="piv" transform="translate(56,74)"><g class="a-tail">${E.tail(t)}</g></g>
+      <!-- 腿 -->
+      <g class="piv" transform="translate(96,214)"><g class="a-legL">
+        <rect x="-6.5" y="0" width="13" height="26" rx="6" fill="#FCE9DE"/>
+        <rect x="-11" y="20" width="22" height="16" rx="7" fill="${t.boots}"/>
+        <circle cx="-7" cy="25" r="2.6" fill="${t.pom}"/><circle cx="7" cy="25" r="2.6" fill="${t.pom}"/>
+      </g></g>
+      <g class="piv" transform="translate(124,214)"><g class="a-legR">
+        <rect x="-6.5" y="0" width="13" height="26" rx="6" fill="#FCE9DE"/>
+        <rect x="-11" y="20" width="22" height="16" rx="7" fill="${t.boots}"/>
+        <circle cx="-7" cy="25" r="2.6" fill="${t.pom}"/><circle cx="7" cy="25" r="2.6" fill="${t.pom}"/>
+      </g></g>
+      <!-- 裙 -->
+      <path d="M68,196 L152,196 L158,224 L146,215 L138,226 L128,216 L118,227 L108,216 L98,227 L88,216 L78,226 L68,215 L62,224 Z" fill="#FFFFFF" stroke="rgba(42,46,68,0.14)" stroke-width="1"/>
+      <path d="M84,200 L82,220 M110,200 L110,221 M136,200 L138,220" stroke="rgba(42,46,68,0.1)" stroke-width="1.2"/>
+      <!-- 身体（卫衣） -->
+      <g class="a-body">
+        <rect x="70" y="152" width="80" height="56" rx="24" fill="${t.hoodie}"/>
+        <path d="M70,166 C82,158 88,154 110,152 C132,154 138,158 150,166 L150,176 C132,168 138,172 110,170 C82,172 88,168 70,176 Z" fill="${t.trim}" opacity="0.92"/>
+        <rect x="90" y="182" width="40" height="22" rx="10" fill="${t.shade}"/>
+        <path d="M100,156 L102,168 M120,156 L118,168" stroke="${t.trim}" stroke-width="2.4" stroke-linecap="round"/>
+        <circle cx="102" cy="170" r="2.2" fill="${t.trim}"/><circle cx="118" cy="170" r="2.2" fill="${t.trim}"/>
+      </g>
+      <!-- 胸章 -->
+      <g class="piv" transform="translate(110,193)"><g class="a-logo">${E.logo(t)}</g></g>
+      <!-- 手臂 -->
+      <g class="piv" transform="translate(76,162)"><g class="a-armL">
+        <rect x="-8.5" y="-4" width="17" height="52" rx="8.5" fill="${t.hoodie}"/>
+        <rect x="-8.5" y="38" width="17" height="9" rx="4.5" fill="${t.trim}"/>
+        <circle cy="52" r="6.4" fill="#FCE9DE"/>
+      </g></g>
+      <g class="piv" transform="translate(144,162)"><g class="a-armR">
+        <rect x="-8.5" y="-4" width="17" height="52" rx="8.5" fill="${t.hoodie}"/>
+        <rect x="-8.5" y="38" width="17" height="9" rx="4.5" fill="${t.trim}"/>
+        <circle cy="52" r="6.4" fill="#FCE9DE"/>
+        <g class="hand-anchor"></g>
+      </g></g>
+      <!-- 头 -->
+      <g class="piv" transform="translate(110,142)"><g class="a-head">
+        <!-- 侧发 -->
+        <path d="M64,98 C56,120 57,142 62,158 C68,152 72,142 72,128 C72,116 70,106 68,98 Z" fill="url(#${hairId})"/>
+        <path d="M156,98 C164,120 163,142 158,158 C152,152 148,142 148,128 C148,116 150,106 152,98 Z" fill="url(#${hairId})"/>
+        <!-- 脸 -->
+        <ellipse cx="110" cy="102" rx="46" ry="41" fill="#FCE9DE"/>
+        <!-- 刘海 -->
+        <path d="M66,92 C68,72 86,60 110,60 C134,60 152,72 154,92 C148,84 142,82 138,86 C134,78 126,74 120,78 C116,72 104,72 100,78 C94,74 86,78 82,86 C78,82 72,84 66,92 Z" fill="url(#${hairId})"/>
+        <!-- 兜帽 -->
+        <path d="M60,88 C58,44 80,20 110,20 C140,20 162,44 160,88 C150,80 136,76 110,76 C84,76 70,80 60,88 Z" fill="${t.dome}"/>
+        <path d="M60,88 C70,78 84,74 110,74 C136,74 150,78 160,88 L158,96 C146,88 132,84 110,84 C88,84 74,88 62,96 Z" fill="${t.domeTrim}"/>
+        <!-- 帽耳 -->
+        <g class="piv" transform="translate(62,62)">${E.ear(t, 'L')}</g>
+        <g class="piv" transform="translate(158,62)">${E.ear(t, 'R')}</g>
+        <!-- 帽顶饰 -->
+        <g class="piv" transform="translate(110,20)"><g class="a-hoodTop">${E.hoodTop(t)}</g></g>
+        <!-- 眼（半睁无语系） -->
+        <g class="piv" transform="translate(91,104)"><g class="a-eyeL">
+          <ellipse rx="9.5" ry="11.5" fill="${t.eye}"/>
+          <path d="M-10,-5.5 C-6,-8 6,-8 10,-5.5 L10,-2 C6,-5 -6,-5 -10,-2 Z" fill="#FCE9DE"/>
+          <circle cx="-2.5" cy="4" r="2.6" fill="#FFF" opacity="0.9"/>
+          <circle cx="3" cy="-1" r="1.4" fill="#FFF" opacity="0.65"/>
+        </g></g>
+        <g class="piv" transform="translate(129,104)"><g class="a-eyeR">
+          <ellipse rx="9.5" ry="11.5" fill="${t.eye}"/>
+          <path d="M-10,-5.5 C-6,-8 6,-8 10,-5.5 L10,-2 C6,-5 -6,-5 -10,-2 Z" fill="#FCE9DE"/>
+          <circle cx="-3" cy="4" r="2.6" fill="#FFF" opacity="0.9"/>
+          <circle cx="2.5" cy="-1" r="1.4" fill="#FFF" opacity="0.65"/>
+        </g></g>
+        <!-- 腮红 / 嘴 -->
+        <ellipse cx="76" cy="118" rx="7.5" ry="4.6" fill="${t.blush}" opacity="0.85"/>
+        <ellipse cx="144" cy="118" rx="7.5" ry="4.6" fill="${t.blush}" opacity="0.85"/>
+        <path class="m-rest" d="M105,125 C107,127 113,127 115,125" stroke="#B46A6A" stroke-width="1.7" fill="none" stroke-linecap="round"/>
+        <ellipse class="m-open" cx="110" cy="127" rx="4.6" ry="5.4" fill="#B46A6A" opacity="0"/>
+      </g></g>
+    </g>
+  </g></g>
+  <!-- 道具层 -->
+  <g id="g-prop"></g>
+  <!-- 特效层 -->
+  <g id="g-fx"></g>
+</svg>`;
+}
+
+/* ── 每动作道具/特效注入 ── */
+function propFor(act, t) {
+  const E = ELS[t.id];
+  const P = (inner) => `<g id="g-prop">${inner}</g>`;
+  const FX = (inner) => `<g id="g-fx">${inner}</g>`;
+  switch (act) {
+    case 'think': return P(`<g class="fx-bubble" transform="translate(168,52)">
+        <circle class="fx-dot2" cx="-34" cy="26" r="3" fill="${t.accent}" opacity="0.6"/>
+        <circle class="fx-dot1" cx="-24" cy="16" r="4.4" fill="${t.accent}" opacity="0.75"/>
+        <path d="M-26,34 L-20,26 L-14,34 Z" fill="#FFFFFF" stroke="rgba(42,46,68,0.16)" stroke-width="1.4"/>
+        <rect x="-24" y="-4" width="52" height="34" rx="12" fill="#FFFFFF" stroke="rgba(42,46,68,0.16)" stroke-width="1.4"/>
+        <g class="ic" transform="translate(2,13)">${E.think(t)}</g>
+      </g>`);
+    case 'type': return P(`<g class="prop-keyboard" transform="translate(110,236)">
+        <rect x="-64" y="-6" width="128" height="26" rx="7" fill="${t.keyBase}" stroke="rgba(42,46,68,0.2)" stroke-width="1.4"/>
+        ${[0,1,2].map(r => [0,1,2,3,4,5,6,7].map(i => `<rect class="kc" style="--i:${r*8+i}" x="${-56 + i * 15}" y="${-1 + r * 8}" width="12" height="6.4" rx="2" fill="${t.keys[r % t.keys.length]}"/>`).join('')).join('')}
+        <rect x="-20" y="15" width="40" height="6.4" rx="2" fill="${t.keys[0]}"/>
+      </g>`);
+    case 'build': return P(`<g class="prop-hammer">
+        <rect x="-3" y="-42" width="6" height="44" rx="3" fill="#B98A5A"/>
+        <g transform="translate(0,-48) scale(1.5)">${E.logo(t)}</g>
+      </g>
+      <g class="prop-block" transform="translate(150,244)"><g transform="translate(0,-10)">${E.block(t)}</g></g>`) + FX(`<g class="fx-spark" transform="translate(150,228)"><g transform="scale(1.2)"><path d="M0,-9 L2.2,-2.2 L9,0 L2.2,2.2 L0,9 L-2.2,2.2 L-9,0 L-2.2,-2.2 Z" fill="#FFD54F"/></g></g>`);
+    case 'juggle': return P(`<g>
+        <g class="ball ball-1" transform="translate(110,150)">${E.ball(t)}</g>
+        <g class="ball ball-2" transform="translate(110,150)">${E.ball(t)}</g>
+        <g class="ball ball-3" transform="translate(110,150)">${E.ball(t)}</g>
+      </g>`);
+    case 'conduct': return P(`<g class="prop-baton">
+        <rect x="-2.4" y="-52" width="4.8" height="54" rx="2.4" fill="#8A6A4A"/>
+        <circle cy="-54" r="5" fill="${t.accent}"/><circle cy="-54" r="2.2" fill="${t.trim}"/>
+      </g>`) + FX(`
+      <g class="fx-subA" transform="translate(34,140)">
+        <circle class="halo" r="26" fill="none" stroke="${t.accent}" stroke-width="2" opacity="0"/>
+        ${E.sub(t)}
+        <ellipse cx="0" cy="34" rx="16" ry="4" fill="rgba(31,41,66,0.14)"/>
+      </g>
+      <g class="fx-subB" transform="translate(196,120)">
+        <circle class="halo" r="26" fill="none" stroke="${t.accent}" stroke-width="2" opacity="0"/>
+        ${E.sub(t)}
+        <ellipse cx="0" cy="34" rx="16" ry="4" fill="rgba(31,41,66,0.14)"/>
+      </g>`);
+    case 'error': return P(`<g class="prop-sign" transform="translate(110,34)">
+        <rect x="-44" y="-15" width="88" height="30" rx="9" fill="${t.accent}" stroke="rgba(42,46,68,0.25)" stroke-width="1.6"/>
+        <text x="0" y="6.5" text-anchor="middle" font-family="Cascadia Code,Consolas,monospace" font-weight="800" font-size="17" fill="#FFFFFF" letter-spacing="2">ERROR</text>
+        <circle cx="-40" cy="-19" r="3.4" fill="${t.trim}"/><circle cx="40" cy="-19" r="3.4" fill="${t.trim}"/>
+        <circle cx="-40" cy="19" r="3.4" fill="${t.trim}"/><circle cx="40" cy="19" r="3.4" fill="${t.trim}"/>
+      </g>`) + FX(`
+      <circle class="fx-smoke" cx="84" cy="60" r="9" fill="#B8BCC8" opacity="0"/>
+      <circle class="fx-smoke s2" cx="136" cy="56" r="10" fill="#C8CCD8" opacity="0"/>
+      <circle class="fx-smoke s3" cx="110" cy="48" r="8" fill="#AEB2C0" opacity="0"/>`);
+    case 'notify': return P(`<g>
+        <g class="perm-shield" transform="translate(58,196)">
+          <path d="M0,-20 C10,-16 16,-14 16,-6 C16,6 10,14 0,20 C-10,14 -16,6 -16,-6 C-16,-14 -10,-16 0,-20 Z" fill="${t.accent}" stroke="${t.trim}" stroke-width="2"/>
+          <path d="M-6,0 L-2,4.5 L7,-5" stroke="#FFFFFF" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        </g>
+        <g class="fx-perm" transform="translate(176,74)">
+          <path d="M-16,14 L-22,26 L-6,18 Z" fill="${t.accent}"/>
+          <rect x="-18" y="-14" width="44" height="32" rx="10" fill="#FFFFFF" stroke="${t.accent}" stroke-width="1.8"/>
+          <circle cx="4" cy="2" r="9" fill="${t.accent}"/>
+          <path d="M0,2 L3,5.5 L8.5,-2" stroke="#FFFFFF" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        </g>
+      </g>`) + FX(`<circle class="fx-glow" cx="180" cy="76" r="17" fill="none" stroke="${t.accent}" stroke-width="2.6" opacity="0"/>`);
+    case 'sweep': return P(`<g>
+        <g class="prop-broom" transform="translate(158,206)">
+          <rect x="-2.6" y="-56" width="5.2" height="58" rx="2.6" fill="#B98A5A" transform="rotate(24)"/>
+          <g transform="translate(22,4) rotate(24)">
+            <path d="M-9,-2 L9,-2 L14,26 L-14,26 Z" fill="${t.broom}"/>
+            <path d="M-12,26 L12,26 L13,32 L-13,32 Z" fill="${t.trim}"/>
+            <rect x="-10" y="-5" width="20" height="4" rx="2" fill="${t.deep}"/>
+          </g>
+        </g>
+        <g transform="translate(36,246)">
+          <path d="M-18,-10 L18,-10 L24,8 L-24,8 Z" fill="#9AA3AD"/>
+          <path d="M-18,-10 L18,-10 L20,-4 L-20,-4 Z" fill="#7A828E"/>
+          <rect x="-20" y="-16" width="8" height="7" rx="2" fill="${t.broom}"/>
+        </g>
+      </g>`) + FX(`
+      <g class="fx-deb" transform="translate(120,250)"><rect x="-4" y="-4" width="8" height="8" rx="1.5" fill="${t.accent}"/></g>
+      <g class="fx-deb d2" transform="translate(136,250)"><path d="M-5,-3 L5,-3 L4,3 L-4,3 Z" fill="#E8EAEE" stroke="rgba(42,46,68,0.2)"/></g>
+      <g class="fx-deb d3" transform="translate(128,252)"><rect x="-3.4" y="-3.4" width="6.8" height="6.8" rx="1.4" fill="${t.trim}" stroke="rgba(42,46,68,0.18)"/></g>`);
+    case 'carry': return P(`<g class="prop-carry">
+        <g class="box-hold" transform="translate(110,192)">
+          <rect x="-26" y="-22" width="52" height="44" rx="6" fill="#D9B98A" stroke="#B5661F" stroke-width="1.6"/>
+          <path d="M-26,-10 L26,-10" stroke="#B5661F" stroke-width="1.4" opacity="0.6"/>
+          <g transform="translate(0,10) scale(0.9)">${E.logo(t)}</g>
+        </g>
+        <g class="box-shoulder" transform="translate(88,86)" opacity="0">
+          <rect x="-26" y="-20" width="52" height="40" rx="6" fill="#D9B98A" stroke="#B5661F" stroke-width="1.6"/>
+          <path d="M-26,-8 L26,-8" stroke="#B5661F" stroke-width="1.4" opacity="0.6"/>
+          <g transform="translate(0,8) scale(0.9)">${E.logo(t)}</g>
+        </g>
+      </g>`);
+    case 'sleep': return FX(`<g class="zzz" transform="translate(168,64)">
+        <ellipse cx="-4" cy="-2" rx="26" ry="19" fill="#FFFFFF" stroke="rgba(42,46,68,0.16)" stroke-width="1.4" opacity="0.94"/>
+        <g transform="translate(-6,-2)">${ELS[t.id].sleep(t)}</g>
+        <g class="zb z1" transform="translate(26,-18)"><text font-family="Cascadia Code,Consolas,monospace" font-weight="800" font-size="13" fill="${t.accent}">z</text></g>
+        <g class="zb z2" transform="translate(36,-30)"><text font-family="Cascadia Code,Consolas,monospace" font-weight="800" font-size="11" fill="${t.accent}" opacity="0.8">z</text></g>
+        <g class="zb z3" transform="translate(44,-42)"><text font-family="Cascadia Code,Consolas,monospace" font-weight="800" font-size="9" fill="${t.accent}" opacity="0.6">z</text></g>
+      </g>`);
+    default: return P('') + FX('');
+  }
+}
+
+/* ── 12 动作定义（轨道词汇 = frames2d 目录名） ── */
+const ACTS = {
+  idle:  { name: '发呆', tr: 'idle', core: true,  loop: true, dur: 4400, ev: 'slot idle / 无 mission', steps: ['呼吸 2.2s', '眨眼×2 0.3s', '扶帽檐 1.0s', '歪头·影子微倾 0.9s', '回正 0.5s'], frames: '4–6 帧' },
+  think: { name: '思考', tr: 'think', loop: true, dur: 3400, ev: 'running（非 tool_call）· commander 规划', steps: ['气泡弹出 0.4s', '元素摇摆 循环', '托腮 头微歪', '尾点浮动'], frames: '4–6 帧' },
+  type:  { name: '打字', tr: 'type', core: true, loop: true, dur: 1200, ev: 'running + worker_progress text 流式', steps: ['键盘滑入 0.5s', '键帽浮起 波浪', '手臂交替 0.55s', '身体前倾 点头'], frames: '4–8 帧' },
+  build: { name: '建造', tr: 'build', loop: true, dur: 1300, ev: 'running + tool_call（写文件/装依赖/构建）', steps: ['举锤蓄力 0.45s', '敲击 0.2s', '方块弹跳+火花 0.3s', '循环第二击'], frames: '6–8 帧' },
+  juggle:{ name: '抛球', tr: 'juggle', loop: true, dur: 1700, ev: 'parallel ≥ 2 并行执行窗口', steps: ['三球相位差 1/3', '弧线循环 1.7s', '双臂上下跟随', '视线跟随'], frames: '6–8 帧' },
+  conduct:{ name: '指挥', tr: 'conduct', loop: true, dur: 2100, ev: 'Commander 派单/编排（2 个子 Agent）', steps: ['棒画弧 2.1s', '子 Agent A 起 1.05s', '子 Agent B 落 1.05s', '合拍光环脉冲'], frames: '6–8 帧' },
+  error: { name: '报错', tr: 'error', core: true, loop: false, dur: 3200, ev: 'blocked / escalated / slot error / 预算熔断', steps: ['ERROR 牌坠落 0.7s', '冒烟 循环', '垂头 1.1s', '蹲下抱头+发抖 停留'], frames: '4–5 帧（末帧保持）' },
+  happy: { name: '庆祝', tr: 'happy', core: true, loop: false, dur: 2800, ev: 'mission done / 质量门通过 / 合并成功', steps: ['蓄力下蹲 0.5s', '起跳 0.5s', '最高点彩片炸开 0.9s', '落地 0.35s', '双臂欢呼 0.9s'], frames: '5 帧 + fallback idle' },
+  notify:{ name: '通知', tr: 'notify', loop: true, dur: 4400, ev: 'awaiting_approval 审批卡待批 / 桌面通知', steps: ['盾牌举起 0.6s', '对勾气泡弹出', '小幅晃动', '指尖点气泡→发光环'], frames: '6–8 帧' },
+  sweep: { name: '扫地', tr: 'sweep', loop: true, dur: 1700, ev: '上下文压缩 / session 70% 重置摘要', steps: ['扫三下 1.7s', '像素块滑向簸箕', '碎纸跟随', '簸箕收满淡出'], frames: '6–8 帧' },
+  carry: { name: '搬运', tr: 'carry', loop: false, dur: 3600, ev: '交接四件套 handoff / reassign 换人', steps: ['蹲下抱箱 0.55s', '扛上肩 0.5s', '左右腿交替走 1.8s', '放箱+拍手 0.7s'], frames: '5–6 帧 + fallback idle' },
+  sleep: { name: '睡觉', tr: 'sleep', core: true, loop: false, dur: 9200, ev: 'mission paused / 空闲超时挂起', steps: ['打哈欠 1.0s', '打盹点头 2.4s×2', '蜷睡+呼吸 3.6s', '鼠标惊醒弹起 0.5s'], frames: '4–6 帧（蜷睡循环）' }
+};
+const ACT_ORDER = ['idle', 'think', 'type', 'build', 'juggle', 'conduct', 'error', 'happy', 'notify', 'sweep', 'carry', 'sleep'];
+
+/* ── 动作引擎 ── */
+const $ = (s) => document.querySelector(s);
+const stage = $('#stage'), holder = $('#petHolder');
+let curTheme = 'whale', curAct = 'idle', timers = [], tourTimer = null, touring = false, paused = false;
+
+function clearTimers() { timers.forEach(clearTimeout); timers = []; }
+function later(fn, ms) { timers.push(setTimeout(() => { if (!paused) fn(); }, ms)); }
+
+function setTheme(key) {
+  curTheme = key;
+  const t = THEMES[key];
+  const r = document.documentElement.style;
+  r.setProperty('--t-accent', t.accent); r.setProperty('--t-deep', t.deep);
+  r.setProperty('--t-bg1', t.bg1); r.setProperty('--t-bg2', t.bg2);
+  holder.innerHTML = '';
+  renderCrew(); playAct(curAct, true);
+}
+
+function renderCrew() {
+  $('#crewRow').innerHTML = CREW_ORDER.map(k => {
+    const t = THEMES[k];
+    return `<button data-k="${k}" class="${k === curTheme ? 'on' : ''}" title="${t.vendorNote}">
+      <span class="cn">${t.name}</span><span class="cv">${t.vendor}</span></button>`;
+  }).join('');
+  $('#crewRow').querySelectorAll('button').forEach(b => b.onclick = () => setTheme(b.dataset.k));
+  // 名册卡（文档区）
+  $('#roster').innerHTML = CREW_ORDER.map(k => {
+    const t = THEMES[k];
+    const pal = [t.hoodie, t.hairMid, t.domeTrim, t.accent, t.trim, t.boots];
+    return `<div class="r-card">
+      <div class="fig">${buildPet(t)}</div>
+      <div style="min-width:0">
+        <h4>${t.name} <span style="font-family:var(--mono);font-size:11px;color:var(--ink-soft)">${t.id}</span></h4>
+        <div class="rv">→ ${t.vendor} · ${t.vendorNote}</div>
+        <div class="el">${t.els}</div>
+        <div class="pals">${pal.map(h => `<i style="background:${h}" data-h="${h}" class="${['#FFFFFF', '#FFF7EC', '#E8EAEE', '#FFEED6', '#F6EDDF'].includes(h.toUpperCase()) ? 'dk' : ''}"></i>`).join('')}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function playAct(key, keepPhase) {
+  clearTimers();
+  curAct = key;
+  const a = ACTS[key];
+  stage.dataset.act = key;
+  stage.classList.remove('ph-charge', 'ph-jump', 'ph-burst', 'ph-land', 'ph-cheer', 'ph-holdbox', 'ph-shoulder', 'ph-walk', 'ph-place', 'ph-yawn', 'ph-doze', 'ph-curl', 'ph-wake', 'ph-hop');
+  let svg = holder.querySelector('svg.pet');
+  if (!svg) { holder.innerHTML = buildPet(THEMES[curTheme]); svg = holder.querySelector('svg.pet'); }
+  const fxDirect = propFor(key, THEMES[curTheme]);
+  // propFor 返回 P()+FX() 合并串：拆开注入（在 DOM 外层容器解析，避免 SVG 命名空间陷阱）
+  const tmp = document.createElement('div'); tmp.innerHTML = fxDirect;
+  const np = tmp.querySelector('#g-prop'), nf = tmp.querySelector('#g-fx');
+  svg.querySelector('#g-prop').innerHTML = np ? np.innerHTML : '';
+  svg.querySelector('#g-fx').innerHTML = np ? (nf ? nf.innerHTML : '') : '';
+  // 手持道具（锤/棒）挂到右手锚点，随手臂动画
+  const hand = svg.querySelector('.a-armR .hand-anchor');
+  if (hand) {
+    hand.innerHTML = '';
+    const carried = svg.querySelector('#g-prop .prop-hammer, #g-prop .prop-baton');
+    if (carried) { hand.appendChild(carried); carried.setAttribute('transform', 'translate(0,56) rotate(90)'); }
+  }
+  // UI 更新
+  $('#nowName').textContent = a.name;
+  $('#nowEvent').textContent = a.ev;
+  $('#nowLoop').textContent = a.loop ? `循环 · ${(a.dur / 1000).toFixed(1)}s` : `一次性 · ${(a.dur / 1000).toFixed(1)}s`;
+  $('#stageTag').textContent = `${key} · ${a.ev.split('·')[0].trim()}`;
+  $('#steps').innerHTML = a.steps.map((s, i) => `<span class="st" data-n="${i + 1}">${s}</span>`).join('');
+  renderInfo(a);
+  renderActs();
+  // 一次性动作分相位
+  if (key === 'happy') runHappy();
+  else if (key === 'carry') runCarry();
+  else if (key === 'sleep') runSleep();
+  else if (key === 'error') { stepTo(3, 2100); }
+  if (touring && !keepPhase) scheduleTour();
+}
+
+function stepTo(n, ms) { later(() => { const els = $('#steps').children; for (const el of els) el.classList.remove('on'); if (els[n - 1]) els[n - 1].classList.add('on'); }, ms); }
+
+function runHappy() {
+  const seq = [['ph-charge', 0, 1], ['ph-jump', 500, 2], ['ph-burst', 1000, 3], ['ph-land', 1300, 4], ['ph-cheer', 1650, 5]];
+  seq.forEach(([ph, t, n]) => later(() => {
+    stage.classList.remove('ph-charge', 'ph-jump', 'ph-burst', 'ph-land', 'ph-cheer');
+    stage.classList.add(ph); stepTo(n, 0);
+    if (ph === 'ph-burst') burstConfetti();
+  }, t));
+  later(() => { if (!touring) playAct('idle'); }, 3200);
+}
+
+function burstConfetti() {
+  const t = THEMES[curTheme], E = ELS[curTheme];
+  const fx = holder.querySelector('#g-fx');
+  const angles = [-80, -52, -28, -8, 12, 34, 56, 78, -66, 40];
+  angles.forEach((deg, i) => {
+    const rad = deg * Math.PI / 180, d = 52 + (i % 3) * 18;
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    g.setAttribute('class', 'cf');
+    g.style.setProperty('--tx', (Math.cos(rad) * d).toFixed(1) + 'px');
+    g.style.setProperty('--ty', (Math.sin(rad) * d * 0.72 - 26).toFixed(1) + 'px');
+    g.style.setProperty('--rr', (Math.random() * 280 - 140).toFixed(0) + 'deg');
+    g.style.animationDelay = (i * 0.028) + 's';
+    g.innerHTML = E.cf(t);
+    const anchor = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    anchor.setAttribute('transform', 'translate(110,96)');
+    anchor.appendChild(g); fx.appendChild(anchor);
+    later(() => anchor.remove(), 1100);
+  });
+}
+
+function runCarry() {
+  const boxHold = () => holder.querySelector('.box-hold'), boxSh = () => holder.querySelector('.box-shoulder');
+  later(() => { stage.classList.add('ph-holdbox'); boxHold().setAttribute('opacity', '1'); stepTo(1, 0); }, 60);
+  later(() => { stage.classList.remove('ph-holdbox'); stage.classList.add('ph-shoulder'); boxHold().setAttribute('opacity', '0'); boxSh().setAttribute('opacity', '1'); stepTo(2, 0); }, 700);
+  later(() => { stage.classList.remove('ph-shoulder'); stage.classList.add('ph-walk'); stepTo(3, 0); }, 1250);
+  later(() => { stage.classList.remove('ph-walk'); stage.classList.add('ph-place'); boxSh().setAttribute('opacity', '0'); stepTo(4, 0); }, 3100);
+  later(() => { if (!touring) playAct('idle'); }, 3800);
+}
+
+function runSleep() {
+  later(() => { stage.classList.add('ph-yawn'); stepTo(1, 0); }, 60);
+  later(() => { stage.classList.remove('ph-yawn'); stage.classList.add('ph-doze'); stepTo(2, 0); }, 1100);
+  later(() => { stage.classList.remove('ph-doze'); stage.classList.add('ph-curl'); stepTo(3, 0); }, 6000);
+  later(() => { wake(); }, 9200);
+}
+function wake() {
+  if (curAct !== 'sleep') return;
+  stage.classList.remove('ph-curl', 'ph-doze', 'ph-yawn');
+  const fx = holder.querySelector('#g-fx .zzz'); if (fx) fx.setAttribute('opacity', '0');
+  stage.classList.add('ph-wake'); stepTo(4, 0);
+  later(() => { if (!touring) playAct('idle'); else scheduleTour(0); }, 700);
+}
+
+function renderInfo(a) {
+  $('#infoRows').innerHTML = `
+    <div class="ir"><span class="k">轨道名</span><span class="v" style="font-family:var(--mono);font-size:11.5px">${a.tr}</span></div>
+    <div class="ir"><span class="k">触发事件</span><span class="v">${a.ev}</span></div>
+    <div class="ir"><span class="k">节奏</span><span class="v">${a.loop ? '循环轨' : '一次性轨 → fallback idle'} · ${a.dur}ms</span></div>
+    <div class="ir"><span class="k">建议帧数</span><span class="v">${a.frames}（192×208 webp）</span></div>
+    <div class="ir"><span class="k">分镜</span><span class="v">${a.steps.join(' → ')}</span></div>`;
+}
+
+function renderActs() {
+  $('#actGrid').innerHTML = ACT_ORDER.map(k => {
+    const a = ACTS[k];
+    return `<button data-k="${k}" class="${k === curAct ? 'on' : ''} ${a.core ? 'core' : ''}" title="${a.ev}">
+      <span class="an">${a.name}</span><span class="tr">${a.tr}</span></button>`;
+  }).join('');
+  $('#actGrid').querySelectorAll('button').forEach(b => b.onclick = () => { stopTour(); playAct(b.dataset.k); });
+}
+
+/* 自动巡演 */
+function scheduleTour(delay) {
+  if (!touring) return;
+  const a = ACTS[curAct];
+  const wait = (delay !== undefined ? delay : a.dur + 900);
+  tourTimer = setTimeout(() => {
+    if (!touring) return;
+    const i = ACT_ORDER.indexOf(curAct);
+    playAct(ACT_ORDER[(i + 1) % ACT_ORDER.length]);
+  }, wait);
+}
+function stopTour() { touring = false; clearTimeout(tourTimer); $('#tourBtn').classList.remove('on'); }
+
+$('#tourBtn').onclick = () => {
+  touring = !touring;
+  $('#tourBtn').classList.toggle('on', touring);
+  if (touring) playAct(curAct); else clearTimeout(tourTimer);
+};
+$('#pauseBtn').onclick = () => {
+  paused = !paused;
+  $('#pauseBtn').classList.toggle('on', paused);
+  stage.classList.toggle('paused', paused);
+};
+
+/* 键盘 */
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT') return;
+  const n = parseInt(e.key, 10);
+  if (n >= 1 && n <= 6) { setTheme(CREW_ORDER[n - 1]); return; }
+  if (e.key === ' ') { e.preventDefault(); $('#pauseBtn').click(); return; }
+  const map = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+  if (map[e.key]) { stopTour(); const i = ACT_ORDER.indexOf(curAct); playAct(ACT_ORDER[(i + map[e.key] + 12) % 12]); }
+});
+
+/* 拖拽 + 点击彩蛋 + 睡觉惊醒 */
+(function drag() {
+  let down = false, moved = false, sx = 0, sy = 0, ox = 0, oy = 0;
+  holder.addEventListener('pointerdown', (e) => {
+    down = true; moved = false; sx = e.clientX; sy = e.clientY;
+    const r = holder.getBoundingClientRect();
+    ox = r.left; oy = r.top; holder.setPointerCapture(e.pointerId);
+  });
+  holder.addEventListener('pointermove', (e) => {
+    if (!down) return;
+    const dx = e.clientX - sx, dy = e.clientY - sy;
+    if (Math.abs(dx) + Math.abs(dy) > 6) moved = true;
+    if (moved) {
+      holder.style.left = ''; holder.style.transform = `translate(${dx}px, ${dy}px) translateX(-50%)`;
+      if (curAct === 'sleep') wake();
+    }
+  });
+  holder.addEventListener('pointerup', () => {
+    if (down && !moved) {
+      if (curAct === 'sleep') { wake(); }
+      else { stage.classList.add('ph-hop'); setTimeout(() => stage.classList.remove('ph-hop'), 450); }
+    }
+    down = false;
+  });
+})();
+/* 睡觉时鼠标经过舞台即惊醒 */
+stage.addEventListener('pointermove', () => { if (curAct === 'sleep' && stage.classList.contains('ph-curl')) wake(); });
+
+/* 映射总表 */
+$('#mapTable').innerHTML = `<tr><th>#</th><th>动作</th><th>轨道</th><th>类型</th><th>时长</th><th>触发事件（dsh-pod 词汇）</th><th>分镜要点</th></tr>` +
+  ACT_ORDER.map((k, i) => {
+    const a = ACTS[k];
+    return `<tr><td class="mono">${String(i + 1).padStart(2, '0')}</td><td><b>${a.name}</b>${a.core ? ' <span style="color:var(--t-accent)">★</span>' : ''}</td><td class="mono">${a.tr}</td><td>${a.loop ? '循环' : '一次性'}</td><td class="mono">${a.dur}ms</td><td>${a.ev}</td><td>${a.steps.join(' → ')}</td></tr>`;
+  }).join('');
+
+/* 启动 */
+renderCrew();
+playAct('idle');
+</script>
+</body>
+</html>
