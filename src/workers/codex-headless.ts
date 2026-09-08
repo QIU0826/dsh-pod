@@ -23,6 +23,7 @@ import { execCommandRunner } from './preflight.js'
 import type {
   AgentSlot,
   Task,
+  TaskType,
   UsageSource,
   WorkerBackend,
   WorkerCompletion,
@@ -116,22 +117,39 @@ export interface CodexBackendOptions {
   clock?: () => number
 }
 
+/** codex exec 沙箱档位（本机 CLI 实测：read-only / workspace-write / danger-full-access）。 */
+export type CodexSandbox = 'read-only' | 'workspace-write'
+
+/**
+ * 按任务类型选择沙箱。修复：codex 一律 read-only 让 implement 无法写工作区产物/commit
+ * （任务简报的 COMMIT_DISCIPLINE 要求 git add+commit，报告 verifier 按 commit_sha 验收实现/测试）——
+ * 故 implement/test 用可写沙箱；审查/规划/文档/调研是只读履约，保持 read-only 不松动审计 P2-4 只读边界。
+ */
+export function codexSandboxForTask(type: TaskType): CodexSandbox {
+  return type === 'implement' || type === 'test' ? 'workspace-write' : 'read-only'
+}
+
 /**
  * 组装 codex exec 参数（W1 实证：resume 的 flag 必须放在 session_id 之前）。
  * prompt 不进 argv：以 '-' 占位走 stdin（exec 支持 stdin 读指令）。
  */
-export function buildCodexArgs(mode: CodexLaunchMode, worktree: string, model?: string): string[] {
+export function buildCodexArgs(
+  mode: CodexLaunchMode,
+  worktree: string,
+  options: { model?: string; sandbox?: CodexSandbox } = {},
+): string[] {
   // P1 注入面收口：win32 shell:true 下 -C worktree / -m model 是客户端可控动态值
   assertSafeArgvPath('codex worktree', worktree)
-  assertSafeArgvToken('codex model', model)
+  assertSafeArgvToken('codex model', options.model)
+  const sandbox = options.sandbox ?? 'read-only'
   if (mode.kind === 'resume') {
     assertSafeArgvToken('codex threadId', mode.threadId)
-    // 续接会话不降级沙箱（审计 P2-4）：-C 锚定同一 worktree、-s 保持 read-only，
+    // 续接会话不降级沙箱（审计 P2-4）：-C 锚定同一 worktree、-s 保持与启动一致，
     // 否则 resume 跑在用户 ~/.codex/config.toml 的默认沙箱下
-    return ['exec', 'resume', '--json', '-C', worktree, '-s', 'read-only', mode.threadId, '-']
+    return ['exec', 'resume', '--json', '-C', worktree, '-s', sandbox, mode.threadId, '-']
   }
-  const args = ['exec', '-', '--json', '--color', 'never', '--skip-git-repo-check', '-s', 'read-only', '-C', worktree]
-  if (model !== undefined && model.length > 0) args.push('-m', model)
+  const args = ['exec', '-', '--json', '--color', 'never', '--skip-git-repo-check', '-s', sandbox, '-C', worktree]
+  if (options.model !== undefined && options.model.length > 0) args.push('-m', options.model)
   return args
 }
 
@@ -189,7 +207,10 @@ export class CodexHeadlessBackend implements WorkerBackend {
     // 复用统一任务简报构造（含 MISSION_REPORT schema 与 commit 纪律，CR-03 实证：
     // 无 schema 提示时模型会自创 status 词，破坏输出契约）
     const prompt = buildTaskPrompt({ task, worktreePath: worktree })
-    const args = buildCodexArgs(mode, worktree, slot.model !== '' ? slot.model : undefined)
+    const args = buildCodexArgs(mode, worktree, {
+      model: slot.model !== '' ? slot.model : undefined,
+      sandbox: codexSandboxForTask(task.type),
+    })
     const spawned = this.spawnCodex(args, worktree)
     spawned.writeStdin(prompt)
     const handle: WorkerHandle = { pid: spawned.pid }
