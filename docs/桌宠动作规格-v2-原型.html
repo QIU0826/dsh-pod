@@ -113,7 +113,7 @@
   .note b { color: var(--ink); }
 
   /* ── SVG pet animation classes ── */
-  .pet .piv, .pet .anim { transform-box: fill-box; }
+  .pet .piv, .pet .anim, .pet .a-figure, .pet .a-head, .pet .a-body, .pet .a-shadow { transform-box: fill-box; }
   .pet .anim { transform-origin: center; }
   .pet .a-armL, .pet .a-armR { transform-origin: 50% 8%; }
   .pet .a-head { transform-origin: 50% 92%; }
@@ -135,7 +135,7 @@
   [data-act="idle"] .a-tail { animation: k-tailSway 3s ease-in-out infinite; }
   @keyframes k-breathe { 0%,100% { transform: scaleY(1); } 50% { transform: scaleY(1.022); } }
   @keyframes k-blink { 0%, 24%, 28%, 84%, 88%, 100% { transform: scaleY(1); } 26% { transform: scaleY(0.08); } 86% { transform: scaleY(0.08); } }
-  @keyframes k-idleArmR { 0%, 42%, 70%, 100% { transform: rotate(0deg); } 50% { transform: rotate(-118deg); } 62% { transform: rotate(-112deg); } }
+  @keyframes k-idleArmR { 0%, 42%, 70%, 100% { transform: rotate(0deg); } 50% { transform: rotate(-160deg); } 62% { transform: rotate(-154deg); } }
   @keyframes k-idleTilt { 0%, 42%, 70%, 96%, 100% { transform: rotate(0deg); } 76% { transform: rotate(9deg); } 90% { transform: rotate(8deg); } }
   @keyframes k-idleShadow { 0%, 42%, 70%, 100% { transform: translateX(0) scaleX(1); } 76% { transform: translateX(5px) scaleX(1.045); } }
   @keyframes k-tailSway { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(6deg); } }
@@ -149,7 +149,7 @@
   [data-act="think"] .fx-dot1 { animation: k-dotBob 1.7s ease-in-out infinite; }
   [data-act="think"] .fx-dot2 { animation: k-dotBob 1.7s ease-in-out -0.6s infinite; }
   @keyframes k-thinkHead { 0%, 100% { transform: rotate(-3deg); } 50% { transform: rotate(5deg); } }
-  @keyframes k-thinkChin { 0%, 20%, 80%, 100% { transform: rotate(-52deg); } 50%, 70% { transform: rotate(-48deg); } }
+  @keyframes k-thinkChin { 0%, 20%, 80%, 100% { transform: rotate(112deg); } 50%, 70% { transform: rotate(108deg); } }
   @keyframes k-bubblePop { 0% { transform: scale(0); opacity: 0; } 12% { transform: scale(1.12); opacity: 1; } 18% { transform: scale(1); } 88% { transform: scale(1); opacity: 1; } 100% { transform: scale(0.7); opacity: 0; } }
   @keyframes k-iconWobble { 0%, 100% { transform: rotate(-7deg); } 50% { transform: rotate(7deg); } }
   @keyframes k-dotBob { 0%, 100% { transform: translateY(0); opacity: 0.5; } 50% { transform: translateY(-4px); opacity: 1; } }
@@ -200,7 +200,7 @@
   [data-act="conduct"] .fx-subB { animation: k-subBob 1.05s ease-in-out -0.52s infinite; transform-box: fill-box; }
   [data-act="conduct"] .fx-subA .halo, [data-act="conduct"] .fx-subB .halo { animation: k-subPulse 1.05s ease-in-out infinite; transform-origin: center; transform-box: fill-box; }
   [data-act="conduct"] .fx-subB .halo { animation-delay: -0.52s; }
-  @keyframes k-batonWave { 0% { transform: rotate(-34deg); } 30% { transform: rotate(24deg); } 55% { transform: rotate(-14deg); } 80% { transform: rotate(30deg); } 100% { transform: rotate(-34deg); } }
+  @keyframes k-batonWave { 0% { transform: rotate(134deg); } 30% { transform: rotate(168deg); } 55% { transform: rotate(140deg); } 80% { transform: rotate(172deg); } 100% { transform: rotate(134deg); } }
   @keyframes k-conductSway { 0%, 100% { transform: rotate(-2.6deg); } 50% { transform: rotate(2.6deg); } }
   @keyframes k-conductHead { 0%, 100% { transform: rotate(4deg); } 50% { transform: rotate(-4deg); } }
   @keyframes k-subBob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-9px); } }
@@ -222,8 +222,8 @@
   @keyframes k-smoke { 0% { transform: translateY(0) scale(0.5); opacity: 0; } 25% { opacity: 0.65; } 100% { transform: translateY(-36px) scale(1.5); opacity: 0; } }
   @keyframes k-errDroop { 0% { transform: rotate(0); } 100% { transform: rotate(15deg); } }
   @keyframes k-errSquat { 0% { transform: translateY(0) scaleY(1); } 100% { transform: translateY(17px) scaleY(0.86); } }
-  @keyframes k-errHoldL { 0% { transform: rotate(0); } 100% { transform: rotate(142deg); } }
-  @keyframes k-errHoldR { 0% { transform: rotate(0); } 100% { transform: rotate(-142deg); } }
+  @keyframes k-errHoldL { 0% { transform: rotate(0); } 100% { transform: rotate(185deg); } }
+  @keyframes k-errHoldR { 0% { transform: rotate(0); } 100% { transform: rotate(-185deg); } }
   @keyframes k-errTremble { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(1.4px); } }
 
   /* happy — 蓄力→起跳→彩片炸开→落地欢呼（JS 分相位驱动） */
@@ -243,8 +243,8 @@
   @keyframes k-happyHang { 0% { transform: translateY(-72px) scaleY(1); } 100% { transform: translateY(-70px) scaleY(1.02); } }
   @keyframes k-happyLand { 0% { transform: translateY(-70px); } 70% { transform: translateY(4px) scaleY(0.9); } 100% { transform: translateY(0) scaleY(1); } }
   @keyframes k-happyCheer { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-7px); } }
-  @keyframes k-cheerArmL { 0%, 100% { transform: rotate(-148deg); } 50% { transform: rotate(-166deg); } }
-  @keyframes k-cheerArmR { 0%, 100% { transform: rotate(148deg); } 50% { transform: rotate(166deg); } }
+  @keyframes k-cheerArmL { 0%, 100% { transform: rotate(148deg); } 50% { transform: rotate(170deg); } }
+  @keyframes k-cheerArmR { 0%, 100% { transform: rotate(-148deg); } 50% { transform: rotate(-170deg); } }
   @keyframes k-cheerHead { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(4deg); } }
   @keyframes k-shadowUp { to { transform: scaleX(0.72); opacity: 0.55; } }
   @keyframes k-shadowBack { to { transform: scaleX(1); opacity: 1; } }
@@ -257,8 +257,8 @@
   [data-act="notify"] .fx-perm { animation: k-permPop 4.4s cubic-bezier(0.34,1.56,0.64,1) infinite; transform-box: fill-box; transform-origin: 20% 100%; }
   [data-act="notify"] .fx-glow { animation: k-glowRing 4.4s ease-out infinite; transform-box: fill-box; transform-origin: center; }
   @keyframes k-notifyShake { 0%, 30%, 42%, 100% { transform: rotate(0); } 33% { transform: rotate(2.2deg); } 37% { transform: rotate(-2.2deg); } }
-  @keyframes k-notifyShield { from { transform: rotate(-90deg); } to { transform: rotate(-34deg); } }
-  @keyframes k-notifyTap { 0%, 56%, 76%, 100% { transform: rotate(-14deg); } 62% { transform: rotate(-58deg); } 68% { transform: rotate(-50deg); } }
+  @keyframes k-notifyShield { from { transform: rotate(-90deg); } to { transform: rotate(58deg); } }
+  @keyframes k-notifyTap { 0%, 56%, 76%, 100% { transform: rotate(-14deg); } 62% { transform: rotate(-118deg); } 68% { transform: rotate(-108deg); } }
   @keyframes k-permPop { 0% { transform: scale(0); opacity: 0; } 8% { transform: scale(1.1); opacity: 1; } 12% { transform: scale(1); } 90% { transform: scale(1); opacity: 1; } 100% { transform: scale(0.85); opacity: 0; } }
   @keyframes k-glowRing { 0%, 60% { transform: scale(0.6); opacity: 0; } 66% { transform: scale(1.05); opacity: 0.95; } 82% { transform: scale(1.5); opacity: 0; } 100% { opacity: 0; } }
 
@@ -293,6 +293,9 @@
   @keyframes k-walkLegR { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(-17deg); } }
   @keyframes k-carrySteady { 0%, 100% { transform: rotate(-120deg); } 50% { transform: rotate(-116deg); } }
   @keyframes k-carryPlace { 0% { transform: translateY(0); } 100% { transform: translateY(8px) scaleY(0.94); } }
+  .ph-holdbox .a-armL { transform: rotate(-28deg); }
+  .ph-holdbox .a-armR { transform: rotate(28deg); }
+  .ph-shoulder .a-armR { transform: rotate(-160deg); }
 
   /* sleeping — 哈欠→打盹→蜷睡（JS 分相位）+ 鼠标惊醒 */
   .ph-yawn .a-head { animation: k-yawnTilt 1s ease-in-out both; }
@@ -631,6 +634,7 @@ function buildPet(t) {
         <rect x="-8.5" y="-4" width="17" height="52" rx="8.5" fill="${t.hoodie}"/>
         <rect x="-8.5" y="38" width="17" height="9" rx="4.5" fill="${t.trim}"/>
         <circle cy="52" r="6.4" fill="#FCE9DE"/>
+        <g class="hand-anchor"></g>
       </g></g>
       <!-- 头 -->
       <g class="piv" transform="translate(110,142)"><g class="a-head">
@@ -695,19 +699,17 @@ function propFor(act, t) {
         ${[0,1,2].map(r => [0,1,2,3,4,5,6,7].map(i => `<rect class="kc" style="--i:${r*8+i}" x="${-56 + i * 15}" y="${-1 + r * 8}" width="12" height="6.4" rx="2" fill="${t.keys[r % t.keys.length]}"/>`).join('')).join('')}
         <rect x="-20" y="15" width="40" height="6.4" rx="2" fill="${t.keys[0]}"/>
       </g>`);
-    case 'build': return P(`<g>
-        <g transform="translate(150,196)">
-          <rect x="-3" y="-42" width="6" height="44" rx="3" fill="#B98A5A"/>
-          <g transform="translate(0,-48) scale(1.5)">${E.logo(t)}</g>
-        </g>
-        <g class="prop-block" transform="translate(150,244)"><g transform="translate(0,-10)">${E.block(t)}</g></g>
-      </g>`) + FX(`<g class="fx-spark" transform="translate(150,228)"><g transform="scale(1.2)"><path d="M0,-9 L2.2,-2.2 L9,0 L2.2,2.2 L0,9 L-2.2,2.2 L-9,0 L-2.2,-2.2 Z" fill="#FFD54F"/></g></g>`);
+    case 'build': return P(`<g class="prop-hammer">
+        <rect x="-3" y="-42" width="6" height="44" rx="3" fill="#B98A5A"/>
+        <g transform="translate(0,-48) scale(1.5)">${E.logo(t)}</g>
+      </g>
+      <g class="prop-block" transform="translate(150,244)"><g transform="translate(0,-10)">${E.block(t)}</g></g>`) + FX(`<g class="fx-spark" transform="translate(150,228)"><g transform="scale(1.2)"><path d="M0,-9 L2.2,-2.2 L9,0 L2.2,2.2 L0,9 L-2.2,2.2 L-9,0 L-2.2,-2.2 Z" fill="#FFD54F"/></g></g>`);
     case 'juggle': return P(`<g>
         <g class="ball ball-1" transform="translate(110,150)">${E.ball(t)}</g>
         <g class="ball ball-2" transform="translate(110,150)">${E.ball(t)}</g>
         <g class="ball ball-3" transform="translate(110,150)">${E.ball(t)}</g>
       </g>`);
-    case 'conduct': return P(`<g transform="translate(146,190)">
+    case 'conduct': return P(`<g class="prop-baton">
         <rect x="-2.4" y="-52" width="4.8" height="54" rx="2.4" fill="#8A6A4A"/>
         <circle cy="-54" r="5" fill="${t.accent}"/><circle cy="-54" r="2.2" fill="${t.trim}"/>
       </g>`) + FX(`
@@ -846,13 +848,20 @@ function playAct(key, keepPhase) {
   const a = ACTS[key];
   stage.dataset.act = key;
   stage.classList.remove('ph-charge', 'ph-jump', 'ph-burst', 'ph-land', 'ph-cheer', 'ph-holdbox', 'ph-shoulder', 'ph-walk', 'ph-place', 'ph-yawn', 'ph-doze', 'ph-curl', 'ph-wake', 'ph-hop');
-  const svg = holder.querySelector('svg');
-  const propG = svg.querySelector('#g-prop'), fxDirect = propFor(key, THEMES[curTheme]);
-  // propFor 返回 P()+FX() 合并串：拆开注入
+  let svg = holder.querySelector('svg.pet');
+  if (!svg) { holder.innerHTML = buildPet(THEMES[curTheme]); svg = holder.querySelector('svg.pet'); }
+  const fxDirect = propFor(key, THEMES[curTheme]);
+  // propFor 返回 P()+FX() 合并串：拆开注入（在 DOM 外层容器解析，避免 SVG 命名空间陷阱）
   const tmp = document.createElement('div'); tmp.innerHTML = fxDirect;
   const np = tmp.querySelector('#g-prop'), nf = tmp.querySelector('#g-fx');
   svg.querySelector('#g-prop').innerHTML = np ? np.innerHTML : '';
-  svg.querySelector('#g-fx').innerHTML = nf ? nf.innerHTML : '';
+  svg.querySelector('#g-fx').innerHTML = np ? (nf ? nf.innerHTML : '') : '';
+  // 手持道具（锤/棒）挂到右手锚点，随手臂动画
+  const hand = svg.querySelector('.a-armR .hand-anchor');
+  if (hand) {
+    const carried = svg.querySelector('#g-prop .prop-hammer, #g-prop .prop-baton');
+    if (carried) { hand.appendChild(carried); carried.setAttribute('transform', 'translate(0,56) rotate(90)'); }
+  }
   // UI 更新
   $('#nowName').textContent = a.name;
   $('#nowEvent').textContent = a.ev;
