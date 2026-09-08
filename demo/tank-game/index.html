@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>坦克大战</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="wrap">
+    <h1 class="title">坦克大战</h1>
+
+    <section class="hud" aria-label="游戏信息">
+      <div class="hud-item">
+        <span class="hud-label">得分</span>
+        <span id="score" class="hud-value">0</span>
+      </div>
+      <div class="hud-item">
+        <span class="hud-label">生命</span>
+        <span id="lives" class="hud-value">3</span>
+      </div>
+    </section>
+
+    <canvas id="game" width="480" height="416" tabindex="0" aria-label="坦克大战游戏画布"></canvas>
+
+    <section class="controls" aria-label="操作说明">
+      <span>移动：方向键 / WASD</span>
+      <span>开火：空格</span>
+      <span>重新开始：R 键</span>
+    </section>
+
+    <div id="overlay" class="overlay hidden" aria-live="polite">
+      <p class="overlay-result">游戏结束</p>
+      <p class="overlay-score">最终得分 <span id="final-score">0</span></p>
+      <button id="restart" type="button">重新开始</button>
+    </div>
+  </main>
+
+  <script src="game.js"></script>
+</body>
+</html>
