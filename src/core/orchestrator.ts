@@ -41,6 +41,7 @@ import type {
   MissionReport,
   SessionTier,
   Task,
+  TaskStatus,
   TaskType,
   Vendor,
   WorkerBackend,
@@ -2117,6 +2118,50 @@ export class MissionOrchestrator {
     // 且 dispatchTask 的 routeTask 不认 owner 偏好，立刻重派会无视换人指定重新路由。
     // 停摆兜底由 maintenanceTick 补偿（mission running + ready 任务 → 自动重驱，≤30s）。
     return handoff
+  }
+
+  /**
+   * v0.2 卡死任务强制回收（T2——CSV A/B 实证：review 被误派到已耗尽槽位后，pod_dispatch
+   * 视其为在途任务（negotiating/accepted/dispatched/running）而 no-op，用户只能等 10min
+   * stall guard 或 abort 整场 mission）。本操作一次到位：
+   *   kill 在途 worker → 释放槽位 → 任务置回 ready（清 owner/fault/last_error，
+   *   不计 attempts——与 pause/resume 同属操作者主动行为，非故障）→ 事件审计 → 立即重驱。
+   * 重驱走正常路由（含 T1 vendor 硬过滤），错派任务据此自行回正确槽位，不等 10min 兜底。
+   * 终态（done/escalated/rejected）拒绝；已无在途句柄时幂等可用（仅清残留状态）。
+   */
+  async forceRerunTask(taskId: string, reason: string): Promise<{ task_id: string; from: TaskStatus; to: 'ready' }> {
+    const task = this.store.getTask(this.missionId, taskId)
+    if (task === undefined) throw new NotFoundError('task', taskId)
+    if (task.mission_id !== this.missionId) throw new PodError('task not in this mission', 'MISSION_MISMATCH', { id: taskId })
+    if (task.status === 'done' || task.status === 'escalated' || task.status === 'rejected') {
+      throw new PodError(`cannot force-rerun a ${task.status} task`, 'TASK_TERMINAL', { status: task.status })
+    }
+    const from = task.status
+    const inFlight = from === 'negotiating' || from === 'accepted' || from === 'dispatched' || from === 'running'
+    if (inFlight) {
+      await this.killTask(taskId)
+    }
+    const owner = task.owner_slot_id !== undefined ? this.store.getSlot(task.owner_slot_id) : undefined
+    if (owner !== undefined && owner.status === 'working') this.store.updateSlot(owner.id, { status: 'idle' })
+    this.store.updateTask(this.missionId, taskId, {
+      owner_slot_id: undefined,
+      status: 'ready',
+      fault: undefined,
+      last_error: undefined,
+      started_at: undefined,
+      dispatched_at: undefined,
+    })
+    this.store.appendEvent(this.missionId, {
+      id: `ev-forcererun-${taskId}-${this.clock()}`,
+      mission_id: this.missionId,
+      ts: this.clock(),
+      kind: 'task_forcererun',
+      task_id: task.id,
+      payload: { from, reason, from_slot: owner?.id ?? null },
+    })
+    // 立即重驱（与 reassign 的区别：卡死回收要救活，不等下一个 maintenanceTick）
+    this.signalCompletion()
+    return { task_id: taskId, from, to: 'ready' }
   }
 
   /** 由 done 实现任务汇总审批 patch（合并执行属 W5 apply_patch；此处仅生成待批卡）。 */

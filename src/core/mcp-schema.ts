@@ -64,6 +64,7 @@ export const TOOL_BRIEFS: Record<string, { brief: string; tag: string }> = {
   pod_resume: { brief: '恢复已暂停的 mission', tag: 'lifecycle' },
   pod_plan: { brief: '查看/追加/重规划任务 DAG', tag: 'planning' },
   pod_reassign: { brief: '任务中途换人（交接四件套）', tag: 'orchestration' },
+  pod_force_rerun: { brief: '卡死任务强制回收（kill 在途 + 置 ready + 重驱）', tag: 'orchestration' },
   pod_mem_write: { brief: '主动写入长期记忆记录', tag: 'memory' },
   pod_mem_query: { brief: '查询记忆图谱', tag: 'memory' },
   pod_mem_correct: { brief: '纠正记忆记录', tag: 'memory' },

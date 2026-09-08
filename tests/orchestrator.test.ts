@@ -1039,6 +1039,58 @@ describe('v0.2 任务中途换人正式化（reassignTask）', () => {
   })
 })
 
+describe('v0.2 卡死任务强制回收（forceRerunTask，T2）', () => {
+  const slots = () => [
+    { id: 'S-1', vendor: 'claude' as const, role: 'implementer', capabilities: ['编码'], model: 'm', session_tier: 'per-mission' as const },
+    { id: 'S-2', vendor: 'claude' as const, role: 'implementer', capabilities: ['编码'], model: 'm', session_tier: 'per-mission' as const },
+  ]
+
+  it('running 任务卡死 → kill + 释放槽位 + 置回 ready + 清 owner + 事件审计；不计 attempts，立即重驱可完成', async () => {
+    const orch = makeOrchestrator(fixture, { 'T-1': { completion: { exit: 'done' as const, report: doneReport('T-1'), usage: { tokens_in: 10, tokens_out: 5, source: 'measured' as const }, artifacts: [] } } })
+    orch.launch(launchInput({ cwd: fixture.repo, slots: slots() }))
+    orch.createTasks([{ id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'] }])
+    // 模拟误派卡死：任务滞留 running、槽位滞留 working（无在途句柄 = 进程已死但状态未回收）
+    fixture.store.updateTask('T-1', { owner_slot_id: 'M-1-S-1', status: 'running' })
+    fixture.store.updateSlot('M-1-S-1', { status: 'working' })
+    const r = await orch.forceRerunTask('T-1', 'review 误派到耗尽槽位，强制回收')
+    const t = fixture.store.getTask('T-1')!
+    expect(r.from).toBe('running')
+    expect(r.to).toBe('ready')
+    expect(t.status).toBe('ready')
+    expect(t.owner_slot_id).toBeUndefined()
+    expect(t.attempts).toBe(0) // 操作者主动回收，非故障，不计 attempts
+    expect(fixture.store.getSlot('M-1-S-1')!.status).toBe('idle')
+    expect(fixture.store.listEvents('M-1').map((e) => e.kind)).toContain('task_forcererun')
+    // 立即重驱（与 reassign 的「等 maintenanceTick」区别）→ 任务最终完成
+    await orch.run()
+    expect(fixture.store.getTask('T-1')!.status).toBe('done')
+  })
+
+  it('negotiating 卡死（探测 await 窗口内无句柄）同样可强制回收为 ready', async () => {
+    const orch = makeOrchestrator(fixture, {})
+    orch.launch(launchInput({ cwd: fixture.repo, slots: slots() }))
+    orch.createTasks([{ id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'] }])
+    fixture.store.updateTask('T-1', { owner_slot_id: 'M-1-S-1', status: 'negotiating' })
+    fixture.store.updateSlot('M-1-S-1', { status: 'working' })
+    const r = await orch.forceRerunTask('T-1', '协商卡死')
+    expect(r.from).toBe('negotiating')
+    expect(fixture.store.getTask('T-1')!.status).toBe('ready')
+    expect(fixture.store.getSlot('M-1-S-1')!.status).toBe('idle')
+  })
+
+  it('终态（done/escalated/rejected）拒绝强制回收', async () => {
+    const orch = makeOrchestrator(fixture, {})
+    orch.launch(launchInput({ cwd: fixture.repo, slots: slots() }))
+    orch.createTasks([{ id: 'T-1', title: '实现', spec: 's', type: 'implement', skill_tags: ['编码'] }])
+    fixture.store.updateTask('T-1', { status: 'done' })
+    await expect(orch.forceRerunTask('T-1', 'x')).rejects.toThrow(/cannot force-rerun a .* task/)
+    fixture.store.updateTask('T-1', { status: 'escalated' })
+    await expect(orch.forceRerunTask('T-1', 'x')).rejects.toThrow(/cannot force-rerun a .* task/)
+    fixture.store.updateTask('T-1', { status: 'rejected' })
+    await expect(orch.forceRerunTask('T-1', 'x')).rejects.toThrow(/cannot force-rerun a .* task/)
+  })
+})
+
 describe('v0.2 并行执行强化（双路+，dispatchBatch 填满 maxParallel）', () => {
   const twoImplementers = [
     { id: 'S-1', vendor: 'claude' as const, role: 'implementer', capabilities: ['编码'], model: 'm', session_tier: 'per-mission' as const },

@@ -332,6 +332,11 @@ export function postReassign(taskId: string, toSlotId: string, reason: string): 
   return postJson('/api/dsh-pod/reassign', { task_id: taskId, to_slot_id: toSlotId, reason })
 }
 
+/** 卡死任务强制回收（T2）：kill 在途 worker + 释放槽位 + 置 ready + 立即重驱。 */
+export function postForceRerun(taskId: string, reason?: string): Promise<{ ok: boolean; task_id: string; from: string; to: string }> {
+  return postJson('/api/dsh-pod/force-rerun', { task_id: taskId, reason })
+}
+
 /** 终止当前 mission。 */
 export function postAbort(reason: string): Promise<{ ok: boolean }> {
   return postJson('/api/dsh-pod/abort', { reason })

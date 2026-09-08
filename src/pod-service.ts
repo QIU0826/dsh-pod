@@ -29,7 +29,7 @@ import { ArkBackend } from './workers/ark-headless.js'
 import { envCredentialPresent, repairPath } from './workers/preflight.js'
 import { CronScheduler, type CronJob } from './core/cron.js'
 import type { ChannelTarget } from './core/channel.js'
-import type { ApprovalRequest, ApprovalRule, AgentSlot, Handoff, LedgerEntry, MemoryRecord, MemoryRelation, Mission, PodEvent, Task, Vendor, WorkerBackend } from './core/types.js'
+import type { ApprovalRequest, ApprovalRule, AgentSlot, Handoff, LedgerEntry, MemoryRecord, MemoryRelation, Mission, PodEvent, Task, TaskStatus, Vendor, WorkerBackend } from './core/types.js'
 
 /**
  * 火山方舟后端装配（Berd-G 新 adapter）：从环境 ARK_API_KEY 或 ~/.claude/settings.json 的
@@ -1202,6 +1202,11 @@ export class PodService {
    */
   reassign(taskId: string, toSlotId: string, reason: string): Promise<Handoff> {
     return this.requireOrchestrator().reassignTask(taskId, toSlotId, reason)
+  }
+
+  /** v0.2 卡死任务强制回收（T2）：kill 在途 worker + 释放槽位 + 任务置回 ready + 立即重驱。 */
+  forceRerun(taskId: string, reason: string): Promise<{ task_id: string; from: TaskStatus; to: 'ready' }> {
+    return this.requireOrchestrator().forceRerunTask(taskId, reason)
   }
 
   /** 手动模式（3.3 节）：UI/工具直连状态机接口，绕开 LLM 编排。 */

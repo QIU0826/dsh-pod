@@ -111,6 +111,10 @@ export function makeMcpServer(service: PodService, opts: McpServerOptions = {}):
       remember_rule: z.boolean().optional().describe('是否生成同类免弹卡规则（默认 true）'),
     },
     pod_deny: { approval_id: approvalIdSchema, reason: z.string() },
+    pod_force_rerun: {
+      task_id: z.string().describe('要强制回收的任务 id'),
+      reason: z.string().optional().describe('回收原因（事件审计用）'),
+    },
     pod_pause: {},
     pod_resume: {},
     pod_plan: {
@@ -227,6 +231,21 @@ export function makeMcpServer(service: PodService, opts: McpServerOptions = {}):
       const input = castArgs<DenyArgs>(args)
       service.deny(input.approval_id, 'mcp', input.reason)
       return { content: [{ type: 'text', text: JSON.stringify({ decided: true, approval_id: input.approval_id }) }] }
+    },
+  )
+
+  // ── pod_force_rerun：卡死任务强制回收 ──
+  server.registerTool(
+    'pod_force_rerun',
+    { description: '卡死任务强制回收（T2）：任务滞留 negotiating/accepted/dispatched/running 时 kill 在途 worker + 释放槽位 + 置 ready + 立即重驱（含 vendor 硬过滤重新路由）。不计 attempts。', inputSchema: inputOf('pod_force_rerun') },
+    async (args) => {
+      const input = castArgs<{ task_id: string; reason?: string }>(args)
+      try {
+        const r = await service.forceRerun(input.task_id, input.reason ?? 'force rerun via mcp')
+        return { content: [{ type: 'text', text: JSON.stringify({ recovered: true, task_id: r.task_id, from: r.from, to: r.to }) }] }
+      } catch (error) {
+        return { content: [{ type: 'text', text: JSON.stringify({ recovered: false, error: error instanceof Error ? error.message : String(error) }) }] }
+      }
     },
   )
 

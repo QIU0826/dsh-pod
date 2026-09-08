@@ -470,6 +470,36 @@ export function makePodTools(service: PodService): PodToolBundle {
       },
     }),
     defineTool({
+      name: 'pod_force_rerun',
+      description: '卡死任务强制回收（T2）：任务滞留 negotiating/accepted/dispatched/running（worker 挂起/误派到耗尽槽位、pod_dispatch 视其为在途而 no-op）时，强制 kill 在途 worker + 释放槽位 + 任务置回 ready + 立即重驱（含 vendor 硬过滤重新路由）。不计 attempts，不 abort mission。done/escalated/rejected 终态拒绝。触发词：卡死 / 卡住了 / 强制重跑 / force rerun。',
+      parameters: {
+        task_id: { type: 'string', required: true, description: '要强制回收的任务 id' },
+        reason: { type: 'string', description: '回收原因（事件审计用）' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            task_id: { type: 'string', required: true },
+            from: { type: 'string', required: true },
+            to: { type: 'string', required: true },
+            message: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value: { task_id: string; from: string; to: string; message: string }) =>
+          text(`强制回收：${value.task_id} ${value.from} → ${value.to}（${value.message}）`),
+      },
+      async execute(args, _exec) {
+        try {
+          const r = await service.forceRerun(args.task_id, args.reason ?? 'operator force rerun')
+          return { task_id: r.task_id, from: r.from, to: r.to, message: `已重置为 ready，将以新槽位重新路由` }
+        } catch (error) {
+          return { task_id: args.task_id, from: '?', to: '?', message: error instanceof Error ? error.message : String(error) }
+        }
+      },
+    }),
+    defineTool({
       name: 'pod_abort',
       description: '中止当前 mission（终态，不可恢复）；所有运行中的员工进程会被终止。触发词：Pod 中止 / 终止 mission。',
       parameters: {

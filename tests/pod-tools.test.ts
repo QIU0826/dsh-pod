@@ -38,7 +38,7 @@ async function run(
 }
 
 describe('pod_* 工具注册面（3.3 节工具作用域清单，七件套）', () => {
-  it('十五个 pod_* 工具按方案书清单注册 + P0-1 pod_expand_tool 元工具', () => {
+  it('十六个 pod_* 工具按方案书清单注册 + P0-1 pod_expand_tool 元工具', () => {
     const { tools, names } = makePodTools(fakeService())
     expect(names).toEqual([
       'pod_launch',
@@ -51,6 +51,7 @@ describe('pod_* 工具注册面（3.3 节工具作用域清单，七件套）', 
       'pod_mem_query',
       'pod_mem_correct',
       'pod_reassign',
+      'pod_force_rerun',
       'pod_abort',
       'pod_pause',
       'pod_resume',
@@ -58,7 +59,7 @@ describe('pod_* 工具注册面（3.3 节工具作用域清单，七件套）', 
       'pod_plan',
       'pod_expand_tool',
     ])
-    expect(tools).toHaveLength(16)
+    expect(tools).toHaveLength(17)
   })
 
   it('每个工具带参数 schema 与输出渲染（契约完整）', () => {
@@ -180,7 +181,7 @@ describe('工具薄壳行为（副作用全部走 PodService）', () => {
     const dispatchResult = await run(dispatch, {})
     expect(dispatchResult.dispatched).toBe(true)
 
-    const abort = tools[10]!
+    const abort = tools.find((t) => t.name === 'pod_abort')!
     const abortResult = await run(abort, { reason: 'stop' })
     expect(abortResult.aborted).toBe(true)
     expect(service.abort).toHaveBeenCalledWith('stop')
@@ -189,11 +190,11 @@ describe('工具薄壳行为（副作用全部走 PodService）', () => {
   it('pod_pause / pod_resume 透传 service（W4 暂停/恢复）', async () => {
     const service = fakeService()
     const { tools } = makePodTools(service)
-    const pause = tools[11]!
+    const pause = tools.find((t) => t.name === 'pod_pause')!
     const pauseResult = await run(pause, {})
     expect(pauseResult.paused).toBe(true)
     expect(service.pauseMission).toHaveBeenCalledTimes(1)
-    const resume = tools[12]!
+    const resume = tools.find((t) => t.name === 'pod_resume')!
     const resumeResult = await run(resume, {})
     expect(resumeResult.resumed).toBe(true)
     expect(service.resumeMission).toHaveBeenCalledTimes(1)
@@ -233,7 +234,7 @@ describe('工具薄壳行为（副作用全部走 PodService）', () => {
       throw new Error('INVALID_TRANSITION')
     })
     const { tools } = makePodTools(service)
-    const abort = tools[10]!
+    const abort = tools.find((t) => t.name === 'pod_abort')!
     const result = await run(abort, {})
     expect(result.aborted).toBe(false)
     expect(result.message).toContain('INVALID_TRANSITION')
