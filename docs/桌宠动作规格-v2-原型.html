@@ -113,7 +113,7 @@
   .note b { color: var(--ink); }
 
   /* ── SVG pet animation classes ── */
-  .pet .piv, .pet .anim, .pet .a-figure, .pet .a-head, .pet .a-body, .pet .a-shadow { transform-box: fill-box; }
+  .pet g { transform-box: fill-box; }
   .pet .anim { transform-origin: center; }
   .pet .a-armL, .pet .a-armR { transform-origin: 50% 8%; }
   .pet .a-head { transform-origin: 50% 92%; }
@@ -257,7 +257,7 @@
   [data-act="notify"] .fx-perm { animation: k-permPop 4.4s cubic-bezier(0.34,1.56,0.64,1) infinite; transform-box: fill-box; transform-origin: 20% 100%; }
   [data-act="notify"] .fx-glow { animation: k-glowRing 4.4s ease-out infinite; transform-box: fill-box; transform-origin: center; }
   @keyframes k-notifyShake { 0%, 30%, 42%, 100% { transform: rotate(0); } 33% { transform: rotate(2.2deg); } 37% { transform: rotate(-2.2deg); } }
-  @keyframes k-notifyShield { from { transform: rotate(-90deg); } to { transform: rotate(58deg); } }
+  @keyframes k-notifyShield { from { transform: rotate(-90deg); } to { transform: rotate(24deg); } }
   @keyframes k-notifyTap { 0%, 56%, 76%, 100% { transform: rotate(-14deg); } 62% { transform: rotate(-118deg); } 68% { transform: rotate(-108deg); } }
   @keyframes k-permPop { 0% { transform: scale(0); opacity: 0; } 8% { transform: scale(1.1); opacity: 1; } 12% { transform: scale(1); } 90% { transform: scale(1); opacity: 1; } 100% { transform: scale(0.85); opacity: 0; } }
   @keyframes k-glowRing { 0%, 60% { transform: scale(0.6); opacity: 0; } 66% { transform: scale(1.05); opacity: 0.95; } 82% { transform: scale(1.5); opacity: 0; } 100% { opacity: 0; } }
@@ -284,18 +284,20 @@
   .ph-walk .a-figure { animation: k-carryBob 0.5s ease-in-out infinite; }
   .ph-walk .a-legL { animation: k-walkLegL 0.5s ease-in-out infinite; }
   .ph-walk .a-legR { animation: k-walkLegR 0.5s ease-in-out infinite; }
-  .ph-walk .a-armR { animation: k-carrySteady 0.5s ease-in-out infinite; }
+  .ph-walk .a-armL { animation: k-carrySteady 0.5s ease-in-out infinite; }
+  .ph-walk .a-armR { animation: k-carryFree 0.5s ease-in-out infinite; }
   .ph-place .a-figure { animation: k-carryPlace 0.5s ease-out both; }
   @keyframes k-carryCrouch { 0% { transform: translateY(0) scaleY(1); } 100% { transform: translateY(10px) scaleY(0.92); } }
   @keyframes k-carryLift { 0% { transform: translateY(10px) scaleY(0.92); } 100% { transform: translateY(0) scaleY(1); } }
   @keyframes k-carryBob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
   @keyframes k-walkLegL { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(17deg); } }
   @keyframes k-walkLegR { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(-17deg); } }
-  @keyframes k-carrySteady { 0%, 100% { transform: rotate(-120deg); } 50% { transform: rotate(-116deg); } }
+  @keyframes k-carrySteady { 0%, 100% { transform: rotate(160deg); } 50% { transform: rotate(156deg); } }
+  @keyframes k-carryFree { 0%, 100% { transform: rotate(18deg); } 50% { transform: rotate(30deg); } }
   @keyframes k-carryPlace { 0% { transform: translateY(0); } 100% { transform: translateY(8px) scaleY(0.94); } }
-  .ph-holdbox .a-armL { transform: rotate(-28deg); }
-  .ph-holdbox .a-armR { transform: rotate(28deg); }
-  .ph-shoulder .a-armR { transform: rotate(-160deg); }
+  .ph-holdbox .a-armL { transform: rotate(-23deg); }
+  .ph-holdbox .a-armR { transform: rotate(23deg); }
+  .ph-shoulder .a-armL { transform: rotate(160deg); }
 
   /* sleeping — 哈欠→打盹→蜷睡（JS 分相位）+ 鼠标惊醒 */
   .ph-yawn .a-head { animation: k-yawnTilt 1s ease-in-out both; }
@@ -597,7 +599,7 @@ function buildPet(t) {
   </defs>
   <ellipse class="a-shadow" cx="110" cy="256" rx="58" ry="9" fill="rgba(31,41,66,0.18)"/>
   <g class="piv" transform="translate(110,256)"><g class="a-figure">
-    <g class="piv" transform="translate(0,-252)">
+    <g class="piv" transform="translate(-110,-252)">
       <!-- 背后尾饰（帽后） -->
       <g class="piv" transform="translate(56,74)"><g class="a-tail">${E.tail(t)}</g></g>
       <!-- 腿 -->
@@ -745,7 +747,7 @@ function propFor(act, t) {
         </g>
       </g>`) + FX(`<circle class="fx-glow" cx="180" cy="76" r="17" fill="none" stroke="${t.accent}" stroke-width="2.6" opacity="0"/>`);
     case 'sweep': return P(`<g>
-        <g class="prop-broom" transform="translate(158,192)">
+        <g class="prop-broom" transform="translate(158,206)">
           <rect x="-2.6" y="-56" width="5.2" height="58" rx="2.6" fill="#B98A5A" transform="rotate(24)"/>
           <g transform="translate(22,4) rotate(24)">
             <path d="M-9,-2 L9,-2 L14,26 L-14,26 Z" fill="${t.broom}"/>
@@ -816,6 +818,7 @@ function setTheme(key) {
   const r = document.documentElement.style;
   r.setProperty('--t-accent', t.accent); r.setProperty('--t-deep', t.deep);
   r.setProperty('--t-bg1', t.bg1); r.setProperty('--t-bg2', t.bg2);
+  holder.innerHTML = '';
   renderCrew(); playAct(curAct, true);
 }
 
@@ -859,6 +862,7 @@ function playAct(key, keepPhase) {
   // 手持道具（锤/棒）挂到右手锚点，随手臂动画
   const hand = svg.querySelector('.a-armR .hand-anchor');
   if (hand) {
+    hand.innerHTML = '';
     const carried = svg.querySelector('#g-prop .prop-hammer, #g-prop .prop-baton');
     if (carried) { hand.appendChild(carried); carried.setAttribute('transform', 'translate(0,56) rotate(90)'); }
   }
