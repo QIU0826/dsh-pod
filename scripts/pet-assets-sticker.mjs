@@ -215,21 +215,24 @@ function gearD(cx, cy, r, fill) {
 }
 /** 半睁眼慵懒脸（cx/cy = 头心）：粗上眼皮盖住虹膜上 1/3，外眼角下垂 + 睫毛。 */
 function faceArt(cx, cy, eye, lid) {
-  const LX = cx - 46
-  const RX = cx + 46
-  const EY = cy + 17
+  const LX = cx - 47
+  const RX = cx + 47
+  const EY = cy + 18
   return `
-<ellipse cx="${LX}" cy="${cy + 57}" rx="17" ry="9.5" fill="#FF9FB0" opacity=".55"/>
-<ellipse cx="${RX}" cy="${cy + 57}" rx="17" ry="9.5" fill="#FF9FB0" opacity=".55"/>
-<ellipse cx="${LX}" cy="${EY}" rx="16.5" ry="17.5" fill="${eye}" stroke="${lid}" stroke-width="3.5"/>
-<ellipse cx="${RX}" cy="${EY}" rx="16.5" ry="17.5" fill="${eye}" stroke="${lid}" stroke-width="3.5"/>
-<path d="M${LX - 21} ${EY + 4} Q${LX} ${EY - 12} ${LX + 21} ${EY + 4}" stroke="${lid}" stroke-width="11" fill="none" stroke-linecap="round"/>
-<path d="M${RX - 21} ${EY + 4} Q${RX} ${EY - 12} ${RX + 21} ${EY + 4}" stroke="${lid}" stroke-width="11" fill="none" stroke-linecap="round"/>
-<path d="M${LX - 19} ${EY + 1} L${LX - 27} ${EY - 8} M${RX + 19} ${EY + 1} L${RX + 27} ${EY - 8}" stroke="${lid}" stroke-width="5" fill="none" stroke-linecap="round"/>
-<circle cx="${LX + 5}" cy="${EY + 4}" r="5.6" fill="#FFFFFF" opacity=".95"/><circle cx="${LX - 7}" cy="${EY + 15}" r="2.6" fill="#FFFFFF" opacity=".6"/>
-<circle cx="${RX + 5}" cy="${EY + 4}" r="5.6" fill="#FFFFFF" opacity=".95"/><circle cx="${RX - 7}" cy="${EY + 15}" r="2.6" fill="#FFFFFF" opacity=".6"/>
-<ellipse cx="${cx}" cy="${cy + 67}" rx="11.5" ry="9" fill="#A84A52"/>
-<ellipse cx="${cx + 1}" cy="${cy + 71}" rx="6.5" ry="3.8" fill="#F0879A"/>`
+<ellipse cx="${LX}" cy="${cy + 59}" rx="19" ry="10.5" fill="#FF9FB0" opacity=".5"/>
+<ellipse cx="${RX}" cy="${cy + 59}" rx="19" ry="10.5" fill="#FF9FB0" opacity=".5"/>
+<ellipse cx="${LX}" cy="${EY}" rx="19" ry="20.5" fill="${eye}" stroke="${lid}" stroke-width="3.5"/>
+<ellipse cx="${RX}" cy="${EY}" rx="19" ry="20.5" fill="${eye}" stroke="${lid}" stroke-width="3.5"/>
+<ellipse cx="${LX}" cy="${EY + 7}" rx="11" ry="9" fill="#FFFFFF" opacity=".22"/>
+<ellipse cx="${RX}" cy="${EY + 7}" rx="11" ry="9" fill="#FFFFFF" opacity=".22"/>
+<path d="M${LX - 23} ${EY + 3} Q${LX} ${EY - 13} ${LX + 23} ${EY + 3}" stroke="${lid}" stroke-width="9.5" fill="none" stroke-linecap="round"/>
+<path d="M${RX - 23} ${EY + 3} Q${RX} ${EY - 13} ${RX + 23} ${EY + 3}" stroke="${lid}" stroke-width="9.5" fill="none" stroke-linecap="round"/>
+<path d="M${LX - 21} ${EY - 1} L${LX - 30} ${EY - 11} M${RX + 21} ${EY - 1} L${RX + 30} ${EY - 11}" stroke="${lid}" stroke-width="5" fill="none" stroke-linecap="round"/>
+<path d="M${LX - 22} ${EY + 19} Q${LX} ${EY + 28} ${LX + 20} ${EY + 18} M${RX - 20} ${EY + 18} Q${RX} ${EY + 28} ${RX + 22} ${EY + 19}" stroke="${lid}" stroke-width="3.4" fill="none" stroke-linecap="round" opacity=".75"/>
+<circle cx="${LX + 6}" cy="${EY + 3}" r="6.4" fill="#FFFFFF" opacity=".95"/><circle cx="${LX - 8}" cy="${EY + 16}" r="3" fill="#FFFFFF" opacity=".6"/>
+<circle cx="${RX + 6}" cy="${EY + 3}" r="6.4" fill="#FFFFFF" opacity=".95"/><circle cx="${RX - 8}" cy="${EY + 16}" r="3" fill="#FFFFFF" opacity=".6"/>
+<ellipse cx="${cx}" cy="${cy + 69}" rx="11.5" ry="9" fill="#A84A52"/>
+<ellipse cx="${cx + 1}" cy="${cy + 73}" rx="6.5" ry="3.8" fill="#F0879A"/>`
 }
 /** 托腮双手：袖管 + 前臂 + 拳头（下巴正下方）。 */
 function armsArt(sleeve, skin = SKIN, line = '#B98A75') {
@@ -247,7 +250,7 @@ function backHairArt(line, gradId, len) {
   if (len === 'short') {
     return `<path d="M288 212 Q286 128 400 108 Q514 128 512 212 Q540 282 518 352 Q480 330 400 330 Q320 330 282 352 Q260 282 288 212 Z" fill="url(#${gradId})" stroke="${line}" stroke-width="5" stroke-linejoin="round"/>`
   }
-  return `<path d="M288 212 Q286 126 400 106 Q514 126 512 212 Q548 300 530 402 Q516 502 470 542 Q432 502 400 506 Q368 502 330 542 Q284 502 270 402 Q252 300 288 212 Z" fill="url(#${gradId})" fill-opacity=".96" stroke="${line}" stroke-width="5" stroke-linejoin="round"/>`
+  return `<path d="M302 214 Q300 128 400 108 Q500 128 498 214 Q538 296 526 394 Q516 468 400 476 Q284 468 274 394 Q262 296 302 214 Z" fill="url(#${gradId})" fill-opacity=".96" stroke="${line}" stroke-width="5" stroke-linejoin="round"/>`
 }
 function bangsArt(line, fill, longLocks = true) {
   const locks = longLocks
@@ -264,7 +267,7 @@ function sceneWrap(defs, inner) {
 
 function heroClaude() {
   const L = '#7A3E22'
-  const defs = '<linearGradient id="hg" x1="0" y1="0" x2="0.35" y2="1"><stop offset="0" stop-color="#F2784B"/><stop offset="1" stop-color="#FF9E80"/></linearGradient>'
+  const defs = '<linearGradient id="hg" x1="0" y1="0" x2="0.3" y2="1"><stop offset="0" stop-color="#F2692C"/><stop offset=".55" stop-color="#FB8B5C"/><stop offset="1" stop-color="#FFAFC2"/></linearGradient>'
   const deco = `
 ${star4(632, 142, 17, '#FFD23F', 12)}${star4(558, 92, 11, '#FFD23F', -8)}${star4(86, 318, 12, '#FFD23F', 20)}
 ${star4(648, 438, 11, '#FF8A5C', -14)}${star4(76, 566, 13, '#FFD23F', 6)}${star4(586, 628, 10, '#FFB199', 24)}
@@ -313,7 +316,7 @@ ${backHairArt(L, 'hg', 'long')}
 <path d="M384 116 Q366 52 392 28 Q404 70 404 116 Z" fill="#F2784B" stroke="#7A3E22" stroke-width="4" stroke-linejoin="round"/>
 <path d="M416 116 Q434 52 408 28 Q396 70 396 116 Z" fill="#FF9E80" stroke="#7A3E22" stroke-width="4" stroke-linejoin="round"/>
 <!-- 深棕吊带连体衣 -->
-<path d="M330 428 Q400 404 470 428 L482 506 Q400 530 318 506 Z" fill="#6B4226" stroke="#5A3420" stroke-width="5" stroke-linejoin="round"/>
+<path d="M304 426 Q400 398 496 426 L510 512 Q400 544 290 512 Z" fill="#6B4226" stroke="#5A3420" stroke-width="5" stroke-linejoin="round"/>
 <path d="M356 424 Q360 446 352 462 M444 424 Q440 446 448 462" stroke="#A66B3E" stroke-width="7" fill="none" stroke-linecap="round"/>
 <circle cx="${HX}" cy="${HY}" r="112" fill="${SKIN}" stroke="#E0A98F" stroke-width="4"/>
 ${bangsArt(L, '#FF9E80', true)}
@@ -324,7 +327,7 @@ ${armsArt('#6B4226', SKIN, '#C9917A')}`
 
 function heroCodex() {
   const L = '#0B3D2E'
-  const defs = '<linearGradient id="hg" x1="0" y1="0" x2="0.35" y2="1"><stop offset="0" stop-color="#12B86B"/><stop offset="1" stop-color="#7BE8B0"/></linearGradient>'
+  const defs = '<linearGradient id="hg" x1="0" y1="0" x2="0.3" y2="1"><stop offset="0" stop-color="#0FA35C"/><stop offset=".55" stop-color="#1FC16B"/><stop offset="1" stop-color="#9BF3C6"/></linearGradient>'
   const deco = `
 ${star4(632, 142, 17, '#FFD23F', 12)}${star4(556, 90, 11, '#34E08B', -8)}${star4(84, 318, 12, '#FFD23F', 20)}
 ${star4(648, 456, 11, '#34E08B', -14)}${star4(74, 566, 12, '#FFD23F', 6)}
@@ -376,7 +379,7 @@ ${backHairArt(L, 'hg', 'short')}
 <path d="M488 164 L491 130 L450 148 Z" fill="#BFF5D9"/>
 <path d="M398 106 Q404 48 438 42 Q414 80 414 114 Z" fill="#1FC16B" stroke="#0B3D2E" stroke-width="4" stroke-linejoin="round"/>
 <!-- 深灰连帽卫衣 -->
-<path d="M322 428 Q400 404 478 428 L490 508 Q400 532 310 508 Z" fill="#374151" stroke="#1B2430" stroke-width="5" stroke-linejoin="round"/>
+<path d="M304 426 Q400 400 496 426 L510 510 Q400 540 290 510 Z" fill="#374151" stroke="#1B2430" stroke-width="5" stroke-linejoin="round"/>
 <path d="M372 432 Q400 458 428 432" stroke="#4B5563" stroke-width="7" fill="none" stroke-linecap="round"/>
 <path d="M392 448 L386 474 M408 448 L414 474" stroke="#9AA3B2" stroke-width="4" fill="none" stroke-linecap="round"/>
 <circle cx="${HX}" cy="${HY}" r="112" fill="${SKIN}" stroke="#E0A98F" stroke-width="4"/>
@@ -388,7 +391,7 @@ ${armsArt('#374151', SKIN, '#C9917A')}`
 
 function heroOpenCode() {
   const L = '#262057'
-  const defs = '<linearGradient id="hg" x1="0" y1="0" x2="0.35" y2="1"><stop offset="0" stop-color="#4D3BC9"/><stop offset="1" stop-color="#9B8CFF"/></linearGradient>'
+  const defs = '<linearGradient id="hg" x1="0" y1="0" x2="0.3" y2="1"><stop offset="0" stop-color="#3C2AAE"/><stop offset=".55" stop-color="#6B54E8"/><stop offset="1" stop-color="#BCAFFF"/></linearGradient>'
   const deco = `
 ${star4(632, 142, 17, '#FFD23F', 12)}${star4(558, 90, 11, '#9B8CFF', -8)}${star4(84, 318, 12, '#FFD23F', 20)}
 ${star4(650, 456, 11, '#9B8CFF', -14)}${star4(74, 566, 12, '#FFD23F', 6)}
@@ -437,7 +440,7 @@ ${backHairArt(L, 'hg', 'long')}
 <path d="M492 166 L508 112 L450 144 Z" fill="#D9D2FF"/>
 <path d="M392 108 Q372 44 412 34 Q452 28 440 72 Q432 100 406 104 Q404 98 408 94 Q426 86 422 66 Q418 52 402 58 Q390 72 396 108 Z" fill="#9B8CFF" stroke="#262057" stroke-width="4" stroke-linejoin="round"/>
 <!-- 黑色短款连帽衫 -->
-<path d="M330 428 Q400 404 470 428 L478 500 Q400 522 322 500 Z" fill="#23222E" stroke="#17161F" stroke-width="5" stroke-linejoin="round"/>
+<path d="M304 426 Q400 398 496 426 L508 508 Q400 538 292 508 Z" fill="#23222E" stroke="#17161F" stroke-width="5" stroke-linejoin="round"/>
 <path d="M368 430 Q400 452 432 430" stroke="#3A3550" stroke-width="6" fill="none" stroke-linecap="round"/>
 <!-- 六边形开源徽章吊饰 -->
 <polygon points="400,454 420,465 420,487 400,498 380,487 380,465" fill="#7C5CFC" stroke="#B7A8FF" stroke-width="3.4" stroke-linejoin="round"/>
@@ -451,7 +454,7 @@ ${armsArt('#23222E', SKIN, '#C9917A')}`
 
 function heroDeepSeek() {
   const L = '#12306B'
-  const defs = '<linearGradient id="hg" x1="0" y1="0" x2="0.35" y2="1"><stop offset="0" stop-color="#1E5AA8"/><stop offset="1" stop-color="#7FC8F8"/></linearGradient>'
+  const defs = '<linearGradient id="hg" x1="0" y1="0" x2="0.3" y2="1"><stop offset="0" stop-color="#174A8E"/><stop offset=".55" stop-color="#2F7FD6"/><stop offset="1" stop-color="#93D2FF"/></linearGradient>'
   const deco = `
 ${star4(632, 142, 17, '#FFD23F', 12)}${star4(558, 90, 11, '#FFD23F', -8)}${star4(84, 318, 12, '#FFD23F', 20)}
 ${star4(648, 456, 11, '#7FC8F8', -14)}${star4(74, 566, 12, '#FFD23F', 6)}${star4(600, 250, 11, '#FFD23F', 24)}`
@@ -492,7 +495,7 @@ ${backHairArt(L, 'hg', 'long')}
 <path d="M248 138 Q268 148 290 160 M552 138 Q532 148 510 160" stroke="#8FC7FF" stroke-width="3" fill="none" stroke-linecap="round"/>
 <path d="M392 108 Q372 44 412 34 Q452 28 440 72 Q432 100 406 104 Q404 98 408 94 Q426 86 422 66 Q418 52 402 58 Q390 72 396 108 Z" fill="#7FC8F8" stroke="#12306B" stroke-width="4" stroke-linejoin="round"/>
 <!-- 深蓝吊带连体衣（下身收进鲸尾） -->
-<path d="M330 428 Q400 404 470 428 L476 500 Q400 520 324 500 Z" fill="#1E4E8C" stroke="#12306B" stroke-width="5" stroke-linejoin="round"/>
+<path d="M304 426 Q400 398 496 426 L506 508 Q400 536 294 508 Z" fill="#1E4E8C" stroke="#12306B" stroke-width="5" stroke-linejoin="round"/>
 <path d="M356 424 Q360 446 352 462 M444 424 Q440 446 448 462" stroke="#4A9BE0" stroke-width="7" fill="none" stroke-linecap="round"/>
 <circle cx="${HX}" cy="${HY}" r="112" fill="${SKIN}" stroke="#E0A98F" stroke-width="4"/>
 ${bangsArt(L, '#8FC7FF', true)}
@@ -958,6 +961,15 @@ async function fetchHero(id) {
   throw new Error('主视觉生成超时（多次刷新仍是占位图）')
 }
 
+/** 关闭 CDP（无头 Chrome）。 */
+function closeCdp() {
+  const client = cdpClient
+  if (client !== null) {
+    try { client.ws.close() } catch { /* ignore */ }
+    setTimeout(() => client.proc.kill(), 100)
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2).filter((a) => !a.startsWith('--'))
   const ids = args.length > 0 ? args.filter((a) => CHAR_IDS.includes(a)) : CHAR_IDS
@@ -973,6 +985,19 @@ async function main() {
     }
     return
   }
+  // 快速迭代回路：只把主视觉 SVG 光栅化成 PNG（不做去底/描边/六轨），供设计迭代看图
+  if (process.argv.includes('--preview')) {
+    for (const id of ids) {
+      try {
+        console.log(`[preview] ${await renderHeroSvg(id)}`)
+      } catch (e) {
+        console.error(`[preview] ${id} FAILED: ${e.message}`)
+        process.exitCode = 1
+      }
+    }
+    closeCdp()
+    return
+  }
   for (const id of ids) {
     try {
       await processCharacter(id)
@@ -981,11 +1006,7 @@ async function main() {
       process.exitCode = 1
     }
   }
-  const client = cdpClient
-  if (client !== null) {
-    try { client.ws.close() } catch { /* ignore */ }
-    setTimeout(() => client.proc.kill(), 100)
-  }
+  closeCdp()
 }
 
 import { pathToFileURL } from 'node:url'
