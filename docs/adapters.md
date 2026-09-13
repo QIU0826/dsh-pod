@@ -34,6 +34,11 @@ export interface WorkerProtocol {
 | remote（satellite） | remote | kill ✓ / session_persist ✗ / structured_output ✓ / usage_audit ✓ | 多机 satellite（CR-30）：`RemoteBackend` 代理到卫星 HTTP 端点（src/workers/remote-backend.ts）；vendor=被代理底层的 vendor；能力位继承自卫星实现，usage 来自卫星回传（诚实化 D7） |
 | opencode | headless-cli | kill ✓ / session_persist ✗ / structured_output ✗ / usage_audit ✗ | `opencode run`（sst/opencode，stdin 注入 prompt 规避 Windows 引号破坏 CR-02）；纯文本 stdout → extractReport 平衡扫描；usage 无结构化上报 → unavailable（D7）；**本机未装，契约按公开文档 + fake 测试锁定，真机首验清单见 adapter 头注释** |
 
+**沙箱语义（2026-09-08 修复）**：codex 启动沙箱按任务类型选择，不再一律 `read-only`。
+`implement`/`test` 用 `-s workspace-write`（必须写工作区产物并在 worktree 内 `git add+commit`，报告 verifier 按 `commit_sha` 验收）；`review`/`plan`/`doc`/`research` 保持 `-s read-only`（只读履约）。
+实现于 `src/workers/codex-headless.ts` 的 `codexSandboxForTask(type)`；resume 续接会话保持与启动一致的沙箱（审计 P2-4：不降级、不落到用户 `~/.codex/config.toml` 默认沙箱）。
+本机 codex CLI 实测沙箱可选值 `read-only / workspace-write / danger-full-access`。
+
 ## 4. 新后端接入流程（照 Berd 生成管线）
 
 1. 定协议族：进程式 CLI → `headless-cli`；走 ACP → `acp`；进程内 → `native`。
