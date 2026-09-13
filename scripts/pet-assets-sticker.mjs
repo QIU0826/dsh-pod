@@ -213,24 +213,36 @@ function gearD(cx, cy, r, fill) {
   }
   return `<polygon points="${pts.join(' ')}" fill="${fill}"/><circle cx="${cx}" cy="${cy}" r="${(r * 0.34).toFixed(1)}" fill="#FFFFFF"/>`
 }
+/** 眼型（四角色各异，但共用同一套贴纸语言）——tilt 为外眼角上扬角度（左右镜像）。 */
+const EYE_STYLES = {
+  owl: { rx: 19.5, ry: 21, tilt: 0, lidH: 12, pupil: false, wing: false }, // 猫头鹰：圆润温润
+  cat: { rx: 19, ry: 19, tilt: 7, lidH: 15.5, pupil: true, wing: false }, // 猫：杏眼上扬 + 竖瞳
+  fox: { rx: 18.5, ry: 18, tilt: 11, lidH: 16.5, pupil: false, wing: true }, // 狐：细长上扬 + 眼尾勾
+  whale: { rx: 20.5, ry: 22.5, tilt: -3, lidH: 10.5, pupil: false, wing: false }, // 鲸：最大最圆、微微下垂
+}
+
 /** 半睁眼慵懒脸（cx/cy = 头心）：粗上眼皮盖住虹膜上 1/3，外眼角下垂 + 睫毛。 */
-function faceArt(cx, cy, eye, lid) {
+function faceArt(cx, cy, eye, lid, style = 'owl') {
+  const S = EYE_STYLES[style] ?? EYE_STYLES.owl
   const LX = cx - 47
   const RX = cx + 47
   const EY = cy + 18
+  const oneEye = (x, dir) => `
+<g transform="rotate(${S.tilt * dir} ${x} ${EY})">
+<ellipse cx="${x}" cy="${EY}" rx="${S.rx}" ry="${S.ry}" fill="${eye}" stroke="${lid}" stroke-width="3.5"/>
+<ellipse cx="${x}" cy="${EY + 7}" rx="${(S.rx * 0.58).toFixed(1)}" ry="${(S.ry * 0.42).toFixed(1)}" fill="#FFFFFF" opacity=".22"/>
+${S.pupil ? `<ellipse cx="${x}" cy="${EY + 2}" rx="4.6" ry="${(S.ry * 0.6).toFixed(1)}" fill="${lid}" opacity=".85"/>` : ''}
+<path d="M${x - S.rx - 4} ${EY + 3} Q${x} ${EY - S.lidH} ${x + S.rx + 4} ${EY + 3}" stroke="${lid}" stroke-width="9.5" fill="none" stroke-linecap="round"/>
+<path d="M${x + S.rx * dir + dir * 2} ${EY - 1} L${x + S.rx * dir + dir * 12} ${EY - 11}" stroke="${lid}" stroke-width="5" fill="none" stroke-linecap="round"/>
+${S.wing ? `<path d="M${x + S.rx * dir + dir * 4} ${EY + 4} L${x + S.rx * dir + dir * 19} ${EY - 6}" stroke="${lid}" stroke-width="3.4" fill="none" stroke-linecap="round"/>` : ''}
+<path d="M${x - S.rx - 3} ${EY + S.ry - 1} Q${x} ${EY + S.ry + 8} ${x + S.rx - 1} ${EY + S.ry - 2}" stroke="${lid}" stroke-width="3.4" fill="none" stroke-linecap="round" opacity=".75"/>
+<circle cx="${x + 6}" cy="${EY + 3}" r="6.4" fill="#FFFFFF" opacity=".95"/>
+<circle cx="${x - 8}" cy="${EY + 16}" r="3" fill="#FFFFFF" opacity=".6"/>
+</g>`
   return `
 <ellipse cx="${LX}" cy="${cy + 59}" rx="19" ry="10.5" fill="#FF9FB0" opacity=".5"/>
 <ellipse cx="${RX}" cy="${cy + 59}" rx="19" ry="10.5" fill="#FF9FB0" opacity=".5"/>
-<ellipse cx="${LX}" cy="${EY}" rx="19" ry="20.5" fill="${eye}" stroke="${lid}" stroke-width="3.5"/>
-<ellipse cx="${RX}" cy="${EY}" rx="19" ry="20.5" fill="${eye}" stroke="${lid}" stroke-width="3.5"/>
-<ellipse cx="${LX}" cy="${EY + 7}" rx="11" ry="9" fill="#FFFFFF" opacity=".22"/>
-<ellipse cx="${RX}" cy="${EY + 7}" rx="11" ry="9" fill="#FFFFFF" opacity=".22"/>
-<path d="M${LX - 23} ${EY + 3} Q${LX} ${EY - 13} ${LX + 23} ${EY + 3}" stroke="${lid}" stroke-width="9.5" fill="none" stroke-linecap="round"/>
-<path d="M${RX - 23} ${EY + 3} Q${RX} ${EY - 13} ${RX + 23} ${EY + 3}" stroke="${lid}" stroke-width="9.5" fill="none" stroke-linecap="round"/>
-<path d="M${LX - 21} ${EY - 1} L${LX - 30} ${EY - 11} M${RX + 21} ${EY - 1} L${RX + 30} ${EY - 11}" stroke="${lid}" stroke-width="5" fill="none" stroke-linecap="round"/>
-<path d="M${LX - 22} ${EY + 19} Q${LX} ${EY + 28} ${LX + 20} ${EY + 18} M${RX - 20} ${EY + 18} Q${RX} ${EY + 28} ${RX + 22} ${EY + 19}" stroke="${lid}" stroke-width="3.4" fill="none" stroke-linecap="round" opacity=".75"/>
-<circle cx="${LX + 6}" cy="${EY + 3}" r="6.4" fill="#FFFFFF" opacity=".95"/><circle cx="${LX - 8}" cy="${EY + 16}" r="3" fill="#FFFFFF" opacity=".6"/>
-<circle cx="${RX + 6}" cy="${EY + 3}" r="6.4" fill="#FFFFFF" opacity=".95"/><circle cx="${RX - 8}" cy="${EY + 16}" r="3" fill="#FFFFFF" opacity=".6"/>
+${oneEye(LX, 1)}${oneEye(RX, -1)}
 <ellipse cx="${cx}" cy="${cy + 69}" rx="11.5" ry="9" fill="#A84A52"/>
 <ellipse cx="${cx + 1}" cy="${cy + 73}" rx="6.5" ry="3.8" fill="#F0879A"/>`
 }
@@ -320,7 +332,7 @@ ${backHairArt(L, 'hg', 'long')}
 <path d="M356 424 Q360 446 352 462 M444 424 Q440 446 448 462" stroke="#A66B3E" stroke-width="7" fill="none" stroke-linecap="round"/>
 <circle cx="${HX}" cy="${HY}" r="112" fill="${SKIN}" stroke="#E0A98F" stroke-width="4"/>
 ${bangsArt(L, '#FF9E80', true)}
-${faceArt(HX, HY, '#E8912D', '#4A2A12')}
+${faceArt(HX, HY, '#E8912D', '#4A2A12', 'owl')}
 ${armsArt('#6B4226', SKIN, '#C9917A')}`
   return sceneWrap(defs, deco + mini + main)
 }
@@ -384,7 +396,7 @@ ${backHairArt(L, 'hg', 'short')}
 <path d="M392 448 L386 474 M408 448 L414 474" stroke="#9AA3B2" stroke-width="4" fill="none" stroke-linecap="round"/>
 <circle cx="${HX}" cy="${HY}" r="112" fill="${SKIN}" stroke="#E0A98F" stroke-width="4"/>
 ${bangsArt(L, '#7BE8B0', false)}
-${faceArt(HX, HY, '#10B981', '#0B3D2E')}
+${faceArt(HX, HY, '#10B981', '#0B3D2E', 'cat')}
 ${armsArt('#374151', SKIN, '#C9917A')}`
   return sceneWrap(defs, deco + mini + main)
 }
@@ -447,7 +459,7 @@ ${backHairArt(L, 'hg', 'long')}
 <polygon points="400,465 411,471 411,483 400,489 389,483 389,471" fill="#FFFFFF" opacity=".92"/>
 <circle cx="${HX}" cy="${HY}" r="112" fill="${SKIN}" stroke="#E0A98F" stroke-width="4"/>
 ${bangsArt(L, '#B3A6FF', true)}
-${faceArt(HX, HY, '#7C5CFC', '#2A2270')}
+${faceArt(HX, HY, '#7C5CFC', '#2A2270', 'fox')}
 ${armsArt('#23222E', SKIN, '#C9917A')}`
   return sceneWrap(defs, deco + mini + main)
 }
@@ -499,7 +511,7 @@ ${backHairArt(L, 'hg', 'long')}
 <path d="M356 424 Q360 446 352 462 M444 424 Q440 446 448 462" stroke="#4A9BE0" stroke-width="7" fill="none" stroke-linecap="round"/>
 <circle cx="${HX}" cy="${HY}" r="112" fill="${SKIN}" stroke="#E0A98F" stroke-width="4"/>
 ${bangsArt(L, '#8FC7FF', true)}
-${faceArt(HX, HY, '#3B82F6', '#14306B')}
+${faceArt(HX, HY, '#3B82F6', '#14306B', 'whale')}
 ${armsArt('#1E4E8C', SKIN, '#C9917A')}`
   return sceneWrap(defs, deco + mini + main)
 }
