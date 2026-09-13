@@ -43,6 +43,7 @@ npm run build
 node dist/standalone-server.js                      # 默认 http://127.0.0.1:3930（数据根 ~/.dsh/pod，与插件形态共用磁盘事实源）
 node dist/standalone-server.js --port 0 --data-dir <dir>   # 随机端口 / 指定数据根
 node dist/standalone-server.js --host 0.0.0.0 --token <t>  # 非 loopback 监听必须配 Bearer token（CR-29 纪律）
+node dist/standalone-server.js --open                      # 监听就绪后用系统默认浏览器打开控制台
 npm run serve                                       # = build + 起服务
 ```
 

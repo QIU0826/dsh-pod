@@ -7,15 +7,37 @@
  */
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { spawn } from 'node:child_process'
 import { isLoopbackHost, listenStandalone, type StandaloneOptions } from './server.js'
 
 export interface StandaloneCliArgs extends StandaloneOptions {
   help: boolean
+  /** --open：监听就绪后用系统默认浏览器打开控制台。 */
+  open: boolean
+}
+
+/** 打开 URL 的系统命令（纯函数，便于单测；不实际执行）。 */
+export function browserOpenCommand(url: string, platform: string = process.platform): { cmd: string; args: string[] } {
+  if (platform === 'win32') return { cmd: 'cmd', args: ['/c', 'start', '', url] }
+  if (platform === 'darwin') return { cmd: 'open', args: [url] }
+  return { cmd: 'xdg-open', args: [url] }
+}
+
+/** 用系统默认程序打开 URL（best-effort：失败静默，控制台地址已打印可手开）。 */
+export function openBrowser(url: string, platform: string = process.platform): void {
+  const { cmd, args } = browserOpenCommand(url, platform)
+  try {
+    const child = spawn(cmd, args, { stdio: 'ignore', detached: true })
+    child.on('error', () => {})
+    child.unref()
+  } catch {
+    // 无 GUI / 无 xdg-open 等环境：静默
+  }
 }
 
 /** 解析 CLI 参数；非法项抛 Error（cli: 前缀，机器可读）。 */
 export function parseStandaloneArgs(argv: string[]): StandaloneCliArgs {
-  const out: StandaloneCliArgs = { help: false }
+  const out: StandaloneCliArgs = { help: false, open: false }
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i]
     const value = (): string => {
@@ -50,6 +72,9 @@ export function parseStandaloneArgs(argv: string[]): StandaloneCliArgs {
       case '--demo':
         out.demo = true
         break
+      case '--open':
+        out.open = true
+        break
       case '--pairing':
         out.pairing = true
         break
@@ -72,6 +97,7 @@ export function printUsage(): string {
     '  --opencode-bin <p>  opencode 可执行文件路径（缺省走候选探测）',
     '  --demo              演示模式：脚本化后端（零 LLM 成本，真实 git/问答/审批链路）',
     '  --pairing           设备配对（远程访问片 A）：/api/pair/* 端点族 + 非回环凭设备会话放行',
+    '  --open              监听就绪后用系统默认浏览器打开控制台',
     '  -h, --help          显示本帮助',
   ].join('\n')
 }
@@ -91,6 +117,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const s = await listenStandalone(args)
   const display = s.host === '0.0.0.0' || s.host === '::' ? '127.0.0.1' : s.host
   console.log(`[dsh-pod] standalone console: http://${display}:${s.port}  (data: ${s.runtime.dataDir}${args.demo === true ? ' · demo 模式' : ''})`)
+  if (args.open) openBrowser(`http://${display}:${s.port}`)
   const shutdown = (): void => {
     s.close()
       .then(() => process.exit(0))
