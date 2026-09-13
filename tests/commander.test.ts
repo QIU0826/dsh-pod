@@ -65,6 +65,7 @@ describe('createCommanderSession（官方 API 使用面契约）', () => {
       'pod_mem_query',
       'pod_mem_correct',
       'pod_reassign',
+      'pod_force_rerun',
       'pod_abort',
       'pod_pause',
       'pod_resume',
