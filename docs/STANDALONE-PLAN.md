@@ -32,7 +32,7 @@
 ### P1 独立 UI 打磨（0.5–1 天）
 - [ ] PodPanel 独立渲染视觉核验（DSH CSS 变量缺失的降级样式）
 - [ ] 事件流 SSE 断线重连在独立页的表现核验
-- [ ] README「独立运行」章节（与 DSH 插件形态并列）
+- [x] README「独立运行」章节（与 DSH 插件形态并列）——已落地（README §独立运行）
 
 ### P2 Commander 决策（二选一）
 - A（零开发，v0 先行）：独立模式手动驱动——mission 经 HTTP API 直传 plan，orchestrator 手动派发/审批全可用；
@@ -42,7 +42,8 @@
 - **建议**：A 先上线，B 按需跟进
 
 ### P3 打磨（0.5–1 天）
-- [ ] serve CLI 参数完善（--open 自动开浏览器、--host、--token 强制条件）
+- [x] serve CLI 参数完善（--open 自动开浏览器、--host、--token 强制条件）——已落地（2026-09-13：
+  `--open` 平台分派开浏览器；`--host` 非 loopback 无 token 拒绝启动的强制条件早已在位）
 - [ ] 多 mission 并存 UI 核验（mission 切换/看板刷新）
 - [ ] Windows 实测（路径/防火墙弹窗）
 

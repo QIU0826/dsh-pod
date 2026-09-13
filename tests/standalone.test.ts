@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createStandaloneServer, guard, isLoopbackHost, listenStandalone } from '../src/standalone/server.js'
-import { parseStandaloneArgs, printUsage } from '../src/standalone/cli.js'
+import { browserOpenCommand, parseStandaloneArgs, printUsage } from '../src/standalone/cli.js'
 
 const tmpDirs: string[] = []
 afterAll(() => {
@@ -217,11 +217,11 @@ describe('guard（CR-29 loopback/token 纪律 + P1 浏览器侧防线）', () =>
 describe('standalone CLI 参数解析', () => {
   it('全参数解析', () => {
     const a = parseStandaloneArgs(['--port', '4000', '--host', '0.0.0.0', '--data-dir', 'D:/tmp/pod', '--token', 's3cret', '--opencode-bin', 'C:/bin/oc.exe'])
-    expect(a).toEqual({ help: false, port: 4000, host: '0.0.0.0', dataDir: 'D:/tmp/pod', token: 's3cret', opencodeBin: 'C:/bin/oc.exe' })
+    expect(a).toEqual({ help: false, open: false, port: 4000, host: '0.0.0.0', dataDir: 'D:/tmp/pod', token: 's3cret', opencodeBin: 'C:/bin/oc.exe' })
   })
 
-  it('无参数 → 仅 help:false 的默认值', () => {
-    expect(parseStandaloneArgs([])).toEqual({ help: false })
+  it('无参数 → 仅 help/open 的默认值', () => {
+    expect(parseStandaloneArgs([])).toEqual({ help: false, open: false })
   })
 
   it('--help / -h', () => {
@@ -234,6 +234,17 @@ describe('standalone CLI 参数解析', () => {
     expect(() => parseStandaloneArgs(['--port', 'abc'])).toThrow(/--port/)
     expect(() => parseStandaloneArgs(['--port'])).toThrow(/缺少值/)
     expect(() => parseStandaloneArgs(['--wat'])).toThrow(/未知参数/)
+  })
+
+  it('--open → open:true（并在帮助里可见）', () => {
+    expect(parseStandaloneArgs(['--open']).open).toBe(true)
+    expect(printUsage()).toContain('--open')
+  })
+
+  it('browserOpenCommand 按平台分派（纯函数，不实际执行）', () => {
+    expect(browserOpenCommand('http://127.0.0.1:3930', 'win32')).toEqual({ cmd: 'cmd', args: ['/c', 'start', '', 'http://127.0.0.1:3930'] })
+    expect(browserOpenCommand('http://127.0.0.1:3930', 'darwin')).toEqual({ cmd: 'open', args: ['http://127.0.0.1:3930'] })
+    expect(browserOpenCommand('http://127.0.0.1:3930', 'linux')).toEqual({ cmd: 'xdg-open', args: ['http://127.0.0.1:3930'] })
   })
 })
 
