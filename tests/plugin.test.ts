@@ -71,6 +71,7 @@ describe('plugin 宿主契约', () => {
       'pod_mem_query',
       'pod_mem_correct',
       'pod_reassign',
+      'pod_force_rerun',
       'pod_abort',
       'pod_pause',
       'pod_resume',
@@ -126,7 +127,7 @@ describe('plugin 宿主契约', () => {
       '/a2a', '/a2a/sendMessage', '/a2a/sendMessageStream', '/.well-known/agent-card',
     ]
     for (const path of required) expect(registered, `缺少路由 ${path}`).toContain(path)
-    expect(mocks.toolNames).toHaveLength(17) // 16 pod_*（含 pod_expand_tool）+ commander_start
+    expect(mocks.toolNames).toHaveLength(18) // 17 pod_*（含 pod_expand_tool/pod_force_rerun）+ commander_start
     ctx.registry.delete(plugin)
     // 等 effect disposer 异步执行（SQLite WAL 句柄释放）再清理目录
     await new Promise((resolve) => setTimeout(resolve, 10))
