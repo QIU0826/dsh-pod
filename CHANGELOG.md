@@ -9,6 +9,11 @@
   手机扫码远程操作的地基就位，QR 渲染与竖屏触控适配为片 B/C。
 - **远程访问片 B/C 客户端面**：配对面板（`qrcode.react` 二维码 + 复制链接 + 设备列表 + 撤销）+
   手机 `?pair=` 自动配对（扫码即得同一控制台）+ 竖屏触控适配（侧轨底部横条/输入 16px/气泡全宽）。
+- **远程访问片 B（局域网绑定与隧道）**：远端面板新增「局域网访问」区块（`LanAccessSection`）——
+  显示当前绑定 + 开启命令 + Windows 防火墙放行命令 + 手机可达地址（逐局域网 IP 可复制）。
+  新增只读端点 `GET /api/dsh-pod/net`（standalone 专属；插件形态 404 → 区块隐藏）与
+  `src/core/net-info.ts` 的 `lanIPv4Addresses()`。诚实化纪律：**命令列给用户自行执行**，
+  不静默提权、不自动改防火墙、不代启动隧道（cloudflared 由用户自备）。
 - 记忆向量召回接 **Ollama 本地免费嵌入**：`POD_MEMORY_EMBEDDING=ollama`
   （nomic-embed-text，768 维实测）；混合召回余弦改池内 min-max 归一——真实模型各向异性
   冒烟实证（无关文本 cosine 基线 0.5+ 使绝对门槛失效、importance 反超语义序）后修正。

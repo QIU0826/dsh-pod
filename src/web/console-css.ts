@@ -702,6 +702,15 @@ export const CONSOLE_CSS = `
 .dsh-remote-device.revoked { opacity: .45; }
 .dsh-remote-device-name { font-weight: 600; }
 .dsh-remote-device-meta { color: var(--ink-3); margin-left: auto; font-family: var(--mono); font-size: 11px; }
+/* 局域网访问区块（片 B）：只读展示 + 可复制命令（命令由用户自行执行，不静默提权） */
+.dsh-net-panel { display: flex; flex-direction: column; gap: 10px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
+.dsh-net-panel h3 { margin: 0; font-size: 14px; }
+.dsh-net-current { display: flex; gap: 6px; align-items: baseline; font-size: 12px; color: var(--ink-2); }
+.dsh-net-row { display: flex; flex-direction: column; gap: 6px; }
+.dsh-net-label { font-size: 12px; color: var(--ink-2); }
+.dsh-net-cmd, .dsh-net-url { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-1); }
+.dsh-net-cmd code, .dsh-net-url code, .dsh-net-current code { font-family: var(--mono); font-size: 11px; word-break: break-all; }
+.dsh-net-urls { display: flex; flex-direction: column; gap: 6px; }
 .dsh-note.info { border-color: #2e6be655; background: #2e6be614; color: var(--ink-1); }
 
 /* 竖屏触控适配（手机）：视口竖屏 + 宽度 <760px 时生效——
