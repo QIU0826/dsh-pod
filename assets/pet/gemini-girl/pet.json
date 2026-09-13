@@ -1,0 +1,122 @@
+{
+  "petManifestVersion": 2,
+  "id": "gemini-girl",
+  "displayName": "Gemini 娘",
+  "author": "dsh-pod 桌宠贴纸线",
+  "license": "MIT",
+  "renderer": "frames2d",
+  "description": "Gemini 专属星娘：蓝紫波浪长发、发顶四色四芒星发饰、紫罗兰大眼，白色星空书，趴在摊开的星空书页上；迷你分身站在四色星上挥手，黄四角星与四色小星环绕。",
+  "frames2d": {
+    "dir": ".",
+    "defaultFrameMs": 200,
+    "phases": {
+      "idle": "idle",
+      "thinking": "work",
+      "tool": "drag",
+      "review": "work",
+      "waiting": "idle",
+      "done": "success",
+      "failed": "fail"
+    },
+    "tracks": {
+      "idle": {
+        "frames": [
+          "gemini-pet-idle1.webp",
+          "gemini-pet-idle2.webp",
+          "gemini-pet-idle3.webp",
+          "gemini-pet-idle4.webp"
+        ],
+        "frameMs": [
+          420,
+          160,
+          420,
+          260
+        ]
+      },
+      "work": {
+        "frames": [
+          "gemini-pet-work1.webp",
+          "gemini-pet-work2.webp",
+          "gemini-pet-work3.webp",
+          "gemini-pet-work4.webp"
+        ],
+        "frameMs": [
+          200,
+          200,
+          200,
+          220
+        ]
+      },
+      "drag": {
+        "frames": [
+          "gemini-pet-drag1.webp",
+          "gemini-pet-drag2.webp",
+          "gemini-pet-drag3.webp",
+          "gemini-pet-drag4.webp"
+        ],
+        "frameMs": [
+          150,
+          170,
+          150,
+          170
+        ]
+      },
+      "success": {
+        "frames": [
+          "gemini-pet-success1.webp",
+          "gemini-pet-success2.webp",
+          "gemini-pet-success3.webp"
+        ],
+        "frameMs": [
+          150,
+          280,
+          240
+        ],
+        "loop": false,
+        "fallback": "idle"
+      },
+      "fail": {
+        "frames": [
+          "gemini-pet-fail1.webp",
+          "gemini-pet-fail2.webp",
+          "gemini-pet-fail3.webp"
+        ],
+        "frameMs": [
+          220,
+          320,
+          280
+        ],
+        "loop": false,
+        "fallback": "idle"
+      },
+      "angry": {
+        "frames": [
+          "gemini-pet-angry1.webp",
+          "gemini-pet-angry2.webp",
+          "gemini-pet-angry3.webp"
+        ],
+        "frameMs": [
+          170,
+          150,
+          240
+        ],
+        "loop": false,
+        "fallback": "idle"
+      }
+    }
+  },
+  "x_dsh_pod": {
+    "generatedBy": "scripts/pet-assets-sticker.mjs",
+    "generatedAt": "2026-09-13T10:41:58.543Z",
+    "hero": "hero.webp",
+    "brand": {
+      "primary": "#7B6CF6",
+      "soft": "#BCB2FF",
+      "hud": "#C4BAFF",
+      "stars": [
+        "#FFD23F",
+        "#7B6CF6"
+      ]
+    }
+  }
+}

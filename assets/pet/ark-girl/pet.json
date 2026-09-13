@@ -1,0 +1,122 @@
+{
+  "petManifestVersion": 2,
+  "id": "ark-girl",
+  "displayName": "Ark 娘",
+  "author": "dsh-pod 桌宠贴纸线",
+  "license": "MIT",
+  "renderer": "frames2d",
+  "description": "Ark 专属火山娘：火山品牌蓝渐变长发、头顶一对小犄角、发顶小火山（冒熔岩），深蓝熔岩纹上衣，趴在火山岩台座上；迷你分身坐在熔岩气泡上挥手，黄四角星与橙色火星环绕。",
+  "frames2d": {
+    "dir": ".",
+    "defaultFrameMs": 200,
+    "phases": {
+      "idle": "idle",
+      "thinking": "work",
+      "tool": "drag",
+      "review": "work",
+      "waiting": "idle",
+      "done": "success",
+      "failed": "fail"
+    },
+    "tracks": {
+      "idle": {
+        "frames": [
+          "ark-pet-idle1.webp",
+          "ark-pet-idle2.webp",
+          "ark-pet-idle3.webp",
+          "ark-pet-idle4.webp"
+        ],
+        "frameMs": [
+          420,
+          160,
+          420,
+          260
+        ]
+      },
+      "work": {
+        "frames": [
+          "ark-pet-work1.webp",
+          "ark-pet-work2.webp",
+          "ark-pet-work3.webp",
+          "ark-pet-work4.webp"
+        ],
+        "frameMs": [
+          200,
+          200,
+          200,
+          220
+        ]
+      },
+      "drag": {
+        "frames": [
+          "ark-pet-drag1.webp",
+          "ark-pet-drag2.webp",
+          "ark-pet-drag3.webp",
+          "ark-pet-drag4.webp"
+        ],
+        "frameMs": [
+          150,
+          170,
+          150,
+          170
+        ]
+      },
+      "success": {
+        "frames": [
+          "ark-pet-success1.webp",
+          "ark-pet-success2.webp",
+          "ark-pet-success3.webp"
+        ],
+        "frameMs": [
+          150,
+          280,
+          240
+        ],
+        "loop": false,
+        "fallback": "idle"
+      },
+      "fail": {
+        "frames": [
+          "ark-pet-fail1.webp",
+          "ark-pet-fail2.webp",
+          "ark-pet-fail3.webp"
+        ],
+        "frameMs": [
+          220,
+          320,
+          280
+        ],
+        "loop": false,
+        "fallback": "idle"
+      },
+      "angry": {
+        "frames": [
+          "ark-pet-angry1.webp",
+          "ark-pet-angry2.webp",
+          "ark-pet-angry3.webp"
+        ],
+        "frameMs": [
+          170,
+          150,
+          240
+        ],
+        "loop": false,
+        "fallback": "idle"
+      }
+    }
+  },
+  "x_dsh_pod": {
+    "generatedBy": "scripts/pet-assets-sticker.mjs",
+    "generatedAt": "2026-09-13T10:41:56.677Z",
+    "hero": "hero.webp",
+    "brand": {
+      "primary": "#1664FF",
+      "soft": "#8FB6FF",
+      "hud": "#9CC0FF",
+      "stars": [
+        "#FFD23F",
+        "#FF7A3C"
+      ]
+    }
+  }
+}

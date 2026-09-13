@@ -1,0 +1,122 @@
+{
+  "petManifestVersion": 2,
+  "id": "codex-girl",
+  "displayName": "Codex 娘",
+  "author": "dsh-pod 桌宠贴纸线",
+  "license": "MIT",
+  "renderer": "frames2d",
+  "description": "Codex 专属猫娘：翠绿→薄荷绿渐变短发、一根呆毛、白色猫耳绿耳尖、绿色猫眼半睁、绿尾白尖，深灰连帽卫衣（帽子有猫耳开孔），趴在银色笔记本电脑上，屏幕是绿色终端代码与闪烁光标，键盘散落小齿轮；迷你分身坐在终端黑框窗口里探头，黄四角星与绿色 {};</> 符号环绕。",
+  "frames2d": {
+    "dir": ".",
+    "defaultFrameMs": 200,
+    "phases": {
+      "idle": "idle",
+      "thinking": "work",
+      "tool": "drag",
+      "review": "work",
+      "waiting": "idle",
+      "done": "success",
+      "failed": "fail"
+    },
+    "tracks": {
+      "idle": {
+        "frames": [
+          "codex-pet-idle1.webp",
+          "codex-pet-idle2.webp",
+          "codex-pet-idle3.webp",
+          "codex-pet-idle4.webp"
+        ],
+        "frameMs": [
+          420,
+          160,
+          420,
+          260
+        ]
+      },
+      "work": {
+        "frames": [
+          "codex-pet-work1.webp",
+          "codex-pet-work2.webp",
+          "codex-pet-work3.webp",
+          "codex-pet-work4.webp"
+        ],
+        "frameMs": [
+          200,
+          200,
+          200,
+          220
+        ]
+      },
+      "drag": {
+        "frames": [
+          "codex-pet-drag1.webp",
+          "codex-pet-drag2.webp",
+          "codex-pet-drag3.webp",
+          "codex-pet-drag4.webp"
+        ],
+        "frameMs": [
+          150,
+          170,
+          150,
+          170
+        ]
+      },
+      "success": {
+        "frames": [
+          "codex-pet-success1.webp",
+          "codex-pet-success2.webp",
+          "codex-pet-success3.webp"
+        ],
+        "frameMs": [
+          150,
+          280,
+          240
+        ],
+        "loop": false,
+        "fallback": "idle"
+      },
+      "fail": {
+        "frames": [
+          "codex-pet-fail1.webp",
+          "codex-pet-fail2.webp",
+          "codex-pet-fail3.webp"
+        ],
+        "frameMs": [
+          220,
+          320,
+          280
+        ],
+        "loop": false,
+        "fallback": "idle"
+      },
+      "angry": {
+        "frames": [
+          "codex-pet-angry1.webp",
+          "codex-pet-angry2.webp",
+          "codex-pet-angry3.webp"
+        ],
+        "frameMs": [
+          170,
+          150,
+          240
+        ],
+        "loop": false,
+        "fallback": "idle"
+      }
+    }
+  },
+  "x_dsh_pod": {
+    "generatedBy": "scripts/pet-assets-sticker.mjs",
+    "generatedAt": "2026-09-13T10:41:55.026Z",
+    "hero": "hero.webp",
+    "brand": {
+      "primary": "#1FC16B",
+      "soft": "#86F0B8",
+      "hud": "#7BE8B0",
+      "stars": [
+        "#FFD23F",
+        "#34E08B"
+      ]
+    }
+  }
+}

@@ -1,0 +1,122 @@
+{
+  "petManifestVersion": 2,
+  "id": "deepseek-girl",
+  "displayName": "DeepSeek 娘",
+  "author": "dsh-pod 桌宠贴纸线",
+  "license": "MIT",
+  "renderer": "frames2d",
+  "description": "DeepSeek 专属鲸娘（贴纸线风格基准）：深蓝→天蓝渐变长发、一根卷曲呆毛、鲸鱼鳍状小耳、蓝色大圆眼半睁，深蓝吊带连体衣，下身是完整的深蓝色鲸鱼尾、浅蓝尾鳍，腰间金色环扣，趴在蓝色纹理厚书上托腮；迷你分身趴在小鲸鱼尾上挥手，黄色四角星环绕。",
+  "frames2d": {
+    "dir": ".",
+    "defaultFrameMs": 200,
+    "phases": {
+      "idle": "idle",
+      "thinking": "work",
+      "tool": "drag",
+      "review": "work",
+      "waiting": "idle",
+      "done": "success",
+      "failed": "fail"
+    },
+    "tracks": {
+      "idle": {
+        "frames": [
+          "deepseek-pet-idle1.webp",
+          "deepseek-pet-idle2.webp",
+          "deepseek-pet-idle3.webp",
+          "deepseek-pet-idle4.webp"
+        ],
+        "frameMs": [
+          420,
+          160,
+          420,
+          260
+        ]
+      },
+      "work": {
+        "frames": [
+          "deepseek-pet-work1.webp",
+          "deepseek-pet-work2.webp",
+          "deepseek-pet-work3.webp",
+          "deepseek-pet-work4.webp"
+        ],
+        "frameMs": [
+          200,
+          200,
+          200,
+          220
+        ]
+      },
+      "drag": {
+        "frames": [
+          "deepseek-pet-drag1.webp",
+          "deepseek-pet-drag2.webp",
+          "deepseek-pet-drag3.webp",
+          "deepseek-pet-drag4.webp"
+        ],
+        "frameMs": [
+          150,
+          170,
+          150,
+          170
+        ]
+      },
+      "success": {
+        "frames": [
+          "deepseek-pet-success1.webp",
+          "deepseek-pet-success2.webp",
+          "deepseek-pet-success3.webp"
+        ],
+        "frameMs": [
+          150,
+          280,
+          240
+        ],
+        "loop": false,
+        "fallback": "idle"
+      },
+      "fail": {
+        "frames": [
+          "deepseek-pet-fail1.webp",
+          "deepseek-pet-fail2.webp",
+          "deepseek-pet-fail3.webp"
+        ],
+        "frameMs": [
+          220,
+          320,
+          280
+        ],
+        "loop": false,
+        "fallback": "idle"
+      },
+      "angry": {
+        "frames": [
+          "deepseek-pet-angry1.webp",
+          "deepseek-pet-angry2.webp",
+          "deepseek-pet-angry3.webp"
+        ],
+        "frameMs": [
+          170,
+          150,
+          240
+        ],
+        "loop": false,
+        "fallback": "idle"
+      }
+    }
+  },
+  "x_dsh_pod": {
+    "generatedBy": "scripts/pet-assets-sticker.mjs",
+    "generatedAt": "2026-09-13T10:41:55.871Z",
+    "hero": "hero.webp",
+    "brand": {
+      "primary": "#2F7FD6",
+      "soft": "#8FD0FF",
+      "hud": "#8FC7FF",
+      "stars": [
+        "#FFD23F",
+        "#7FC8F8"
+      ]
+    }
+  }
+}

@@ -2,12 +2,13 @@
  * 厂商 → 桌宠角色注册表（2026-09-05 多角色桌宠切片；2026-09-07 贴纸线角色重构）。
  *
  * 角色来源：
- *   - 本地自产 frames2d 角色（demo-data/pet-assets，按 docs/桌宠角色生产规格.md §5
- *     生成）。贴纸线（scripts/pet-assets-sticker.mjs，AI 贴纸主视觉派生六轨连接帧）：
+ *   - 本地自产 frames2d 角色（`assets/pet`，随包发布；按 docs/桌宠角色生产规格.md §5 生成）。
+ *     全部走贴纸线（scripts/pet-assets-sticker.mjs，SVG 主视觉派生六轨连接帧）：
  *     claude-girl 珊瑚橙猫头鹰娘·笔记本羽毛笔 / codex-girl 翠绿猫娘·笔记本终端齿轮 /
  *     opencode-girl 紫靛狐娘·终端窗口·六边形开源徽章 / deepseek-girl 深蓝鲸娘·厚书金环
- *     （风格基准）；SVG 平涂线（scripts/pet-assets-generate.mjs）：ark-girl 品牌蓝+火山、
- *     dsh-girl 主色青+六边形鲸群、zcode-girl 智谱蓝+终端、gemini-girl 蓝紫+四色四芒星。
+ *     （风格基准）/ zcode-girl 智谱蓝·终端 / ark-girl 品牌蓝·火山 /
+ *     dsh-girl 主色青·六边形鲸群 / gemini-girl 蓝紫·四色四芒星。
+ *     （旧 SVG 平涂线 scripts/pet-assets-generate.mjs 已退为历史——勿再跑，会覆盖贴纸线产物。）
  *     全部本地角色见 LOCAL_PET_CATALOG，房间内「换装」面板（setVendorCharacter）或
  *     localStorage 均可换装。仓库内联小资产，部署时拷入资产基址即被直接加载）→ 默认映射
  *   - 生态角色包 dsh-web/packages/dsh-pet/assets（外部加载，仓库不内联大资产）→ 覆盖可用
@@ -49,7 +50,7 @@ export const VENDOR_CHARACTER: Record<string, PetCharacterBinding> = {
   deepseek: { character: 'deepseek-girl', kind: 'frames2d', license: 'MIT' },
 }
 
-/** 本地自产 frames2d 角色目录（demo-data/pet-assets，规格 §5；房间换装器的唯一数据源）。 */
+/** 本地自产 frames2d 角色目录（assets/pet，随包发布；房间换装器的唯一数据源）。 */
 export interface LocalPetCharacter {
   id: string
   displayName: string
