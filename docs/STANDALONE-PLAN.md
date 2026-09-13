@@ -30,8 +30,11 @@
 - [x] 验收（自动化部分）：`node dist/standalone-server.js --port 0` 真启动 → 壳 200 + standalone.js 804KB 服务 + status mission:null + 404 + --help + token 守卫拒绝（exit 2）。**浏览器人工过面板 + launch 真实 mission 走完审批 → 移入 P1 前人工验收**
 
 ### P1 独立 UI 打磨（0.5–1 天）
-- [ ] PodPanel 独立渲染视觉核验（DSH CSS 变量缺失的降级样式）
-- [ ] 事件流 SSE 断线重连在独立页的表现核验
+- [x] PodPanel 独立渲染视觉核验（DSH CSS 变量缺失的降级样式）——已落地（2026-09-13：
+  `scripts/standalone-smoke.mjs` 无头 Chrome 加载真实控制台，断言无启动错误 / React 已挂载 /
+  `.dsh-root` 地面色 `rgb(11,11,15)` 生效 / 无未捕获异常）
+- [x] 事件流 SSE 断线重连在独立页的表现核验——已落地（2026-09-13：同脚本断言 SSE 建连后
+  **重启服务断流** → 客户端回退 2s 轮询且持续拉取（实测 /events 请求 1→5）、页面不冻结）
 - [x] README「独立运行」章节（与 DSH 插件形态并列）——已落地（README §独立运行）
 
 ### P2 Commander 决策（二选一）
