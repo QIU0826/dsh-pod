@@ -4,10 +4,10 @@
  *   - `<dataDir>/pet-assets` 优先命中（用户覆盖）
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { listenStandalone } from '../src/standalone/server.js'
+import { listenStandalone, petAssetRoots } from '../src/standalone/server.js'
 
 let dir: string
 beforeEach(() => {
@@ -51,5 +51,23 @@ describe('桌宠资产静态面', () => {
     } finally {
       await s.close()
     }
+  })
+})
+
+describe('petAssetRoots（内置包定位：打包态 + 源码态）', () => {
+  it('打包态 dist/ 上一级、源码态 src/standalone 上两级，都指向 <pkg>/assets/pet', () => {
+    const pkg = join('X:', 'pkg')
+    const distRoots = petAssetRoots(join('X:', 'data'), join(pkg, 'dist'))
+    expect(distRoots[0]).toBe(join('X:', 'data', 'pet-assets'))
+    expect(distRoots).toContain(join(pkg, 'assets', 'pet'))
+
+    const srcRoots = petAssetRoots(join('X:', 'data'), join(pkg, 'src', 'standalone'))
+    expect(srcRoots).toContain(join(pkg, 'assets', 'pet'))
+  })
+
+  it('以本仓库真实布局验证：源码态 staticDir 能命中 assets/pet', () => {
+    const roots = petAssetRoots(tmpdir(), join(process.cwd(), 'src', 'standalone'))
+    const hit = roots.find((r) => existsSync(join(r, 'claude-girl', 'pet.json')))
+    expect(hit).toBe(join(process.cwd(), 'assets', 'pet'))
   })
 })
