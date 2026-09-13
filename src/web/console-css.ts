@@ -749,20 +749,28 @@ export const CONSOLE_CSS = `
 .dsh-note.info { border-color: #2e6be655; background: #2e6be614; color: var(--ink); }
 
 /* 竖屏触控适配（手机）：视口竖屏 + 宽度 <760px 时生效——
-   折叠侧轨为底部横条（44px 触控目标）、输入 16px（防 iOS 聚焦缩放）、气泡全宽。 */
+   折叠侧轨为底部横条（≥44px 触控目标）、输入 16px（防 iOS 聚焦缩放）、气泡全宽。
+   html.dsh-force-desktop（设置里「强制桌面布局」）下整块失效；
+   safe-area：底部横条是 column-reverse 下的最底元素，加 env(safe-area-inset-bottom)
+   避开 iOS home indicator（需 viewport-fit=cover）。 */
 @media (max-width: 760px) and (orientation: portrait) {
-  .dsh-shell { flex-direction: column-reverse; }
-  .dsh-rail { flex-direction: row; width: 100%; height: 56px; padding: 4px 6px; gap: 2px; overflow-x: auto; }
-  .dsh-rail-item { min-width: 52px; height: 46px; padding: 6px 8px; }
-  .dsh-rail-label { font-size: 10px; }
-  .dsh-main-col { flex: 1; min-height: 0; }
-  .dsh-composer .dsh-input, .dsh-composer .dsh-composer-ta { font-size: 16px !important; height: auto; min-height: 40px; }
-  .dsh-msg-card { max-width: 100%; }
-  .dsh-topbar { flex-wrap: wrap; padding: 8px 12px; }
-  .dsh-remote-panel { padding: 16px 6px; }
-  .dsh-pet-room-grid { gap: 20px 24px; }
-  .dsh-pet-wardrobe-btn { padding: 8px 16px; min-height: 36px; }
-  .dsh-pet-wardrobe { bottom: calc(100% + 8px); }
+  html:not(.dsh-force-desktop) .dsh-shell { flex-direction: column-reverse; }
+  html:not(.dsh-force-desktop) .dsh-rail {
+    flex-direction: row; width: 100%; gap: 2px; overflow-x: auto;
+    height: calc(56px + env(safe-area-inset-bottom, 0px));
+    padding: 4px 6px calc(4px + env(safe-area-inset-bottom, 0px));
+  }
+  html:not(.dsh-force-desktop) .dsh-rail-item { min-width: 52px; height: 46px; padding: 6px 8px; }
+  html:not(.dsh-force-desktop) .dsh-rail-label { font-size: 10px; }
+  html:not(.dsh-force-desktop) .dsh-main-col { flex: 1; min-height: 0; }
+  html:not(.dsh-force-desktop) .dsh-composer .dsh-input,
+  html:not(.dsh-force-desktop) .dsh-composer .dsh-composer-ta { font-size: 16px !important; height: auto; min-height: 40px; }
+  html:not(.dsh-force-desktop) .dsh-msg-card { max-width: 100%; }
+  html:not(.dsh-force-desktop) .dsh-topbar { flex-wrap: wrap; padding: 8px 12px; }
+  html:not(.dsh-force-desktop) .dsh-remote-panel { padding: 16px 6px; }
+  html:not(.dsh-force-desktop) .dsh-pet-room-grid { gap: 20px 24px; }
+  html:not(.dsh-force-desktop) .dsh-pet-wardrobe-btn { padding: 8px 16px; min-height: 36px; }
+  html:not(.dsh-force-desktop) .dsh-pet-wardrobe { bottom: calc(100% + 8px); }
 }
 
 
