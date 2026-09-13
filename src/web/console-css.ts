@@ -602,6 +602,21 @@ export const CONSOLE_CSS = `
   radial-gradient(1200px 500px at 50% -10%, rgba(34,211,238,.10), transparent 60%),
   linear-gradient(180deg, #0d1420 0%, #101a2b 70%, #14243a 100%);
   border-bottom: 1px solid rgba(34,211,238,.16); pointer-events: none; }
+/* 场景层：墙上夜窗（月亮 + 星点）与地板灯光——纯 CSS，无新资产 */
+.dsh-pet-room-window { position: absolute; top: 46px; left: 50%; transform: translateX(-50%);
+  width: 168px; height: 96px; border-radius: 84px 84px 10px 10px;
+  background: linear-gradient(180deg, #0a1a33 0%, #102c4d 100%);
+  border: 2px solid rgba(34,211,238,.22); box-shadow: inset 0 0 30px rgba(34,211,238,.10); pointer-events: none; }
+.dsh-pet-room-window::before { content: ''; position: absolute; top: 18px; right: 26px; width: 26px; height: 26px;
+  border-radius: 50%; background: #e8f4ff; box-shadow: 0 0 16px rgba(232,244,255,.55); }
+.dsh-pet-room-window i { position: absolute; width: 3px; height: 3px; border-radius: 50%; background: rgba(232,244,255,.85); }
+.dsh-pet-room-window i:nth-child(1) { top: 26px; left: 34px; }
+.dsh-pet-room-window i:nth-child(2) { top: 48px; left: 58px; width: 2px; height: 2px; }
+.dsh-pet-room-window i:nth-child(3) { top: 34px; left: 84px; width: 2px; height: 2px; }
+.dsh-pet-room-window i:nth-child(4) { top: 62px; left: 30px; width: 2px; height: 2px; }
+.dsh-pet-room-lamp { position: absolute; left: 50%; bottom: 46%; width: 360px; height: 160px;
+  transform: translate(-50%, 0); border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(34,211,238,.13), transparent 72%); pointer-events: none; }
 .dsh-pet-room-floor { position: absolute; inset: 38% 0 0 0; background:
   radial-gradient(760px 300px at 50% 8%, rgba(34,211,238,.09), transparent 62%),
   linear-gradient(180deg, #0e1a2c 0%, #0a1322 100%); pointer-events: none; }

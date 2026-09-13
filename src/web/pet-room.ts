@@ -429,6 +429,10 @@ export function PetRoomView(props: PetRoomViewProps): ReactElement {
     'div',
     { className: 'dsh-pet-room' + (petRoomMaidTheme() ? ' maid' : '') },
     createElement('div', { className: 'dsh-pet-room-wall' }),
+    // 场景层（纯 CSS 绘制，无新资产）：墙上夜窗 + 地板灯光——让房间像"住人的地方"
+    createElement('div', { className: 'dsh-pet-room-window', 'aria-hidden': 'true' },
+      createElement('i', null), createElement('i', null), createElement('i', null), createElement('i', null)),
+    createElement('div', { className: 'dsh-pet-room-lamp', 'aria-hidden': 'true' }),
     createElement('div', { className: 'dsh-pet-room-floor' }),
     createElement('div', { className: 'dsh-pet-room-title' }, status?.mission?.name ?? 'Pod 鲸群 · 桌宠房间'),
     ...ZONE_ORDER.filter((z) => (zones.get(z)?.length ?? 0) > 0).map((z) =>
