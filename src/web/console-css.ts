@@ -521,7 +521,7 @@ export const CONSOLE_CSS = `
   animation: chi-zzz 2.2s ease-in-out infinite;
 }
 @keyframes chi-zzz { 0% { opacity: 0; transform: translateY(0); } 50% { opacity: 1; } 100% { opacity: 0; transform: translateY(-10px); } }
-@media (prefers-reduced-motion: reduce) { .dsh-av, .dsh-av *, .dsh-view, .dsh-msg, .dsh-msg-user-wrap, .dsh-modal, .dsh-rail-item.active, .dsh-caret { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; } }
+@media (prefers-reduced-motion: reduce) { .dsh-av, .dsh-av *, .dsh-view, .dsh-msg, .dsh-msg-user-wrap, .dsh-modal, .dsh-rail-item.active, .dsh-caret, .dsh-pet-shaking { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; } }
 /* 形象选择浮层（8 宫格） */
 .dsh-avatar-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .dsh-avatar-cell {
@@ -642,6 +642,8 @@ export const CONSOLE_CSS = `
 .dsh-pet-zone-title.busy { color: #7dd3fc; border-color: rgba(34,211,238,.4); }
 .dsh-pet-station { cursor: pointer; transition: transform .18s ease; }
 .dsh-pet-station:hover { transform: translateY(-3px); }
+.dsh-pet-station:focus-visible { outline: 2px solid rgba(34,211,238,.8); outline-offset: 3px; border-radius: 12px; }
+.dsh-pet-station:focus-visible .dsh-pet-sprite { filter: drop-shadow(0 0 14px rgba(34,211,238,.55)); }
 .dsh-pet-station.selected .dsh-pet-sprite { filter: drop-shadow(0 0 14px rgba(34,211,238,.55)); }
 .dsh-pet-detail { z-index: 4; margin-top: 10px; width: 300px; padding: 10px 12px; border-radius: 12px;
   background: linear-gradient(180deg, rgba(13,22,36,.96), rgba(9,15,25,.96));
@@ -686,6 +688,39 @@ export const CONSOLE_CSS = `
 .dsh-pet-room.maid .dsh-pet-zone-title { color: #8ea5da; }
 .dsh-pet-room.maid .dsh-pet-room-legend { color: #8ea5dab0; }
 
+/* ─── 房间换装面板（2026-09-07 前端优化：localStorage 换装的可见 UI） ─── */
+.dsh-pet-room-footer { position: relative; flex: none; margin-top: 18px; display: flex; align-items: center;
+  justify-content: center; flex-wrap: wrap; gap: 6px 14px; }
+.dsh-pet-room-footer .dsh-pet-room-legend { margin-top: 0; }
+.dsh-pet-wardrobe-wrap { position: relative; display: flex; justify-content: center; }
+.dsh-pet-wardrobe-btn { padding: 3px 12px; border-radius: 999px; font-size: 11px; cursor: pointer;
+  color: var(--primary); background: rgba(34,211,238,.1); border: 1px solid rgba(34,211,238,.35); transition: background .15s ease; }
+.dsh-pet-wardrobe-btn:hover { background: rgba(34,211,238,.2); }
+.dsh-pet-wardrobe-btn[aria-expanded="true"] { background: rgba(34,211,238,.24); border-color: rgba(34,211,238,.6); }
+.dsh-pet-wardrobe { position: absolute; bottom: calc(100% + 10px); left: 50%; transform: translateX(-50%);
+  width: 330px; max-width: 88vw; padding: 12px 14px; border-radius: 12px; z-index: 8;
+  display: flex; flex-direction: column; gap: 8px; text-align: left;
+  background: linear-gradient(180deg, rgba(13,22,36,.97), rgba(9,15,25,.97));
+  border: 1px solid rgba(34,211,238,.4); box-shadow: 0 12px 36px rgba(0,0,0,.5); }
+.dsh-pet-wardrobe-head { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-size: 11.5px; color: var(--ink-2); letter-spacing: .04em; }
+.dsh-pet-wardrobe-reset { flex: none; padding: 2px 10px; border-radius: 999px; font-size: 10.5px; cursor: pointer;
+  color: var(--ink-2); background: transparent; border: 1px solid var(--line); }
+.dsh-pet-wardrobe-reset:hover:not(:disabled) { color: var(--ink); border-color: rgba(34,211,238,.5); }
+.dsh-pet-wardrobe-reset:disabled { opacity: .35; cursor: default; }
+.dsh-pet-wardrobe-row { display: flex; align-items: center; gap: 10px; }
+.dsh-pet-wardrobe-vendor { flex: none; width: 66px; font-size: 11.5px; font-weight: 600; color: var(--primary); }
+.dsh-pet-wardrobe-select { flex: 1; min-width: 0; padding: 5px 8px; border-radius: 8px; font-size: 11.5px;
+  color: var(--ink); background: rgba(8,14,24,.92); border: 1px solid var(--line); outline: none; cursor: pointer; }
+.dsh-pet-wardrobe-select:focus { border-color: rgba(34,211,238,.55); }
+.dsh-pet-wardrobe-select option { background: #0d1624; color: var(--ink); }
+.dsh-pet-room.maid .dsh-pet-wardrobe-btn { color: #1c326b; background: #f8f6f0d9; border-color: #c5a46877; }
+.dsh-pet-room.maid .dsh-pet-wardrobe { background: #f8f6f0f7; border-color: #c5a46888; }
+.dsh-pet-room.maid .dsh-pet-wardrobe-head { color: #5b6b8c; }
+.dsh-pet-room.maid .dsh-pet-wardrobe-vendor { color: #1c326b; }
+.dsh-pet-room.maid .dsh-pet-wardrobe-select { background: #fffdf8; color: #172347; border-color: #c5a46866; }
+.dsh-pet-room.maid .dsh-pet-wardrobe-select option { background: #fffdf8; color: #172347; }
+
 /* ─── 远程访问面板（片 B）+ 竖屏触控适配（片 C，参照 dsh-remote-web-ui 手法）─── */
 .dsh-remote-panel { max-width: 560px; margin: 0 auto; padding: 24px 8px; display: flex; flex-direction: column; gap: 14px; }
 .dsh-remote-panel h3 { margin: 0; font-size: 15px; }
@@ -711,7 +746,7 @@ export const CONSOLE_CSS = `
 .dsh-net-cmd, .dsh-net-url { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-1); }
 .dsh-net-cmd code, .dsh-net-url code, .dsh-net-current code { font-family: var(--mono); font-size: 11px; word-break: break-all; }
 .dsh-net-urls { display: flex; flex-direction: column; gap: 6px; }
-.dsh-note.info { border-color: #2e6be655; background: #2e6be614; color: var(--ink-1); }
+.dsh-note.info { border-color: #2e6be655; background: #2e6be614; color: var(--ink); }
 
 /* 竖屏触控适配（手机）：视口竖屏 + 宽度 <760px 时生效——
    折叠侧轨为底部横条（44px 触控目标）、输入 16px（防 iOS 聚焦缩放）、气泡全宽。 */
@@ -726,6 +761,8 @@ export const CONSOLE_CSS = `
   .dsh-topbar { flex-wrap: wrap; padding: 8px 12px; }
   .dsh-remote-panel { padding: 16px 6px; }
   .dsh-pet-room-grid { gap: 20px 24px; }
+  .dsh-pet-wardrobe-btn { padding: 8px 16px; min-height: 36px; }
+  .dsh-pet-wardrobe { bottom: calc(100% + 8px); }
 }
 
 

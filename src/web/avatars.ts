@@ -112,25 +112,36 @@ const CHIBI_ART: Record<string, string> = {
     <circle class="chi-star" cx="50" cy="16" r="1.8" fill="#f59e0b"/>
     <circle class="chi-star" cx="12" cy="18" r="1.3" fill="#67e8f9"/>`,
   claude: `
-    <path class="chi-leg-l" d="M25 56 L25 62 L29 62 L29 56" fill="#f5c1b8"/>
-    <path class="chi-leg-r" d="M35 56 L35 62 L39 62 L39 56" fill="#f5c1b8"/>
-    <path class="chi-body" d="M23 40 Q32 38 41 40 L39 58 Q32 60 25 58 Z" fill="#5b21b6"/>
-    <path class="chi-hair" d="M18 18 Q32 2 46 18 Q50 32 44 42 Q32 32 20 42 Q14 32 18 18" fill="#4c1d95"/>
+    <path class="chi-tail" d="M20 50 Q13 55 15 61 Q22 58 26 52 Z" fill="#F0784D"/>
+    <path class="chi-tail" d="M44 50 Q51 55 49 61 Q42 58 38 52 Z" fill="#E86A3C"/>
+    <path class="chi-tail" d="M27 52 Q32 57 37 52 Q37 58 32 60 Q27 58 27 52 Z" fill="#FF9E7D"/>
+    <path class="chi-leg-l" d="M26 56 L25 62 L30 62 L30 56" fill="#f5c1b8"/>
+    <path class="chi-leg-r" d="M34 56 L34 62 L39 62 L38 56" fill="#f5c1b8"/>
+    <path class="chi-body" d="M23 40 Q32 37.5 41 40 L39 58 Q32 60.5 25 58 Z" fill="#6B4226"/>
+    <path class="chi-hair" d="M17 19 Q32 2 47 19 Q51 34 44 45 Q32 33 20 45 Q13 34 17 19" fill="#F0784D"/>
+    <path class="chi-hair" d="M16 21 Q9 17 9 10 Q15 13 19 19 Z" fill="#8D5A3B"/>
+    <path class="chi-hair" d="M48 21 Q55 17 55 10 Q49 13 45 19 Z" fill="#8D5A3B"/>
+    <path class="chi-hair" d="M28 9 Q25 2 29 0 Q31 5 32 9 Z" fill="#F0784D"/>
+    <path class="chi-hair" d="M36 9 Q39 2 35 0 Q33 5 32 9 Z" fill="#FFB199"/>
     <circle class="chi-head" cx="32" cy="28" r="13" fill="#f5c1b8"/>
-    <path class="chi-hair-f" d="M19 18 Q32 10 45 18 Q46 26 38 24 Q32 18 26 24 Q18 26 19 18" fill="#7c3aed"/>
+    <path class="chi-hair-f" d="M19 19 Q32 10 45 19 Q45 27 38 25 Q32 19 26 25 Q19 27 19 19" fill="#FF9E7D"/>
     <g class="chi-face">
-      <circle cx="26" cy="28" r="2.8" fill="#1a1a24"/><circle cx="27" cy="27" r="1" fill="#fff"/>
-      <circle cx="38" cy="28" r="2.8" fill="#1a1a24"/><circle cx="39" cy="27" r="1" fill="#fff"/>
+      <ellipse cx="26" cy="29" rx="2.5" ry="2.3" fill="#E8912D"/>
+      <ellipse cx="38" cy="29" rx="2.5" ry="2.3" fill="#E8912D"/>
+      <path d="M23.2 27.2 Q26 25.8 28.8 27.2" stroke="#3A2A1C" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+      <path d="M35.2 27.2 Q38 25.8 40.8 27.2" stroke="#3A2A1C" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+      <circle cx="26.8" cy="28.4" r="0.9" fill="#fff"/><circle cx="38.8" cy="28.4" r="0.9" fill="#fff"/>
       <ellipse cx="23" cy="33" rx="2.2" ry="1.3" fill="#ffb6c1" opacity="0.55"/>
       <ellipse cx="41" cy="33" rx="2.2" ry="1.3" fill="#ffb6c1" opacity="0.55"/>
-      <path d="M30 35 Q32 37 34 35" fill="none" stroke="#a36e64" stroke-width="1" stroke-linecap="round"/>
+      <path d="M30 34.6 Q32 36.2 34 34.6" fill="none" stroke="#a36e64" stroke-width="1" stroke-linecap="round"/>
     </g>
-    <path class="chi-arm-l" d="M23 42 Q17 48 21 52" fill="none" stroke="#f5c1b8" stroke-width="3.5" stroke-linecap="round"/>
-    <path class="chi-arm-r" d="M41 42 Q47 48 43 52" fill="none" stroke="#f5c1b8" stroke-width="3.5" stroke-linecap="round"/>
-    <rect class="chi-prop" x="20" y="8" width="10" height="8" rx="1" fill="#f59e0b"/>
-    <path class="chi-prop" d="M22 10 L28 10 M22 12 L28 12" stroke="#5b21b6" stroke-width="1"/>
-    <circle class="chi-star" cx="50" cy="16" r="1.8" fill="#fbbf24"/>
-    <circle class="chi-star" cx="12" cy="20" r="1.3" fill="#a78bfa"/>`,
+    <path class="chi-arm-l" d="M23 42 Q18 47 22 51" fill="none" stroke="#f5c1b8" stroke-width="3.5" stroke-linecap="round"/>
+    <path class="chi-arm-r" d="M41 42 Q46 47 42 51" fill="none" stroke="#f5c1b8" stroke-width="3.5" stroke-linecap="round"/>
+    <path class="chi-prop" d="M18 50 L46 50 L44 59 L20 59 Z" fill="#F7EEDD"/>
+    <path class="chi-prop" d="M18 50 L46 50 L45.2 53.4 L18.8 53.4 Z" fill="#8D5A3B"/>
+    <path class="chi-prop" d="M39 45 L49 39 L50 41 L41 47 Z" fill="#F0784D"/>
+    <circle class="chi-star" cx="51" cy="15" r="1.8" fill="#FFD23F"/>
+    <circle class="chi-star" cx="11" cy="23" r="1.4" fill="#FF8A5C"/>`,
   gpt: `
     <path class="chi-tail" d="M48 34 L56 30 L54 38 L60 36" fill="#22c55e"/>
     <path class="chi-leg-l" d="M25 56 L25 62 L29 62 L29 56" fill="#f5c1b8"/>
@@ -153,47 +164,100 @@ const CHIBI_ART: Record<string, string> = {
     <circle class="chi-star" cx="50" cy="18" r="1.8" fill="#86efac"/>
     <circle class="chi-star" cx="12" cy="18" r="1.3" fill="#4ade80"/>`,
   codex: `
-    <path class="chi-leg-l" d="M25 56 L25 62 L29 62 L29 56" fill="#f5c1b8"/>
-    <path class="chi-leg-r" d="M35 56 L35 62 L39 62 L39 56" fill="#f5c1b8"/>
-    <path class="chi-body" d="M23 40 Q32 38 41 40 L39 58 Q32 60 25 58 Z" fill="#1f2937"/>
-    <path class="chi-hair" d="M18 18 Q32 2 46 18 Q50 32 44 42 Q32 32 20 42 Q14 32 18 18" fill="#22c55e"/>
+    <path class="chi-tail" d="M45 47 Q56 46 56 36 Q55 29 50 27 Q53 34 49 39 Q46 43 43 44 Z" fill="#1FC16B"/>
+    <circle class="chi-tail" cx="50" cy="27.5" r="2.6" fill="#FFFFFF"/>
+    <path class="chi-leg-l" d="M26 56 L25 62 L30 62 L30 56" fill="#374151"/>
+    <path class="chi-leg-r" d="M34 56 L34 62 L39 62 L38 56" fill="#374151"/>
+    <path class="chi-body" d="M22 40 Q32 37 42 40 L40 58 Q32 60.5 24 58 Z" fill="#374151"/>
+    <path class="chi-hair" d="M18 20 Q32 3 46 20 Q49 33 43 42 Q32 32 21 42 Q15 33 18 20" fill="#1FC16B"/>
+    <path class="chi-hair" d="M19 18 L15 5 L27 13 Z" fill="#FFFFFF"/>
+    <path class="chi-hair" d="M45 18 L49 5 L37 13 Z" fill="#FFFFFF"/>
+    <path class="chi-hair" d="M19 18 L16.8 9.5 L24 13.6 Z" fill="#1FC16B"/>
+    <path class="chi-hair" d="M45 18 L47.2 9.5 L40 13.6 Z" fill="#1FC16B"/>
+    <path class="chi-hair" d="M32 6 Q33 0.5 37 1.5 Q34.5 4 33.5 8.5 Z" fill="#1FC16B"/>
     <circle class="chi-head" cx="32" cy="28" r="13" fill="#f5c1b8"/>
-    <path class="chi-hair-f" d="M19 18 Q32 10 45 18 Q46 26 38 24 Q32 18 26 24 Q18 26 19 18" fill="#4ade80"/>
+    <path class="chi-hair-f" d="M19 19 Q32 11 45 19 Q45 26 39 24 Q34 20 32 24 Q30 20 25 24 Q19 26 19 19" fill="#7BE8B0"/>
     <g class="chi-face">
-      <circle cx="26" cy="28" r="2.8" fill="#1a1a24"/><circle cx="27" cy="27" r="1" fill="#fff"/>
-      <circle cx="38" cy="28" r="2.8" fill="#1a1a24"/><circle cx="39" cy="27" r="1" fill="#fff"/>
+      <ellipse cx="26" cy="29" rx="2.4" ry="2.7" fill="#10B981"/>
+      <ellipse cx="38" cy="29" rx="2.4" ry="2.7" fill="#10B981"/>
+      <path d="M23.2 27 Q26 25.5 28.8 27" stroke="#0E3B2E" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+      <path d="M35.2 27 Q38 25.5 40.8 27" stroke="#0E3B2E" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+      <circle cx="26.8" cy="28.2" r="0.9" fill="#fff"/><circle cx="38.8" cy="28.2" r="0.9" fill="#fff"/>
       <ellipse cx="23" cy="33" rx="2.2" ry="1.3" fill="#ffb6c1" opacity="0.55"/>
       <ellipse cx="41" cy="33" rx="2.2" ry="1.3" fill="#ffb6c1" opacity="0.55"/>
-      <path d="M30 35 Q32 37 34 35" fill="none" stroke="#a36e64" stroke-width="1" stroke-linecap="round"/>
-      <rect x="24" y="24" width="16" height="4" rx="1" fill="#111827" opacity="0.2"/>
+      <path d="M30 34.6 Q32 36 34 34.6" fill="none" stroke="#a36e64" stroke-width="1" stroke-linecap="round"/>
     </g>
-    <path class="chi-arm-l" d="M23 42 Q17 48 21 52" fill="none" stroke="#f5c1b8" stroke-width="3.5" stroke-linecap="round"/>
-    <path class="chi-arm-r" d="M41 42 Q47 48 43 52" fill="none" stroke="#f5c1b8" stroke-width="3.5" stroke-linecap="round"/>
-    <rect class="chi-prop" x="16" y="48" width="14" height="8" rx="1" fill="#374151"/>
-    <path class="chi-prop" d="M18 50 L28 50 M18 52 L26 52 M18 54 L24 54" stroke="#22c55e" stroke-width="1"/>
-    <circle class="chi-star" cx="50" cy="16" r="1.8" fill="#22c55e"/>
-    <circle class="chi-star" cx="12" cy="18" r="1.3" fill="#4ade80"/>`,
+    <path class="chi-arm-l" d="M23 42 Q19 47 23 51" fill="none" stroke="#374151" stroke-width="3.5" stroke-linecap="round"/>
+    <path class="chi-arm-r" d="M41 42 Q45 47 41 51" fill="none" stroke="#374151" stroke-width="3.5" stroke-linecap="round"/>
+    <path class="chi-prop" d="M16 50 L48 50 L51 56 L13 56 Z" fill="#C7CDD6"/>
+    <rect class="chi-prop" x="21" y="42" width="22" height="9" rx="1.2" fill="#23262F"/>
+    <path class="chi-prop" d="M23.5 45.5 L32 45.5 M23.5 48 L29 48" stroke="#34E08B" stroke-width="1.1" stroke-linecap="round"/>
+    <circle class="chi-prop" cx="40" cy="53" r="1.1" fill="#8A91A0"/>
+    <circle class="chi-prop" cx="43.5" cy="53.6" r="0.8" fill="#8A91A0"/>
+    <circle class="chi-star" cx="52" cy="14" r="1.8" fill="#34E08B"/>
+    <circle class="chi-star" cx="10" cy="21" r="1.3" fill="#FFD23F"/>`,
   opencode: `
-    <path class="chi-tail" d="M14 38 Q6 42 8 50 Q14 46 16 40" fill="#2563eb"/>
-    <path class="chi-leg-l" d="M25 56 L25 62 L29 62 L29 56" fill="#f5c1b8"/>
-    <path class="chi-leg-r" d="M35 56 L35 62 L39 62 L39 56" fill="#f5c1b8"/>
-    <path class="chi-body" d="M23 40 Q32 38 41 40 L39 58 Q32 60 25 58 Z" fill="#2563eb"/>
-    <path class="chi-hair" d="M18 18 Q32 2 46 18 Q50 32 44 42 Q32 32 20 42 Q14 32 18 18" fill="#1d4ed8"/>
+    <path class="chi-tail" d="M19 50 Q5 51 6 38 Q7 28 15 26 Q11 36 16 42 Q21 47 24 48 Z" fill="#7C5CFC"/>
+    <path class="chi-tail" d="M15 26.5 Q9.5 25.5 8 30 Q12.5 32.5 17 29.5 Z" fill="#FFFFFF"/>
+    <path class="chi-leg-l" d="M26 55 L25 61 L30 61 L30 55" fill="#23222E"/>
+    <path class="chi-leg-r" d="M34 55 L34 61 L39 61 L38 55" fill="#23222E"/>
+    <path class="chi-body" d="M23 40 Q32 37.5 41 40 L39 55 Q32 57 25 55 Z" fill="#23222E"/>
+    <polygon class="chi-prop" points="32,44 35,45.7 35,49.3 32,51 29,49.3 29,45.7" fill="#7C5CFC" stroke="#B7A8FF" stroke-width="0.9" stroke-linejoin="round"/>
+    <path class="chi-hair" d="M17 19 Q32 2 47 19 Q51 34 44 46 Q32 34 20 46 Q13 34 17 19" fill="#5B4BD6"/>
+    <path class="chi-hair" d="M18 18 L12 4 L28 13 Z" fill="#7C5CFC"/>
+    <path class="chi-hair" d="M46 18 L52 4 L36 13 Z" fill="#7C5CFC"/>
+    <path class="chi-hair" d="M19 16 L15.5 8.5 L25 13.4 Z" fill="#D9D2FF"/>
+    <path class="chi-hair" d="M45 16 L48.5 8.5 L39 13.4 Z" fill="#D9D2FF"/>
+    <path class="chi-hair" d="M32 7 Q29 0.5 34 0 Q39 0 37.5 4.5 Q36.5 7.5 33 8.5 Q33 7.5 32 7 Z" fill="#8B7CF6"/>
     <circle class="chi-head" cx="32" cy="28" r="13" fill="#f5c1b8"/>
-    <path class="chi-hair-f" d="M19 18 Q32 10 45 18 Q46 26 38 24 Q32 18 26 24 Q18 26 19 18" fill="#60a5fa"/>
+    <path class="chi-hair-f" d="M19 19 Q32 10 45 19 Q45 27 38 25 Q32 19 26 25 Q19 27 19 19" fill="#9B8CFF"/>
     <g class="chi-face">
-      <circle cx="26" cy="28" r="2.8" fill="#1a1a24"/><circle cx="27" cy="27" r="1" fill="#fff"/>
-      <circle cx="38" cy="28" r="2.8" fill="#1a1a24"/><circle cx="39" cy="27" r="1" fill="#fff"/>
+      <ellipse cx="26" cy="29" rx="2.5" ry="2.5" fill="#7C5CFC"/>
+      <ellipse cx="38" cy="29" rx="2.5" ry="2.5" fill="#7C5CFC"/>
+      <path d="M23.2 27 Q26 25.6 28.8 27" stroke="#2E2660" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+      <path d="M35.2 27 Q38 25.6 40.8 27" stroke="#2E2660" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+      <circle cx="26.8" cy="28.3" r="0.9" fill="#fff"/><circle cx="38.8" cy="28.3" r="0.9" fill="#fff"/>
       <ellipse cx="23" cy="33" rx="2.2" ry="1.3" fill="#ffb6c1" opacity="0.55"/>
       <ellipse cx="41" cy="33" rx="2.2" ry="1.3" fill="#ffb6c1" opacity="0.55"/>
-      <path d="M30 35 Q32 37 34 35" fill="none" stroke="#a36e64" stroke-width="1" stroke-linecap="round"/>
+      <path d="M30 34.6 Q32 36.2 34 34.6" fill="none" stroke="#a36e64" stroke-width="1" stroke-linecap="round"/>
     </g>
-    <path class="chi-arm-l" d="M23 42 Q17 48 21 52" fill="none" stroke="#f5c1b8" stroke-width="3.5" stroke-linecap="round"/>
-    <path class="chi-arm-r" d="M41 42 Q47 48 43 52" fill="none" stroke="#f5c1b8" stroke-width="3.5" stroke-linecap="round"/>
-    <path class="chi-prop" d="M36 6 L40 14 L44 6 Z" fill="#f97316"/>
-    <circle class="chi-prop" cx="40" cy="12" r="2" fill="#fdba74"/>
-    <circle class="chi-star" cx="50" cy="18" r="1.8" fill="#60a5fa"/>
-    <circle class="chi-star" cx="12" cy="16" r="1.3" fill="#93c5fd"/>`,
+    <path class="chi-arm-l" d="M23 42 Q18 47 22 51" fill="none" stroke="#23222E" stroke-width="3.5" stroke-linecap="round"/>
+    <path class="chi-arm-r" d="M41 42 Q46 47 42 51" fill="none" stroke="#23222E" stroke-width="3.5" stroke-linecap="round"/>
+    <rect class="chi-prop" x="17" y="50" width="30" height="11" rx="1.6" fill="#15131F"/>
+    <rect class="chi-prop" x="17" y="50" width="30" height="3.4" rx="1.6" fill="#2C2A3D"/>
+    <path class="chi-prop" d="M20 56.5 L26 56.5 M20 59 L24 59" stroke="#B7A8FF" stroke-width="1.1" stroke-linecap="round"/>
+    <path class="chi-prop" d="M40 55.5 L43 57 L40 58.5" stroke="#B7A8FF" stroke-width="1.1" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle class="chi-star" cx="52" cy="15" r="1.8" fill="#9B8CFF"/>
+    <circle class="chi-star" cx="10" cy="19" r="1.3" fill="#FFD23F"/>`,
+  deepseek: `
+    <path class="chi-tail" d="M25 49 Q18 56 21 63 Q29 60 32 53 Q35 60 43 63 Q46 56 39 49 Q32 46 25 49 Z" fill="#1E5AA8"/>
+    <path class="chi-tail" d="M21 61 Q13 61 12 54 Q18 55 23 58 Z" fill="#7FC8F8"/>
+    <path class="chi-tail" d="M43 61 Q51 61 52 54 Q46 55 41 58 Z" fill="#7FC8F8"/>
+    <path class="chi-body" d="M23 40 Q32 37.5 41 40 L39 51 Q32 53 25 51 Z" fill="#1E4E8C"/>
+    <path class="chi-body" d="M25 48 Q32 50.5 39 48" fill="none" stroke="#F5C542" stroke-width="1.6" stroke-linecap="round"/>
+    <path class="chi-hair" d="M17 19 Q32 2 47 19 Q51 34 44 45 Q32 33 20 45 Q13 34 17 19" fill="#1E5AA8"/>
+    <path class="chi-hair" d="M16 22 Q8 19 8 11 Q15 13 19 19 Z" fill="#2F7FD6"/>
+    <path class="chi-hair" d="M48 22 Q56 19 56 11 Q49 13 45 19 Z" fill="#2F7FD6"/>
+    <path class="chi-hair" d="M32 7 Q29 0.5 34 0 Q39 0 37.5 4.5 Q36.5 7.5 33 8.5 Q33 7.5 32 7 Z" fill="#7FC8F8"/>
+    <circle class="chi-head" cx="32" cy="28" r="13" fill="#f5c1b8"/>
+    <path class="chi-hair-f" d="M19 19 Q32 10 45 19 Q45 27 38 25 Q32 19 26 25 Q19 27 19 19" fill="#7FC8F8"/>
+    <g class="chi-face">
+      <ellipse cx="26" cy="29" rx="2.5" ry="2.4" fill="#3B82F6"/>
+      <ellipse cx="38" cy="29" rx="2.5" ry="2.4" fill="#3B82F6"/>
+      <path d="M23.2 27.2 Q26 25.8 28.8 27.2" stroke="#153A6B" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+      <path d="M35.2 27.2 Q38 25.8 40.8 27.2" stroke="#153A6B" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+      <circle cx="26.8" cy="28.4" r="0.9" fill="#fff"/><circle cx="38.8" cy="28.4" r="0.9" fill="#fff"/>
+      <ellipse cx="23" cy="33" rx="2.2" ry="1.3" fill="#ffb6c1" opacity="0.55"/>
+      <ellipse cx="41" cy="33" rx="2.2" ry="1.3" fill="#ffb6c1" opacity="0.55"/>
+      <path d="M30 34.6 Q32 36.2 34 34.6" fill="none" stroke="#a36e64" stroke-width="1" stroke-linecap="round"/>
+    </g>
+    <path class="chi-arm-l" d="M23 42 Q18 47 22 50.5" fill="none" stroke="#f5c1b8" stroke-width="3.5" stroke-linecap="round"/>
+    <path class="chi-arm-r" d="M41 42 Q46 47 42 50.5" fill="none" stroke="#f5c1b8" stroke-width="3.5" stroke-linecap="round"/>
+    <path class="chi-prop" d="M17 49 L47 49 L45 60 L19 60 Z" fill="#2F7FD6"/>
+    <path class="chi-prop" d="M19 51.5 L45 51.5 L44 58 L20 58 Z" fill="#BFE3FF"/>
+    <path class="chi-prop" d="M32 51.5 L32 58" stroke="#2F7FD6" stroke-width="0.9"/>
+    <circle class="chi-star" cx="51" cy="14" r="1.8" fill="#FFD23F"/>
+    <circle class="chi-star" cx="10" cy="24" r="1.3" fill="#7FC8F8"/>`,
   ark: `
     <path class="chi-tail" d="M18 40 L12 34 L16 44 L8 42" fill="#ef4444"/>
     <path class="chi-leg-l" d="M25 56 L25 62 L29 62 L29 56" fill="#f5c1b8"/>
@@ -262,6 +326,7 @@ export const AVATAR_OPTIONS: Array<{ id: string; label: string }> = [
   { id: 'opencode', label: 'OpenCode 娘' },
   { id: 'ark', label: 'ARK 娘' },
   { id: 'dsh', label: 'DSH 娘' },
+  { id: 'deepseek', label: 'DeepSeek 娘' },
 ]
 
 export function avatarLabel(id: string | undefined | null): string {
