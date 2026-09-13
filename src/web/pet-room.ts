@@ -435,6 +435,11 @@ export function PetRoomView(props: PetRoomViewProps): ReactElement {
     createElement('div', { className: 'dsh-pet-room-lamp', 'aria-hidden': 'true' }),
     createElement('div', { className: 'dsh-pet-room-floor' }),
     createElement('div', { className: 'dsh-pet-room-title' }, status?.mission?.name ?? 'Pod 鲸群 · 桌宠房间'),
+    // 「多智能体」在房间里的可见信号：有审查对峙时给一条横幅（实现者 ⇄ 审查者正面对线）
+    duels.size > 0
+      ? createElement('div', { className: 'dsh-pet-duel-banner', role: 'status' },
+          '⚔ 审查对峙 ×' + String(Math.floor(duels.size / 2)) + ' —— 实现者与审查者正面对线，通过后进入审批')
+      : null,
     ...ZONE_ORDER.filter((z) => (zones.get(z)?.length ?? 0) > 0).map((z) =>
       createElement(
         'div',
