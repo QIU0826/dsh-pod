@@ -44,6 +44,7 @@ import { DagView } from './dag-view.js'
 import { ApprovalView } from './approval-view.js'
 import { PetRoomView } from './pet-room.js'
 import { RemotePanel } from './remote-panel.js'
+import { applyForceDesktop, browserMobileLayoutEnv } from './mobile-layout.js'
 import { pairTokenFromSearch, postPairAccept } from './api.js'
 import { SettingsView } from './settings-view.js'
 import { MISSION_LABEL, MISSION_TONE, tokenBudgetPct, rosterToSlots } from './view-helpers.js'
@@ -71,6 +72,8 @@ export function PodPanel(): ReactElement {
   const [pairNotice, setPairNotice] = useState<string | undefined>(undefined)
 
   useEffect(() => {
+    // 手机端布局偏好（片 C）：启动时按会话偏好同步 <html> 类名（强制桌面则跳过竖屏适配）
+    if (typeof window !== 'undefined') applyForceDesktop(browserMobileLayoutEnv())
     // 能力探测：/api/pair/devices 存在 = --pairing 已开启（404 = 未开启，面板显示指引）
     void fetch('/api/pair/devices').then((r) => setPairingCapable(r.ok)).catch(() => setPairingCapable(false))
     // 手机扫码落地：?pair=<token> → 自动 accept → 清理地址栏 → 顶部提示

@@ -9,6 +9,10 @@
   手机扫码远程操作的地基就位，QR 渲染与竖屏触控适配为片 B/C。
 - **远程访问片 B/C 客户端面**：配对面板（`qrcode.react` 二维码 + 复制链接 + 设备列表 + 撤销）+
   手机 `?pair=` 自动配对（扫码即得同一控制台）+ 竖屏触控适配（侧轨底部横条/输入 16px/气泡全宽）。
+- **远程访问片 C（竖屏触控适配层）**：底部导航条/输入区补 **safe-area**（`viewport-fit=cover`
+  + `env(safe-area-inset-bottom)`，避开 iOS home indicator）；新增 **`sessionStorage` 手动退出
+  开关**（设置「界面 · 手机端 → 竖屏布局：自动适配 / 强制桌面」）——`src/web/mobile-layout.ts`
+  注入式实现，竖屏媒体查询挂在 `html:not(.dsh-force-desktop)` 下，切换即时生效、无需刷新。
 - 记忆向量召回接 **Ollama 本地免费嵌入**：`POD_MEMORY_EMBEDDING=ollama`
   （nomic-embed-text，768 维实测）；混合召回余弦改池内 min-max 归一——真实模型各向异性
   冒烟实证（无关文本 cosine 基线 0.5+ 使绝对门槛失效、importance 反超语义序）后修正。

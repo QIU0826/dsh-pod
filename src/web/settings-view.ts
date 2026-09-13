@@ -19,6 +19,7 @@ import {
   type ConsoleSettings,
   type RosterMember,
 } from './console-settings.js'
+import { browserMobileLayoutEnv, readForceDesktop, writeForceDesktop } from './mobile-layout.js'
 
 export interface SettingsViewProps {
   settings: ConsoleSettings
@@ -374,6 +375,16 @@ export function SettingsView(props: SettingsViewProps): ReactElement {
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickingAvatar, setPickingAvatar] = useState(-1)
   const [saved, setSaved] = useState(false)
+  // 手机端布局偏好（片 C）：sessionStorage 会话级，即时生效、不走保存栏
+  const [forceDesktop, setForceDesktop] = useState(false)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    setForceDesktop(readForceDesktop(browserMobileLayoutEnv()))
+  }, [])
+  const toggleForceDesktop = (on: boolean): void => {
+    setForceDesktop(on)
+    if (typeof window !== 'undefined') writeForceDesktop(browserMobileLayoutEnv(), on)
+  }
   const dirty = JSON.stringify(draft) !== JSON.stringify(settings)
 
   const patch = (p: Partial<ConsoleSettings>): void => { setDraft((prev) => ({ ...prev, ...p })); setSaved(false) }
@@ -552,6 +563,22 @@ export function SettingsView(props: SettingsViewProps): ReactElement {
               createElement('option', { value: 'chat' }, '对话'),
               createElement('option', { value: 'board' }, '看板'),
               createElement('option', { value: 'dag' }, 'DAG')))),
+        createElement('div', { className: 'dsh-card' },
+          createElement('div', { className: 'dsh-card-header' },
+            createElement('span', { className: 'dsh-card-title' }, '界面 · 手机端'),
+            createElement('span', { className: 'dsh-hint' }, '即时生效，无需保存')),
+          createElement('div', { className: 'dsh-form-row' },
+            createElement('span', { className: 'dsh-label' }, '竖屏布局'),
+            createElement('div', { className: 'dsh-seg', role: 'group', 'aria-label': '手机端竖屏布局' },
+              createElement('button', {
+                type: 'button', className: !forceDesktop ? 'on' : '',
+                onClick: () => toggleForceDesktop(false),
+              }, '自动适配'),
+              createElement('button', {
+                type: 'button', className: forceDesktop ? 'on' : '',
+                onClick: () => toggleForceDesktop(true),
+              }, '强制桌面'))),
+            createElement('span', { className: 'dsh-hint' }, '竖屏手机上默认切紧凑布局（底部导航条 / 16px 输入）；选「强制桌面」保留完整桌面界面。仅本会话生效（sessionStorage），刷新保留、关标签即忘。')),
         createElement(RulesPanel),
         createElement(MemoryPanel),
         createElement(CronPanel),

@@ -9,7 +9,7 @@ export const STANDALONE_SHELL_HTML = `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>dsh-pod 控制台 · Pod 鲸群</title>
 <script>
   // 启动期错误可见化：UI bundle 挂载失败时绝不黑屏——错误直接渲染到页面上
