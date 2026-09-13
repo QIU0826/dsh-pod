@@ -627,6 +627,8 @@ export const CONSOLE_CSS = `
   background-size: 72px 72px, 72px 72px;
   transform: perspective(600px) rotateX(52deg); transform-origin: top center; }
 .dsh-pet-room-title { position: relative; margin: 18px 0 4px; font-size: 13px; letter-spacing: .22em; color: var(--ink-2); text-transform: uppercase; flex: none; }
+.dsh-pet-duel-banner { position: relative; margin: 2px 0 6px; padding: 4px 14px; border-radius: 999px;
+  font-size: 11.5px; color: #ffd9a8; background: rgba(245,158,11,.12); border: 1px solid rgba(245,158,11,.38); }
 .dsh-pet-room-grid { position: relative; display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-end; gap: 34px 48px; padding: 24px 8px 6px; width: 100%; max-width: 1080px; flex: none; }
 .dsh-pet-station { position: relative; display: flex; flex-direction: column; align-items: center; }
 .dsh-pet-sprite { position: relative; z-index: 2; }
