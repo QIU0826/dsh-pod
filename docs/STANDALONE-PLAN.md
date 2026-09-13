@@ -52,7 +52,8 @@
 
 ### 后续（不阻塞独立化）
 - [ ] Tauri 桌面壳（berd 同款形态；Web loopback 已满足核心诉求，二期评估）
-- [ ] Grok/Kimi/ACP adapter（Berd-G 管线照 opencode 首验模式）
+- [x] Grok/Kimi/ACP adapter（Berd-G 管线照 opencode 首验模式）——Grok/Kimi 已落地（2026-09-13：
+  `openai-compat-backend.ts` 基类 + 两个子类 + `tests/grok-kimi.test.ts`）；ACP 不排期（docs/adapters.md §5）
 - [ ] 记忆评测扩 30+ 对（当前 10 对，符号检验 p≈0.17 方向性证据）
 
 ## 难点与解法

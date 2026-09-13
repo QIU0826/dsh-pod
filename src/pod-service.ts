@@ -26,6 +26,8 @@ import type { PodStore } from './core/store.js'
 import { ClaudeHeadlessBackend } from './workers/claude-headless.js'
 import { CodexHeadlessBackend, codexBinaryCandidates } from './workers/codex-headless.js'
 import { ArkBackend } from './workers/ark-headless.js'
+import { GrokBackend } from './workers/grok-backend.js'
+import { KimiBackend } from './workers/kimi-backend.js'
 import { envCredentialPresent, repairPath } from './workers/preflight.js'
 import { CronScheduler, type CronJob } from './core/cron.js'
 import type { ChannelTarget } from './core/channel.js'
@@ -51,6 +53,19 @@ function readArkKeyFromClaudeSettings(): string | undefined {
   } catch {
     return undefined
   }
+}
+
+/**
+ * Grok / Kimi 后端装配（Berd-G：OpenAI 兼容 native adapter）：从环境读 key，无 key 不注册
+ * （返回空对象，与 ark 同纪律）。契约按公开文档 + fake fetch 测试锁定，真机首验清单见各 backend 头注释。
+ */
+function openAiCompatBackendsFromEnv(): Partial<Record<Vendor, WorkerBackend>> {
+  const out: Partial<Record<Vendor, WorkerBackend>> = {}
+  const grokKey = (process.env.XAI_API_KEY ?? '').trim()
+  if (grokKey.length > 0) out.grok = new GrokBackend({ apiKey: grokKey })
+  const kimiKey = (process.env.MOONSHOT_API_KEY ?? '').trim()
+  if (kimiKey.length > 0) out.kimi = new KimiBackend({ apiKey: kimiKey })
+  return out
 }
 
 /** 记忆后台 reflection 节流间隔（2.8.1：MT 周期内不频繁跑 pass）。 */
@@ -175,6 +190,7 @@ export class PodService {
         binary: codexBinaryCandidates('win32').find((c) => existsSync(c)) ?? 'codex',
       }),
       ...arkBackendFromSettings(),
+      ...openAiCompatBackendsFromEnv(),
     }
     // CR-34：Cron 定时触发（AgentScope-J）——target 适配自身 pod_* 工具面（同一套，审批门不绕过）；
     // jobs 从 <dataDir>/cron.json 加载，缺省无 job = 默认关（Berd-H 显式启用纪律）。

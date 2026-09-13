@@ -18,6 +18,12 @@
   + `env(safe-area-inset-bottom)`，避开 iOS home indicator）；新增 **`sessionStorage` 手动退出
   开关**（设置「界面 · 手机端 → 竖屏布局：自动适配 / 强制桌面」）——`src/web/mobile-layout.ts`
   注入式实现，竖屏媒体查询挂在 `html:not(.dsh-force-desktop)` 下，切换即时生效、无需刷新。
+- **Grok / Kimi 适配器**（Berd-G 管线）：`src/workers/openai-compat-backend.ts` 作为 OpenAI 兼容
+  native 后端基类，Grok（xAI，`XAI_API_KEY`）/ Kimi（Moonshot，`MOONSHOT_API_KEY`）各一个薄子类；
+  `registerVendor` 内置项同步、有 key 才注册。契约按公开文档 + fake fetch 测试锁定（本机无 key），
+  真机首验清单见各 backend 头注释。ACP 仍**不排期**（docs/adapters.md §5 重估结论）。
+- **独立控制台收尾**：`--open` 启动后自动开浏览器（平台分派）；`scripts/standalone-smoke.mjs`
+  无头 Chrome 核验独立渲染与 SSE 断流回退（可复跑）。
 - 记忆向量召回接 **Ollama 本地免费嵌入**：`POD_MEMORY_EMBEDDING=ollama`
   （nomic-embed-text，768 维实测）；混合召回余弦改池内 min-max 归一——真实模型各向异性
   冒烟实证（无关文本 cosine 基线 0.5+ 使绝对门槛失效、importance 反超语义序）后修正。
