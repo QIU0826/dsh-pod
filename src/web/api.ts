@@ -537,3 +537,20 @@ export function pairTokenFromSearch(search: string): string | undefined {
   const value = new URLSearchParams(search).get('pair')
   return value !== null && value.length > 0 ? value : undefined
 }
+
+// ─── 网络信息（远程访问片 B，2026-09-13）─────────────────────────────────
+
+/** standalone 网络信息：当前绑定 + 局域网候选地址 + 配对开关。 */
+export interface NetInfo {
+  host: string
+  port: number
+  loopbackOnly: boolean
+  lanIps: string[]
+  pairing: boolean
+}
+
+/** 读取 standalone 网络信息；插件形态无此路由（404）→ 调用方应回退隐藏该区块。 */
+export async function fetchNetInfo(): Promise<NetInfo> {
+  return readJson<NetInfo>(await fetch('/api/dsh-pod/net'))
+}
+
