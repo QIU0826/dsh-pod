@@ -393,7 +393,7 @@ export function PetRoomView(props: PetRoomViewProps): ReactElement {
         createElement(VendorPet, {
           vendor: slot.vendor,
           phase,
-          size: 128,
+          size: 176,
           className: 'dsh-pet-sprite',
           flip: duel === 'implementer',
           shaking: duel === 'implementer',
