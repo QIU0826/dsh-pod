@@ -119,20 +119,25 @@ try {
   console.log(`[shot] ${server.url}`)
 
   // 造数据：demo 后端跑一个真实 mission（否则各视图是空的，看不出设计）
-  const launch = await fetch(server.url + '/api/dsh-pod/launch', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      name: 'UI 评审演示',
-      goal: '为 dsh-pod 控制台做一次界面评审：跑通 demo mission 并观察各视图呈现',
-      cwd: process.cwd(),
-      slots: [
-        { id: 'S-1', vendor: 'claude', role: 'implementer', capabilities: ['编码'] },
-        { id: 'S-2', vendor: 'codex', role: 'reviewer', capabilities: ['审查'] },
-      ],
-    }),
-  })
-  console.log(`[shot] launch ${launch.status}`)
+  // --no-launch：跳过造数，用于评审**首次打开的空状态**
+  if (process.argv.includes('--no-launch')) {
+    console.log('[shot] --no-launch：评审空状态')
+  } else {
+    const launch = await fetch(server.url + '/api/dsh-pod/launch', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'UI 评审演示',
+        goal: '为 dsh-pod 控制台做一次界面评审：跑通 demo mission 并观察各视图呈现',
+        cwd: process.cwd(),
+        slots: [
+          { id: 'S-1', vendor: 'claude', role: 'implementer', capabilities: ['编码'] },
+          { id: 'S-2', vendor: 'codex', role: 'reviewer', capabilities: ['审查'] },
+        ],
+      }),
+    })
+    console.log(`[shot] launch ${launch.status}`)
+  }
 
   cdpH = await getCdp()
   await cdpH.cdp('Page.navigate', { url: server.url })

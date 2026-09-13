@@ -634,7 +634,14 @@ export const CONSOLE_CSS = `
 .dsh-pet-vendor { font-size: 13px; font-weight: 600; color: var(--primary); }
 .dsh-pet-role { font-size: 11px; color: var(--ink-2); }
 .dsh-pet-meta { font-size: 10.5px; color: var(--ink-3); font-family: var(--mono); }
-.dsh-pet-room-empty { position: relative; margin: 40px 0 60px; font-size: 14px; color: var(--ink-2); }
+.dsh-pet-room-empty { position: relative; margin: 40px 0 10px; font-size: 14px; color: var(--ink-2); }
+/* 空房间角色橱窗：把会入住的桌宠先亮出来（略低饱和 → 暗示"尚未入住"） */
+.dsh-pet-showcase { position: relative; display: flex; flex-wrap: wrap; justify-content: center; gap: 12px 20px; max-width: 920px; margin-bottom: 6px; }
+.dsh-pet-showcase-item { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  opacity: .7; transition: opacity .2s ease, transform .2s ease; }
+.dsh-pet-showcase-item:hover { opacity: 1; transform: translateY(-3px); }
+.dsh-pet-showcase-item img { width: 76px; height: auto; display: block; }
+.dsh-pet-showcase-item figcaption { font-size: 11px; color: var(--ink-3); }
 .dsh-pet-room-legend { position: relative; margin-top: 18px; font-size: 11px; color: var(--ink-3); flex: none; }
 /* 桌宠增强（2026-09-03）：多房间分区 + 戳一下详情卡 + steer 指令输入 */
 .dsh-pet-zone { position: relative; display: flex; flex-direction: column; align-items: center; width: 100%; flex: none; }
