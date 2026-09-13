@@ -16,6 +16,7 @@ import { createPodRuntime, type PodRuntime } from '../core/pod-runtime.js'
 import { bearerTokenEquals, hasAllowedLoopbackOrigin, isLocalHostHeader, isLoopbackBindHost, isLoopbackRemoteAddress } from '../core/http-guard.js'
 import { PodService } from '../pod-service.js'
 import { PairingStore } from '../core/pairing.js'
+import { lanIPv4Addresses, type NetInfo } from '../core/net-info.js'
 import { makePodRoutes } from '../routes.js'
 import { createMcpHttpServer, type McpHttpHandle } from '../mcp-http.js'
 import { ClaudeHeadlessBackend } from '../workers/claude-headless.js'
@@ -186,6 +187,23 @@ export function readCookie(req: IncomingMessage, name: string): string | undefin
 }
 
 /**
+ * 网络信息端点（远程访问片 B，docs/远程访问-设计.md）：只读暴露「如何让手机/LAN 访问」
+ * 所需事实——当前绑定、局域网候选地址、配对开关。仅 standalone 注册（插件形态无此路由，
+ * 客户端能力探测 404 → 优雅隐藏）。不做静默提权/自动改防火墙：命令列给用户自行执行。
+ */
+function handleNetRoute(req: IncomingMessage, res: ServerResponse, host: string, pairing: boolean): void {
+  const body: NetInfo = {
+    host,
+    port: req.socket.localPort ?? 0,
+    loopbackOnly: isLoopbackHost(host),
+    lanIps: lanIPv4Addresses().map((a) => a.address),
+    pairing,
+  }
+  res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+  res.end(JSON.stringify(body))
+}
+
+/**
  * 配对端点族（远程访问片 A，docs/远程访问-设计.md）：
  *   POST /api/pair/mint    — 铸造一次性令牌（**loopback-only**；同时仅一枚，TTL 10min）
  *   POST /api/pair/accept  — 一次性令牌 → 设备凭据（Set-Cookie pod-device=<id>.<secret>）
@@ -334,6 +352,11 @@ export function createStandaloneServer(options: StandaloneOptions = {}): Standal
       return
     }
     if (!guard(req, res, token, loopbackOnly, pairingStore)) return
+    // 网络信息（远程访问片 B）：置于守卫之后——仅已鉴权调用者可见绑定/局域网地址。
+    if (pathname === '/api/dsh-pod/net') {
+      handleNetRoute(req, res, host, options.pairing === true)
+      return
+    }
     if (pathname === '/' || pathname === '/index.html') {
       serveStatic(res, pathname, staticDir)
       return

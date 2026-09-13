@@ -9,6 +9,11 @@
   手机扫码远程操作的地基就位，QR 渲染与竖屏触控适配为片 B/C。
 - **远程访问片 B/C 客户端面**：配对面板（`qrcode.react` 二维码 + 复制链接 + 设备列表 + 撤销）+
   手机 `?pair=` 自动配对（扫码即得同一控制台）+ 竖屏触控适配（侧轨底部横条/输入 16px/气泡全宽）。
+- **远程访问片 B（局域网绑定与隧道）**：远端面板新增「局域网访问」区块（`LanAccessSection`）——
+  显示当前绑定 + 开启命令 + Windows 防火墙放行命令 + 手机可达地址（逐局域网 IP 可复制）。
+  新增只读端点 `GET /api/dsh-pod/net`（standalone 专属；插件形态 404 → 区块隐藏）与
+  `src/core/net-info.ts` 的 `lanIPv4Addresses()`。诚实化纪律：**命令列给用户自行执行**，
+  不静默提权、不自动改防火墙、不代启动隧道（cloudflared 由用户自备）。
 - **远程访问片 C（竖屏触控适配层）**：底部导航条/输入区补 **safe-area**（`viewport-fit=cover`
   + `env(safe-area-inset-bottom)`，避开 iOS home indicator）；新增 **`sessionStorage` 手动退出
   开关**（设置「界面 · 手机端 → 竖屏布局：自动适配 / 强制桌面」）——`src/web/mobile-layout.ts`
