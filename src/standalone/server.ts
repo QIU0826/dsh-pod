@@ -104,8 +104,12 @@ const PET_ASSET_MIME: Record<string, string> = {
  * 其次**随包发布的内置角色包** `<pkg>/assets/pet`（dist 的上一级 = 包根，开发态/安装态都成立）。
  * 这是「全新 clone 也能看到品牌娘」的落点——资产入库在 assets/ 而非被 ignore 的 demo-data/。
  */
-function petAssetRoots(dataDir: string, staticDir: string): string[] {
-  return [join(dataDir, 'pet-assets'), join(staticDir, '..', '..', 'assets', 'pet')]
+export function petAssetRoots(dataDir: string, staticDir: string): string[] {
+  return [
+    join(dataDir, 'pet-assets'),
+    join(staticDir, '..', 'assets', 'pet'), // 打包后：dist/server.js → <pkg>/assets/pet
+    join(staticDir, '..', '..', 'assets', 'pet'), // 源码态：src/standalone → <repo>/assets/pet
+  ]
 }
 
 /** 桌宠资产静态面：pet-assets/<character>/**（多级根按优先级回退；全不存在 → 404 由回落机制兜底）。 */
