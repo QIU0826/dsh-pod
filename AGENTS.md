@@ -37,7 +37,7 @@
 - `src/plugin.ts` —— 宿主入口（PodRuntime + 健康路由）
 - `scripts/` —— demo-chain / bakeoff-all / bakeoff-run（产物留 reports/）
 - `tests/` —— 与 src 同构的 vitest 单测；orchestrator 测试用 FakeBackend 脚本化回放 + 真实 git 仓库 fixture
-- `docs/` —— DoD 核对表 / 验收记录 / 差距审计（**入库**）
+- `docs/` —— 常青文档（架构 / 适配器 / 接入指南 / 设计与规格）；日期快照已清理
 - `reports/` —— bake-off 原始数据与汇总（**不入库**，.gitignore，按前序会话决策）
 - `tasks/` —— bakeoff-tasks.json 任务集
 

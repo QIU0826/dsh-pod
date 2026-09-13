@@ -71,7 +71,7 @@
 - docs/harness-接入指南.md（新平台接入路径与 DoD）
 - docs/远程访问-设计.md（手机远程/配对/隧道设计基线，参照 dsh-remote-web-ui）
 - docs/桌宠角色生产规格.md（三视图→帧动画生产口径）
-- docs/satellite.md、docs/待办清单-2026-08-31.md 相应勾选与更新
+- docs/satellite.md 相应勾选与更新
 
 ### 环境修复
 
