@@ -13,16 +13,27 @@
  *   任务 blocked/escalated、slot error → failed（趴下）
  *   mission awaiting_approval → waiting（全员等主人指令）
  *
- * 桌宠外观（2026-09-05 多角色升级）：每个 harness 一只独立角色——claude→miku（frames2d
- * 逐帧）、codex→ouo-neko、ark/opencode→whale-refined（sprite2d 图集）、dsh→内置鲸鱼娘；
- * 生态角色经 POD 资产基址外部加载，任何加载失败逐级回落内置鲸鱼娘（桌宠永不全裸）。
- * 名牌显示 vendor/role/model；气泡显示当前任务与最新进度（成本可见）；
+ * 桌宠外观（2026-09-05 多角色升级；2026-09-07 本地自产角色线 + 房间换装）：每个 harness
+ * 默认一只按规格自产的 frames2d 角色（claude/codex/opencode/ark/dsh 各一只），房间底部
+ * 「换装」面板可把任一 vendor 换成 LOCAL_PET_CATALOG 里的任意本地角色（写 localStorage
+ * dsh-pod.petCharacterMap）；生态角色经 POD 资产基址外部加载，任何加载失败逐级回落内置
+ * 鲸鱼娘（桌宠永不全裸）。名牌显示 vendor/role/model；气泡显示当前任务与最新进度（成本可见）；
  * 交叉审查时实现者与审查者两只桌宠面对面「对峙」（flip + 抖动 + 对峙气泡）。
  */
-import { createElement, useEffect, useState, type ReactElement } from 'react'
+import { createElement, useEffect, useRef, useState, type ChangeEvent, type ReactElement } from 'react'
 import { PetSprite, type PetPhase } from './pet-sprite.js'
 import { Frames2dPet } from './pet-frames2d.js'
-import { bindingForVendor, useFrames2dManifest, usePetAssetsBase } from './pet-characters.js'
+import {
+  bindingForVendor,
+  characterDisplayName,
+  clearVendorCharacters,
+  LOCAL_PET_CATALOG,
+  setVendorCharacter,
+  useFrames2dManifest,
+  usePetAssetsBase,
+  usePetCharacterVersion,
+  vendorCharacterOverrides,
+} from './pet-characters.js'
 
 /** 女仆工坊房间主题（maid-atelier 调色板）：默认启用；localStorage off 可回深海原主题。 */
 function petRoomMaidTheme(): boolean {
@@ -230,13 +241,115 @@ const ZONE_LABEL: Record<'alert' | 'busy' | 'rest', string> = {
 }
 const ZONE_ORDER: ReadonlyArray<'alert' | 'busy' | 'rest'> = ['alert', 'busy', 'rest']
 
-/** 桌宠房间：每个 harness 槽位一只鲸鱼娘桌宠，戳一下看详情并可发 steer 指令。 */
+/** vendor 在换装面板里的固定次序（内置 harness 优先，其余按入住房序补尾）。 */
+const VENDOR_ORDER = ['claude', 'codex', 'ark', 'opencode', 'dsh']
+function orderedVendors(vendors: ReadonlyArray<string>): string[] {
+  return Array.from(new Set(vendors)).sort((a, b) => {
+    const ia = VENDOR_ORDER.indexOf(a)
+    const ib = VENDOR_ORDER.indexOf(b)
+    if (ia === -1 && ib === -1) return 0
+    if (ia === -1) return 1
+    if (ib === -1) return -1
+    return ia - ib
+  })
+}
+
+/**
+ * 换装面板（2026-09-07 前端优化）：把 localStorage 换装能力做成房间内可见 UI——
+ * 每个在住 vendor 一行下拉（默认自动 + LOCAL_PET_CATALOG 全部本地角色），选择即时生效；
+ * 「恢复默认」清空全部覆盖。纯前端、SSR 安全（无选中态时面板不渲染选项交互）。
+ */
+function PetWardrobe(props: { vendors: ReadonlyArray<string>; version: number }): ReactElement {
+  const { vendors, version } = props
+  const [open, setOpen] = useState(false)
+  void version // 父级在覆盖变更后重渲染，本组件随 props 重算 select 的 value
+  const overrides = vendorCharacterOverrides()
+  const overriddenCount = vendors.filter((v) => overrides[v] !== undefined).length
+  return createElement(
+    'div',
+    { className: 'dsh-pet-wardrobe-wrap' },
+    open
+      ? createElement(
+          'div',
+          { className: 'dsh-pet-wardrobe', role: 'dialog', 'aria-label': '桌宠换装' },
+          createElement(
+            'div',
+            { className: 'dsh-pet-wardrobe-head' },
+            createElement('span', null, '给员工换装（本地角色，即时生效）'),
+            createElement(
+              'button',
+              {
+                type: 'button',
+                className: 'dsh-pet-wardrobe-reset',
+                disabled: overriddenCount === 0,
+                onClick: () => clearVendorCharacters(),
+              },
+              '恢复默认',
+            ),
+          ),
+          ...orderedVendors(vendors).map((vendor) =>
+            createElement(
+              'label',
+              { key: vendor, className: 'dsh-pet-wardrobe-row' },
+              createElement('span', { className: 'dsh-pet-wardrobe-vendor' }, VENDOR_LABEL[vendor] ?? vendor),
+              createElement(
+                'select',
+                {
+                  className: 'dsh-pet-wardrobe-select',
+                  value: overrides[vendor] ?? '',
+                  onChange: (e: ChangeEvent<HTMLSelectElement>) => setVendorCharacter(vendor, e.target.value || null),
+                },
+                createElement('option', { value: '' }, '默认（自动）'),
+                ...LOCAL_PET_CATALOG.map((c) =>
+                  createElement('option', { key: c.id, value: c.id, title: c.hint }, `${c.displayName} · ${c.hint}`),
+                ),
+              ),
+            ),
+          ),
+        )
+      : null,
+    createElement(
+      'button',
+      {
+        type: 'button',
+        className: 'dsh-pet-wardrobe-btn',
+        'aria-expanded': open,
+        'aria-haspopup': 'dialog',
+        onClick: () => setOpen((o) => !o),
+      },
+      open ? '收起换装' : '🎀 换装' + (overriddenCount > 0 ? `（${overriddenCount}）` : ''),
+    ),
+  )
+}
+
+/** 桌宠房间：每个 harness 槽位一只鲸鱼娘桌宠，戳一下看详情并可发 steer 指令。
+ *  键盘可达（2026-09-07 前端优化）：站位是 role=button，Enter/Space 开关详情卡；
+ *  开卡焦点进输入框、关卡焦点归还站位（配合 CSS focus-visible 焦点环）。 */
 export function PetRoomView(props: PetRoomViewProps): ReactElement {
   const { status, events, onSteer } = props
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null)
   const [steerText, setSteerText] = useState('')
+  const lastFocusedRef = useRef<string | null>(null)
+  // 换装覆盖变更（本页面板/跨标签页 localStorage）→ 版本号变化触发整间重渲染
+  const charVersion = usePetCharacterVersion()
   const progress = latestProgressByTask(events)
   const duels = status !== null ? reviewDuels(status) : new Map<string, 'reviewer' | 'implementer'>()
+
+  // 焦点管理：开卡 → 输入框；关卡 → 焦点归还触发开卡的站位
+  useEffect(() => {
+    if (selectedSlotId === null) {
+      const prev = lastFocusedRef.current
+      lastFocusedRef.current = null
+      if (prev !== null) {
+        const station = document.querySelector<HTMLDivElement>(`.dsh-pet-station[data-slot="${CSS.escape(prev)}"]`)
+        station?.focus({ preventScroll: true })
+      }
+      return
+    }
+    lastFocusedRef.current = selectedSlotId
+    const input = document.querySelector<HTMLInputElement>(`.dsh-pet-station[data-slot="${CSS.escape(selectedSlotId)}"] .dsh-pet-detail-input`)
+    input?.focus({ preventScroll: true })
+  }, [selectedSlotId])
 
   // 多房间分区：出状况的排最前（最需要主人关注），空区不渲染
   const zones = new Map<'alert' | 'busy' | 'rest', ReactElement[]>()
@@ -249,12 +362,24 @@ export function PetRoomView(props: PetRoomViewProps): ReactElement {
       const duel = duels.get(slot.id)
       const tokens = (slot.tokens_in ?? 0) + (slot.tokens_out ?? 0)
       const selected = selectedSlotId === slot.id
+      const characterName = characterDisplayName(bindingForVendor(slot.vendor).character)
       const station = createElement(
         'div',
         {
           key: slot.id,
           className: 'dsh-pet-station' + (selected ? ' selected' : '') + (duel !== undefined ? ' in-duel ' + duel : ''),
+          role: 'button',
+          tabIndex: 0,
+          'data-slot': slot.id,
+          'aria-expanded': selected,
+          'aria-label': `${vendor} · ${slot.role}：${PHASE_LABEL[phase]}`,
           onClick: () => {
+            setSelectedSlotId(selected ? null : slot.id)
+            setSteerText('')
+          },
+          onKeyDown: (e: { key: string; preventDefault: () => void }) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return
+            e.preventDefault()
             setSelectedSlotId(selected ? null : slot.id)
             setSteerText('')
           },
@@ -281,7 +406,9 @@ export function PetRoomView(props: PetRoomViewProps): ReactElement {
           createElement('span', { className: 'dsh-pet-role' }, slot.role),
           createElement('span', { className: 'dsh-pet-meta' }, PHASE_LABEL[phase] + (tokens > 0 ? ' · ' + fmtTokens(tokens) : '')),
         ),
-        selected ? petDetailCard(slot, task, latest, phase, tokens, steerText, setSteerText, onSteer) : null,
+        selected
+          ? petDetailCard(slot, task, latest, phase, tokens, steerText, setSteerText, onSteer, characterName)
+          : null,
       )
       const zone = zoneOf(phase)
       const list = zones.get(zone) ?? []
@@ -314,8 +441,16 @@ export function PetRoomView(props: PetRoomViewProps): ReactElement {
     empty.length > 0 ? createElement('div', { className: 'dsh-pet-room-empty' }, empty) : null,
     createElement(
       'div',
-      { className: 'dsh-pet-room-legend' },
-      '桌宠 = harness 员工 · 戳一下看详情/发指令 · ' + (status !== null ? shortSlotId(String(status.slots.length)) + ' 只在住' : ''),
+      { className: 'dsh-pet-room-footer' },
+      createElement(
+        'div',
+        { className: 'dsh-pet-room-legend' },
+        '桌宠 = harness 员工 · 戳一下看详情/发指令 · ' + (status !== null ? shortSlotId(String(status.slots.length)) + ' 只在住' : ''),
+      ),
+      createElement(PetWardrobe, {
+        vendors: (status?.slots ?? []).map((s) => s.vendor),
+        version: charVersion,
+      }),
     ),
   )
 }
@@ -329,10 +464,12 @@ function petDetailCard(
   tokens: number,
   steerText: string,
   setSteerText: (t: string) => void,
-  onSteer?: (slotId: string, instruction: string) => void,
+  onSteer: ((slotId: string, instruction: string) => void) | undefined,
+  characterName: string,
 ): ReactElement {
   const rows: Array<{ label: string; value: string }> = [
     { label: '角色', value: slot.role + (slot.model !== undefined && slot.model.length > 0 ? ' · ' + slot.model : '') },
+    { label: '形象', value: characterName },
     { label: '状态', value: PHASE_LABEL[phase] },
     { label: '成本', value: tokens > 0 ? fmtTokens(tokens) + ' tokens' : '—' },
   ]
@@ -370,9 +507,12 @@ function petDetailCard(
         placeholder: '给这位员工发指令/答复（下次派单必带）…',
         value: steerText,
         onChange: (e: { target: { value: string } }) => setSteerText(e.target.value),
-        onKeyDown: (e: { key: string; preventDefault: () => void }) => {
-          if (e.key !== 'Enter' || steerText.trim().length === 0) return
+        onKeyDown: (e: { key: string; preventDefault: () => void; stopPropagation: () => void }) => {
+          // Enter 仅在非空时发送；空输入框按 Enter 为无操作（阻断冒泡，避免误触站位开关）
+          if (e.key !== 'Enter') return
           e.preventDefault()
+          e.stopPropagation()
+          if (steerText.trim().length === 0) return
           onSteer?.(slot.id, steerText.trim())
           setSteerText('')
         },

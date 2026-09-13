@@ -15,7 +15,14 @@ import {
   type Frames2dManifest,
   type Frames2dState,
 } from '../src/web/pet-frames2d.js'
-import { bindingForVendor, VENDOR_CHARACTER } from '../src/web/pet-characters.js'
+import {
+  bindingForVendor,
+  characterDisplayName,
+  clearVendorCharacters,
+  LOCAL_PET_CATALOG,
+  setVendorCharacter,
+  VENDOR_CHARACTER,
+} from '../src/web/pet-characters.js'
 import { reviewDuels } from '../src/web/pet-room.js'
 import type { StatusResponse } from '../src/web/api.js'
 
@@ -203,13 +210,58 @@ describe('reviewDuels（交叉审查对峙配对）', () => {
 })
 
 describe('角色绑定（vendor → character）', () => {
-  it('默认映射：claude→miku(frames2d)、codex→ouo-neko(sprite2d)、dsh→builtin', () => {
-    expect(bindingForVendor('claude')).toMatchObject({ character: 'miku', kind: 'frames2d' })
-    expect(bindingForVendor('codex')).toMatchObject({ character: 'ouo-neko', kind: 'sprite2d' })
-    expect(bindingForVendor('dsh')).toMatchObject({ kind: 'builtin' })
-    expect(Object.keys(VENDOR_CHARACTER)).toContain('ark')
+  it('默认映射：内置 harness 全部绑定本地自产 frames2d 角色（含贴纸线四角色）', () => {
+    expect(bindingForVendor('claude')).toMatchObject({ character: 'claude-girl', kind: 'frames2d' })
+    expect(bindingForVendor('codex')).toMatchObject({ character: 'codex-girl', kind: 'frames2d' })
+    expect(bindingForVendor('opencode')).toMatchObject({ character: 'opencode-girl', kind: 'frames2d' })
+    expect(bindingForVendor('ark')).toMatchObject({ character: 'ark-girl', kind: 'frames2d' })
+    expect(bindingForVendor('dsh')).toMatchObject({ character: 'dsh-girl', kind: 'frames2d' })
+    expect(bindingForVendor('deepseek')).toMatchObject({ character: 'deepseek-girl', kind: 'frames2d' })
+    expect(Object.keys(VENDOR_CHARACTER)).toEqual(['claude', 'codex', 'opencode', 'ark', 'dsh', 'deepseek'])
   })
   it('未知 vendor → 兜底内置鲸鱼娘', () => {
     expect(bindingForVendor('mystery-vendor')).toMatchObject({ kind: 'builtin', character: 'whale' })
+  })
+  it('本地角色目录：gemini-girl 在册，全部为 frames2d 可换装角色且 id 唯一', () => {
+    const ids = LOCAL_PET_CATALOG.map((c) => c.id)
+    expect(ids).toContain('gemini-girl')
+    expect(new Set(ids).size).toBe(ids.length)
+    for (const c of LOCAL_PET_CATALOG) {
+      expect(c.displayName.length).toBeGreaterThan(0)
+      expect(c.hint.length).toBeGreaterThan(0)
+    }
+    expect(characterDisplayName('gemini-girl')).toBe('Gemini 娘')
+    expect(characterDisplayName('deepseek-girl')).toBe('DeepSeek 娘')
+    expect(characterDisplayName('whale')).toBe('内置鲸鱼娘')
+  })
+  it('换装覆盖：setVendorCharacter 即时改绑定，clearVendorCharacters 恢复默认', () => {
+    // 单测默认 node 环境（无 window）：装最小 localStorage/事件桩，用毕还原，不污染其他用例
+    const store = new Map<string, string>()
+    const stub = {
+      localStorage: {
+        getItem: (k: string): string | null => (store.has(k) ? store.get(k)! : null),
+        setItem: (k: string, v: string): void => void store.set(k, v),
+        removeItem: (k: string): void => void store.delete(k),
+      },
+      addEventListener: (): void => undefined,
+      removeEventListener: (): void => undefined,
+      dispatchEvent: (): boolean => true,
+    }
+    const prev = (globalThis as { window?: unknown }).window
+    ;(globalThis as { window?: unknown }).window = stub
+    try {
+      clearVendorCharacters()
+      expect(bindingForVendor('claude').character).toBe('claude-girl')
+      setVendorCharacter('claude', 'gemini-girl')
+      expect(bindingForVendor('claude')).toMatchObject({ character: 'gemini-girl', kind: 'frames2d', license: 'MIT' })
+      setVendorCharacter('claude', null) // 移除覆盖
+      expect(bindingForVendor('claude').character).toBe('claude-girl')
+      setVendorCharacter('codex', 'zcode-girl')
+      clearVendorCharacters()
+      expect(bindingForVendor('codex').character).toBe('codex-girl')
+    } finally {
+      if (prev === undefined) delete (globalThis as { window?: unknown }).window
+      else (globalThis as { window?: unknown }).window = prev
+    }
   })
 })

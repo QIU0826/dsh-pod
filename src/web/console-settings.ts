@@ -8,7 +8,7 @@ export interface RosterMember {
   vendor: 'claude' | 'codex' | 'opencode' | 'dsh'
   role: string
   capabilities: string[]
-  /** 毕加索动物形象（avatars.ts 词表；可空 = 默认猫）。 */
+  /** 头像形象（avatars.ts 词表：Q 版品牌娘 chibi 或经典几何动物；可空 = 渲染侧兜底）。 */
   avatar?: string
 }
 
@@ -34,9 +34,11 @@ export const ROLE_OPTIONS: Array<{ id: string; label: string; caps: string[] }> 
 export const CAPABILITY_OPTIONS = ['规划', '编码', '审查', '测试', '文档', '调研']
 
 export const DEFAULT_ROSTER: RosterMember[] = [
-  { vendor: 'claude', role: 'planner', capabilities: ['规划'], avatar: 'owl' },
-  { vendor: 'claude', role: 'implementer', capabilities: ['编码'], avatar: 'cat' },
-  { vendor: 'codex', role: 'reviewer', capabilities: ['审查'], avatar: 'fox' },
+  // avatar 默认用与桌宠房间同款的 Q 版品牌娘（avatars.ts chibi 词表），「一眼认出对应 AI」；
+  // 仍可在设置里改选经典几何动物（owl/cat/fox…）。
+  { vendor: 'claude', role: 'planner', capabilities: ['规划'], avatar: 'claude' },
+  { vendor: 'claude', role: 'implementer', capabilities: ['编码'], avatar: 'claude' },
+  { vendor: 'codex', role: 'reviewer', capabilities: ['审查'], avatar: 'codex' },
 ]
 
 export type Density = 'compact' | 'standard' | 'verbose'

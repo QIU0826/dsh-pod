@@ -214,6 +214,14 @@ describe('房间视图 SSR 渲染（PetRoomView）', () => {
     expect(html).toContain('连接中')
   })
 
+  it('底部渲染换装入口（默认收起，只出按钮不出面板）', () => {
+    const st = statusFixture({ slots: [slot({ id: 'S-1', vendor: 'claude', role: 'implementer' })] })
+    const html = renderToStaticMarkup(createElement(PetRoomView, { status: st, events: [] }))
+    expect(html).toContain('dsh-pet-room-footer')
+    expect(html).toContain('换装')
+    expect(html).not.toContain('dsh-pet-wardrobe-select')
+  })
+
   it('多 slot → 每 harness 一只桌宠，名牌显示 vendor', () => {
     const st = statusFixture({
       slots: [
