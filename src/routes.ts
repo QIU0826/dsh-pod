@@ -11,8 +11,9 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
-import { lstatSync, realpathSync, readFileSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { lstatSync, realpathSync, readFileSync, existsSync, statSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { PodService } from './pod-service.js'
 import { resolveAsset, contentTypeFor } from './core/asset-whitelist.js'
 import { allowsJsonBody } from './core/http-guard.js'
@@ -1407,7 +1408,50 @@ export function makePodRoutes(service: () => PodService | undefined): WebRoute[]
         await handleA2aSend(req, res, service, { stream: method === 'message/stream', jsonRpcId: body?.id ?? null, body })
       },
     },
+    petAssetsRoute(),
   ]
+}
+
+/**
+ * 桌宠角色包静态面（插件形态）：/pet-assets/** → <pkg>/assets/pet/**。
+ * standalone 走 server.ts 的同名处理；这条让 DSH 宿主形态也开箱可用（此前本形态无该路由，
+ * 只能回落生态 CDN）。只读静态图片、无敏感数据；路径穿越有守卫。
+ */
+function petAssetsRoute(): WebRoute {
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..', 'assets', 'pet')
+  const mime: Record<string, string> = {
+    '.webp': 'image/webp',
+    '.png': 'image/png',
+    '.gif': 'image/gif',
+    '.json': 'application/json; charset=utf-8',
+  }
+  return {
+    kind: 'prefix',
+    path: '/pet-assets',
+    handler: (req, res) => {
+      const url = new URL(req.url ?? '/', 'http://localhost')
+      const segs = url.pathname
+        .slice('/pet-assets/'.length)
+        .split('/')
+        .filter((s) => s.length > 0 && s !== '.' && s !== '..')
+      if (segs.length === 0) {
+        writeJson(res, 404, { error: 'not found' })
+        return
+      }
+      const p = join(root, ...segs)
+      try {
+        if (!existsSync(p) || !statSync(p).isFile()) {
+          writeJson(res, 404, { error: 'not found' })
+          return
+        }
+        const ext = p.slice(p.lastIndexOf('.')).toLowerCase()
+        res.writeHead(200, { 'content-type': mime[ext] ?? 'application/octet-stream', 'cache-control': 'no-store' })
+        res.end(readFileSync(p))
+      } catch {
+        writeJson(res, 500, { error: 'internal error' })
+      }
+    },
+  }
 }
 
 /** 供路由与客户端共用的任务类型/供应商枚举（schema 校验引用）。 */

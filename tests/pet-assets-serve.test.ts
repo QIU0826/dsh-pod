@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { listenStandalone, petAssetRoots } from '../src/standalone/server.js'
+import { makePodRoutes } from '../src/routes.js'
 
 let dir: string
 beforeEach(() => {
@@ -69,5 +70,39 @@ describe('petAssetRoots（内置包定位：打包态 + 源码态）', () => {
     const roots = petAssetRoots(tmpdir(), join(process.cwd(), 'src', 'standalone'))
     const hit = roots.find((r) => existsSync(join(r, 'claude-girl', 'pet.json')))
     expect(hit).toBe(join(process.cwd(), 'assets', 'pet'))
+  })
+})
+
+describe('插件形态 /pet-assets 路由（prefix）', () => {
+  function fakeRes(): { status: number; body: unknown; writeHead(s: number, h?: Record<string, string>): void; end(b?: unknown): void } {
+    const res = {
+      status: 0,
+      body: undefined as unknown,
+      writeHead(s: number) {
+        res.status = s
+      },
+      end(b?: unknown) {
+        res.body = b
+      },
+    }
+    return res
+  }
+
+  it('注册为 prefix，且能服务随包内置角色包', async () => {
+    const route = makePodRoutes(() => undefined).find((r) => r.path === '/pet-assets')
+    expect(route?.kind).toBe('prefix')
+    const res = fakeRes()
+    await route!.handler({ url: '/pet-assets/claude-girl/pet.json', method: 'GET' } as never, res as never)
+    expect(res.status).toBe(200)
+    expect((JSON.parse(String(res.body)) as { id?: string }).id).toBe('claude-girl')
+  })
+
+  it('/pet-assets 根路径与穿越尝试 → 404', async () => {
+    const route = makePodRoutes(() => undefined).find((r) => r.path === '/pet-assets')!
+    for (const url of ['/pet-assets', '/pet-assets/', '/pet-assets/../../package.json']) {
+      const res = fakeRes()
+      await route.handler({ url, method: 'GET' } as never, res as never)
+      expect(res.status, url).toBe(404)
+    }
   })
 })
