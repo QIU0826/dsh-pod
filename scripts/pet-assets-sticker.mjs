@@ -106,6 +106,65 @@ const CHARACTERS = {
     brand: { primary: '#2F7FD6', soft: '#8FD0FF', hud: '#8FC7FF', stars: ['#FFD23F', '#7FC8F8'] },
     hudWords: ['book', '...', 'book', 'done'],
   },
+  'zcode-girl': {
+    displayName: 'Zcode 娘',
+    short: 'zcode',
+    description:
+      'Zcode/GLM 专属终端娘：智谱蓝渐变长发、一根呆毛、左侧终端窗口发饰，深蓝科技上衣，' +
+      '趴在黑色终端窗口上（蓝色提示符与彩色输出）；迷你分身戴圆框眼镜坐在终端窗口里探头，黄四角星与蓝色 {;} >_ 符号环绕。',
+    prompt:
+      'Q版chibi二次元少女，大头小身，智谱蓝色渐变色长发，发顶有一根呆毛，戴圆框眼镜，' +
+      '头发左侧别着一个小终端窗口发饰，慵懒托腮表情，身穿深蓝色科技感上衣。' +
+      '角色趴在一个黑色终端窗口上，终端显示蓝色命令行提示符和彩色代码输出。' +
+      '旁边左上角有一个更小的Q版分身，迷你版角色坐在终端窗口里探出头。' +
+      '周围散布黄色四角星和蓝色代码符号装饰' + STYLE_TAIL,
+    brand: { primary: '#2E6BE6', soft: '#8FC0FF', hud: '#9BC4FF', stars: ['#FFD23F', '#5C9BFF'] },
+    hudWords: ['zhipu', '>_', 'glm', 'done'],
+  },
+  'ark-girl': {
+    displayName: 'Ark 娘',
+    short: 'ark',
+    description:
+      'Ark 专属火山娘：火山品牌蓝渐变长发、头顶一对小犄角、发顶小火山（冒熔岩），深蓝熔岩纹上衣，' +
+      '趴在火山岩台座上；迷你分身坐在熔岩气泡上挥手，黄四角星与橙色火星环绕。',
+    prompt:
+      'Q版chibi二次元少女，大头小身，火山方舟品牌蓝色渐变长发，头顶有一对小小的犄角，' +
+      '发顶上有一个冒着熔岩的小火山，慵懒托腮表情，身穿深蓝色带熔岩纹理的上衣。' +
+      '角色趴在一块火山岩台座上，岩石表面有熔岩裂纹。' +
+      '旁边左上角有一个更小的Q版分身，迷你版角色坐在熔岩气泡上挥手。' +
+      '周围散布黄色四角星和橙色火星装饰' + STYLE_TAIL,
+    brand: { primary: '#1664FF', soft: '#8FB6FF', hud: '#9CC0FF', stars: ['#FFD23F', '#FF7A3C'] },
+    hudWords: ['ark', 'plan', 'Volc', 'done'],
+  },
+  'dsh-girl': {
+    displayName: 'DSH 娘',
+    short: 'dsh',
+    description:
+      'DSH 专属鲸群娘：青色渐变长发、鲸鱼鳍状小耳、发顶六边形光环，深青吊带连体衣，' +
+      '趴在六边形数据面板上；迷你分身趴在小鲸鱼上挥手，黄四角星与青色六边形环绕。',
+    prompt:
+      'Q版chibi二次元少女，大头小身，青色渐变长发，头侧长着鲸鱼鳍状小耳，发顶有一个六边形光环，' +
+      '慵懒托腮表情，身穿深青色吊带连体衣。角色趴在一块六边形数据面板上。' +
+      '旁边左上角有一个更小的Q版分身，迷你版角色趴在一只小鲸鱼上挥手。' +
+      '周围散布黄色四角星和青色小六边形装饰' + STYLE_TAIL,
+    brand: { primary: '#22D3EE', soft: '#A5EFFA', hud: '#8FE9F5', stars: ['#FFD23F', '#22D3EE'] },
+    hudWords: ['pod', '鲸群', 'hex', 'done'],
+  },
+  'gemini-girl': {
+    displayName: 'Gemini 娘',
+    short: 'gemini',
+    description:
+      'Gemini 专属星娘：蓝紫波浪长发、发顶四色四芒星发饰、紫罗兰大眼，白色星空书，' +
+      '趴在摊开的星空书页上；迷你分身站在四色星上挥手，黄四角星与四色小星环绕。',
+    prompt:
+      'Q版chibi二次元少女，大头小身，蓝紫色波浪长发，发顶有一个四色四芒星发饰，' +
+      '紫罗兰色大眼睛半睁，慵懒托腮表情，身穿白色星空图案上衣。' +
+      '角色趴在一本摊开的星空书上，书页是深蓝星空。' +
+      '旁边左上角有一个更小的Q版分身，迷你版角色站在一颗四色星上挥手。' +
+      '周围散布黄色四角星和四色小星装饰' + STYLE_TAIL,
+    brand: { primary: '#7B6CF6', soft: '#BCB2FF', hud: '#C4BAFF', stars: ['#FFD23F', '#7B6CF6'] },
+    hudWords: ['gemini', 'star', '四色', 'done'],
+  },
 }
 const CHAR_IDS = Object.keys(CHARACTERS)
 
@@ -516,11 +575,202 @@ ${armsArt('#1E4E8C', SKIN, '#C9917A')}`
   return sceneWrap(defs, deco + mini + main)
 }
 
+function heroZcode() {
+  const L = '#123A8A'
+  const defs = '<linearGradient id="hg" x1="0" y1="0" x2="0.3" y2="1"><stop offset="0" stop-color="#1E4FC4"/><stop offset=".55" stop-color="#3E7BE8"/><stop offset="1" stop-color="#A8C8FF"/></linearGradient>'
+  const deco = `
+${star4(632, 142, 17, '#FFD23F', 12)}${star4(558, 92, 11, '#5C9BFF', -8)}${star4(84, 318, 12, '#FFD23F', 20)}
+${star4(648, 456, 11, '#5C9BFF', -14)}${star4(74, 566, 12, '#FFD23F', 6)}
+<text x="588" y="256" font-family="monospace" font-size="34" font-weight="bold" fill="#2E6BE6">{;}</text>
+<text x="74" y="336" font-family="monospace" font-size="30" font-weight="bold" fill="#2E6BE6">&gt;_</text>
+<text x="612" y="398" font-family="monospace" font-size="32" font-weight="bold" fill="#7FB0FF">~</text>`
+  // 迷你分身：坐在终端窗口里探头
+  const mini = `
+<rect x="60" y="130" width="132" height="90" rx="12" fill="#111A2E" stroke="#2E6BE6" stroke-width="4"/>
+<rect x="60" y="130" width="132" height="24" rx="12" fill="#1B2946"/>
+<circle cx="78" cy="142" r="4" fill="#FF5F57"/><circle cx="94" cy="142" r="4" fill="#FEBC2E"/><circle cx="110" cy="142" r="4" fill="#28C840"/>
+<text x="80" y="198" font-family="monospace" font-size="19" font-weight="bold" fill="#8FC0FF">glm&gt;_</text>
+<circle cx="128" cy="112" r="25" fill="${SKIN}" stroke="#E0A98F" stroke-width="3"/>
+<path d="M103 110 Q100 82 128 76 Q156 82 153 110 Q140 94 128 94 Q116 94 103 110 Z" fill="#2E6BE6" stroke="#123A8A" stroke-width="3"/>
+<path d="M126 78 Q120 56 136 52 Q148 58 142 74 Q136 84 130 82 Z" fill="#8FC0FF" stroke="#123A8A" stroke-width="2.6"/>
+<rect x="112" y="100" width="14" height="11" rx="3" fill="none" stroke="#123A8A" stroke-width="2.6"/>
+<rect x="130" y="100" width="14" height="11" rx="3" fill="none" stroke="#123A8A" stroke-width="2.6"/>
+<circle cx="120" cy="114" r="3.4" fill="#2E6BE6"/><circle cx="136" cy="114" r="3.4" fill="#2E6BE6"/>
+<path d="M122 128 Q128 132 134 128" stroke="#A84A52" stroke-width="3" fill="none" stroke-linecap="round"/>
+<circle cx="160" cy="146" r="8" fill="${SKIN}" stroke="#E0A98F" stroke-width="2.5"/>
+${star4(208, 100, 10, '#FFD23F', 18)}`
+  const main = `
+<!-- 终端窗口（她趴在上面）：黑框 + 蓝色提示符 + 代码行 -->
+<rect x="238" y="498" width="336" height="106" rx="13" fill="#111A2E" stroke="#2E6BE6" stroke-width="5"/>
+<rect x="238" y="498" width="336" height="28" rx="13" fill="#1B2946"/>
+<circle cx="256" cy="512" r="4" fill="#FF5F57"/><circle cx="272" cy="512" r="4" fill="#FEBC2E"/><circle cx="288" cy="512" r="4" fill="#28C840"/>
+<text x="314" y="513" font-family="monospace" font-size="14" fill="#7FB0FF">zhipu-glm</text>
+<text x="264" y="562" font-family="monospace" font-size="22" font-weight="bold" fill="#9BC4FF">&gt; glm chat</text>
+<rect x="440" y="549" width="14" height="20" fill="#9BC4FF"/>
+<text x="264" y="588" font-family="monospace" font-size="16" fill="#8FC0FF">200 ok</text>
+${backHairArt(L, 'hg', 'long')}
+<!-- 呆毛 + 左侧终端窗口发饰 -->
+<path d="M398 106 Q404 48 436 40 Q412 78 412 112 Z" fill="#2E6BE6" stroke="#123A8A" stroke-width="4" stroke-linejoin="round"/>
+<g transform="rotate(-12 306 176)">
+<rect x="266" y="150" width="78" height="52" rx="8" fill="#111A2E" stroke="#2E6BE6" stroke-width="4"/>
+<rect x="266" y="150" width="78" height="14" rx="8" fill="#1B2946"/>
+<text x="280" y="192" font-family="monospace" font-size="15" font-weight="bold" fill="#8FC0FF">&gt;_</text>
+</g>
+<!-- 科技蓝上衣 -->
+<path d="M304 426 Q400 398 496 426 L508 508 Q400 538 292 508 Z" fill="#2A5FC4" stroke="#123A8A" stroke-width="5" stroke-linejoin="round"/>
+<path d="M372 430 Q400 456 428 430" stroke="#5B8FF0" stroke-width="6" fill="none" stroke-linecap="round"/>
+<circle cx="${HX}" cy="${HY}" r="112" fill="${SKIN}" stroke="#E0A98F" stroke-width="4"/>
+${bangsArt(L, '#A8C8FF', true)}
+${faceArt(HX, HY, '#2E6BE6', '#122B66', 'owl')}
+${armsArt('#2A5FC4', SKIN, '#C9917A')}`
+  return sceneWrap(defs, deco + mini + main)
+}
+
+function heroArk() {
+  const L = '#0A2E7A'
+  const defs = '<linearGradient id="hg" x1="0" y1="0" x2="0.3" y2="1"><stop offset="0" stop-color="#0F47C0"/><stop offset=".55" stop-color="#1664FF"/><stop offset="1" stop-color="#8FB6FF"/></linearGradient>'
+  const deco = `
+${star4(632, 142, 17, '#FFD23F', 12)}${star4(558, 92, 11, '#FF7A3C', -8)}${star4(84, 318, 12, '#FFD23F', 20)}
+${star4(648, 456, 11, '#FF7A3C', -14)}${star4(74, 566, 12, '#FFD23F', 6)}
+<path d="M596 282 Q604 268 612 282 Q604 296 596 282 Z" fill="#FF7A3C"/><path d="M104 386 Q112 372 120 386 Q112 400 104 386 Z" fill="#FF9A5C"/>`
+  // 迷你分身：坐在熔岩气泡上挥手
+  const mini = `
+<path d="M132 190 Q108 168 118 140 Q146 138 158 162 Q154 186 132 190 Z" fill="#FF7A3C" stroke="#C24A16" stroke-width="3.4" stroke-linejoin="round"/>
+<path d="M126 168 Q136 160 148 166" stroke="#FFD0A8" stroke-width="3" fill="none" stroke-linecap="round"/>
+<circle cx="140" cy="120" r="25" fill="${SKIN}" stroke="#E0A98F" stroke-width="3"/>
+<path d="M115 118 Q112 90 140 84 Q168 90 165 118 Q152 102 140 102 Q128 102 115 118 Z" fill="#1664FF" stroke="#0A2E7A" stroke-width="3"/>
+<path d="M120 96 Q106 84 108 66 Q126 74 132 90 Z" fill="#3E4C6E" stroke="#1B2430" stroke-width="2.6"/>
+<path d="M160 96 Q174 84 172 66 Q154 74 148 90 Z" fill="#3E4C6E" stroke="#1B2430" stroke-width="2.6"/>
+<path d="M136 88 Q128 62 148 54 Q160 62 152 82 Q146 90 140 88 Z" fill="#0F47C0" stroke="#0A2E7A" stroke-width="2.6"/>
+<circle cx="132" cy="122" r="3.6" fill="#1664FF"/><circle cx="148" cy="122" r="3.6" fill="#1664FF"/>
+<path d="M134 134 Q140 138 146 134" stroke="#A84A52" stroke-width="3" fill="none" stroke-linecap="round"/>
+<path d="M162 148 Q176 130 178 106" stroke="${SKIN}" stroke-width="7" fill="none" stroke-linecap="round"/>
+<circle cx="179" cy="102" r="6.5" fill="${SKIN}" stroke="#E0A98F" stroke-width="2.5"/>
+${star4(208, 92, 10, '#FFD23F', 18)}`
+  const main = `
+<!-- 火山岩台座（熔岩裂纹） -->
+<path d="M232 546 L592 532 L604 592 L224 610 Z" fill="#2A3350" stroke="#131A2E" stroke-width="5" stroke-linejoin="round"/>
+<path d="M256 552 L556 540 L560 552 L252 566 Z" fill="#3C4A73"/>
+<path d="M286 556 L372 550 L392 590 L300 598 Z" fill="#FF7A3C" opacity=".92"/>
+<path d="M420 548 L500 544 L512 586 L430 594 Z" fill="#FFB03C" opacity=".85"/>
+<path d="M300 560 L360 556 M310 576 L368 572 M436 556 L494 552 M444 572 L500 568" stroke="#FFD0A8" stroke-width="3" fill="none" stroke-linecap="round" opacity=".8"/>
+${backHairArt(L, 'hg', 'long')}
+<!-- 一对小犄角 + 发顶小火山（冒熔岩） -->
+<path d="M302 206 Q286 166 300 144 Q318 162 320 200 Z" fill="#3E4C6E" stroke="#1B2430" stroke-width="4.5" stroke-linejoin="round"/>
+<path d="M498 206 Q514 166 500 144 Q482 162 480 200 Z" fill="#3E4C6E" stroke="#1B2430" stroke-width="4.5" stroke-linejoin="round"/>
+<path d="M374 116 L400 68 L426 116 Z" fill="#3E4C6E" stroke="#1B2430" stroke-width="4.5" stroke-linejoin="round"/>
+<path d="M378 116 L400 78 L422 116 Z" fill="#2A3350"/>
+<path d="M386 92 Q400 74 414 92 Q406 86 400 92 Q394 86 386 92 Z" fill="#FF7A3C"/>
+<ellipse cx="400" cy="66" rx="16" ry="8" fill="#FFB03C" stroke="#C24A16" stroke-width="3"/>
+<!-- 深蓝熔岩纹上衣 -->
+<path d="M304 426 Q400 398 496 426 L508 508 Q400 538 292 508 Z" fill="#1B3E8F" stroke="#0A2E7A" stroke-width="5" stroke-linejoin="round"/>
+<path d="M340 470 L376 452 L412 476 L448 456" stroke="#FF7A3C" stroke-width="4" fill="none" stroke-linecap="round" opacity=".9"/>
+<circle cx="${HX}" cy="${HY}" r="112" fill="${SKIN}" stroke="#E0A98F" stroke-width="4"/>
+${bangsArt(L, '#8FB6FF', true)}
+${faceArt(HX, HY, '#1664FF', '#0A2350', 'owl')}
+${armsArt('#1B3E8F', SKIN, '#C9917A')}`
+  return sceneWrap(defs, deco + mini + main)
+}
+
+function heroDsh() {
+  const L = '#0B5C6B'
+  const defs = '<linearGradient id="hg" x1="0" y1="0" x2="0.3" y2="1"><stop offset="0" stop-color="#0E7C90"/><stop offset=".55" stop-color="#22D3EE"/><stop offset="1" stop-color="#A5EFFA"/></linearGradient>'
+  const hex = (cx, cy, r, fill, stroke) => `<polygon points="${cx},${cy - r} ${cx + r * 0.87},${cy - r / 2} ${cx + r * 0.87},${cy + r / 2} ${cx},${cy + r} ${cx - r * 0.87},${cy + r / 2} ${cx - r * 0.87},${cy - r / 2}" fill="${fill}"${stroke !== undefined ? ` stroke="${stroke}" stroke-width="3"` : ''}/>`
+  const deco = `
+${star4(632, 142, 17, '#FFD23F', 12)}${star4(558, 92, 11, '#22D3EE', -8)}${star4(84, 318, 12, '#FFD23F', 20)}
+${star4(648, 456, 11, '#22D3EE', -14)}${star4(74, 566, 12, '#FFD23F', 6)}
+${hex(604, 286, 13, 'none', '#22D3EE')}${hex(96, 400, 10, 'none', '#5FE3F5')}`
+  // 迷你分身：趴在小鲸鱼上挥手
+  const mini = `
+<path d="M112 214 Q70 196 52 226 Q82 236 112 224 Z" fill="#A5EFFA" stroke="#0B5C6B" stroke-width="3.4" stroke-linejoin="round"/>
+<path d="M108 232 Q66 240 62 270 Q92 264 116 240 Z" fill="#A5EFFA" stroke="#0B5C6B" stroke-width="3.4" stroke-linejoin="round"/>
+<path d="M118 210 Q150 196 178 176" stroke="#22D3EE" stroke-width="20" fill="none" stroke-linecap="round"/>
+<circle cx="146" cy="150" r="24" fill="${SKIN}" stroke="#E0A98F" stroke-width="3"/>
+<path d="M122 148 Q119 118 146 112 Q173 118 170 148 Q158 130 146 130 Q134 130 122 148 Z" fill="#22D3EE" stroke="#0B5C6B" stroke-width="3"/>
+<path d="M124 132 Q104 122 100 102 Q122 110 134 126 Z" fill="#22D3EE" stroke="#0B5C6B" stroke-width="2.8"/>
+<path d="M168 132 Q188 122 192 102 Q170 110 158 126 Z" fill="#22D3EE" stroke="#0B5C6B" stroke-width="2.8"/>
+<path d="M144 112 Q136 86 156 80 Q172 86 164 106 Q158 116 150 114 Z" fill="#A5EFFA" stroke="#0B5C6B" stroke-width="2.6"/>
+<circle cx="138" cy="152" r="3.6" fill="#0E7C90"/><circle cx="154" cy="152" r="3.6" fill="#0E7C90"/>
+<path d="M140 164 Q146 169 152 164" stroke="#A84A52" stroke-width="3" fill="none" stroke-linecap="round"/>
+<path d="M158 178 Q176 160 178 136" stroke="${SKIN}" stroke-width="7" fill="none" stroke-linecap="round"/>
+<circle cx="179" cy="132" r="6.5" fill="${SKIN}" stroke="#E0A98F" stroke-width="2.5"/>
+${star4(208, 96, 10, '#FFD23F', 18)}`
+  const main = `
+<!-- 六边形数据面板 -->
+<path d="M240 532 L580 522 L596 594 L252 606 Z" fill="#0D3B47" stroke="#062A33" stroke-width="5" stroke-linejoin="round"/>
+${hex(320, 564, 22, '#12626F', '#22D3EE')}${hex(392, 560, 22, '#12626F', '#5FE3F5')}${hex(464, 556, 22, '#12626F', '#22D3EE')}
+${hex(536, 552, 16, '#0D3B47', '#5FE3F5')}
+${backHairArt(L, 'hg', 'long')}
+<!-- 发顶六边形光环 + 鲸鱼鳍状小耳 -->
+<g transform="rotate(-18 400 86)">${hex(400, 74, 26, 'none', '#22D3EE')}${hex(400, 74, 15, 'none', '#A5EFFA')}</g>
+<path d="M296 196 Q236 180 228 124 Q272 138 306 170 Z" fill="#22D3EE" stroke="#0B5C6B" stroke-width="4.5" stroke-linejoin="round"/>
+<path d="M504 196 Q564 180 572 124 Q528 138 494 170 Z" fill="#22D3EE" stroke="#0B5C6B" stroke-width="4.5" stroke-linejoin="round"/>
+<path d="M248 138 Q268 148 290 160 M552 138 Q532 148 510 160" stroke="#A5EFFA" stroke-width="3" fill="none" stroke-linecap="round"/>
+<!-- 深青吊带连体衣 -->
+<path d="M304 426 Q400 398 496 426 L506 508 Q400 536 294 508 Z" fill="#12626F" stroke="#0B5C6B" stroke-width="5" stroke-linejoin="round"/>
+<path d="M356 424 Q360 446 352 462 M444 424 Q440 446 448 462" stroke="#5FE3F5" stroke-width="7" fill="none" stroke-linecap="round"/>
+<circle cx="${HX}" cy="${HY}" r="112" fill="${SKIN}" stroke="#E0A98F" stroke-width="4"/>
+${bangsArt(L, '#A5EFFA', true)}
+${faceArt(HX, HY, '#22D3EE', '#083F4A', 'whale')}
+${armsArt('#12626F', SKIN, '#C9917A')}`
+  return sceneWrap(defs, deco + mini + main)
+}
+
+function heroGemini() {
+  const L = '#3A2E8F'
+  const defs = '<linearGradient id="hg" x1="0" y1="0" x2="0.3" y2="1"><stop offset="0" stop-color="#4A3BC0"/><stop offset=".55" stop-color="#7B6CF6"/><stop offset="1" stop-color="#C4BAFF"/></linearGradient>'
+  /** 四色四芒星（Gemini 四色） */
+  const gemstar = (cx, cy, s = 1) => `<g transform="translate(${cx} ${cy}) scale(${s})">
+<path d="M0 0 L4.6 -4.6 L0 -22 L-4.6 -4.6 Z" fill="#4285F4"/>
+<path d="M0 0 L4.6 4.6 L22 0 L4.6 -4.6 Z" fill="#EA4335"/>
+<path d="M0 0 L4.6 4.6 L0 22 L-4.6 4.6 Z" fill="#FBBC05"/>
+<path d="M0 0 L-4.6 4.6 L-22 0 L-4.6 -4.6 Z" fill="#34A853"/></g>`
+  const deco = `
+${star4(632, 142, 17, '#FFD23F', 12)}${star4(84, 318, 12, '#FFD23F', 20)}${star4(74, 566, 12, '#FFD23F', 6)}
+${gemstar(596, 268, 0.72)}${gemstar(112, 386, 0.55)}${gemstar(628, 500, 0.5)}`
+  // 迷你分身：站在四色星上挥手
+  const mini = `
+${gemstar(140, 206, 1.5)}
+<circle cx="140" cy="118" r="25" fill="${SKIN}" stroke="#E0A98F" stroke-width="3"/>
+<path d="M115 116 Q112 88 140 82 Q168 88 165 116 Q152 100 140 100 Q128 100 115 116 Z" fill="#7B6CF6" stroke="#3A2E8F" stroke-width="3"/>
+<path d="M136 86 Q128 60 148 52 Q160 60 152 80 Q146 88 140 86 Z" fill="#BCB2FF" stroke="#3A2E8F" stroke-width="2.6"/>
+${gemstar(140, 66, 0.42)}
+<circle cx="132" cy="120" r="3.6" fill="#7B6CF6"/><circle cx="148" cy="120" r="3.6" fill="#7B6CF6"/>
+<path d="M134 132 Q140 136 146 132" stroke="#A84A52" stroke-width="3" fill="none" stroke-linecap="round"/>
+<path d="M162 146 Q176 128 178 104" stroke="${SKIN}" stroke-width="7" fill="none" stroke-linecap="round"/>
+<circle cx="179" cy="100" r="6.5" fill="${SKIN}" stroke="#E0A98F" stroke-width="2.5"/>
+${star4(210, 168, 10, '#FFD23F', 18)}`
+  const main = `
+<!-- 摊开的星空书 -->
+<path d="M220 542 L600 522 L612 600 L236 616 Z" fill="#2B2566" stroke="#1A1546" stroke-width="5" stroke-linejoin="round"/>
+<path d="M232 544 L586 528 L596 592 L248 606 Z" fill="#3A3380" stroke="#1A1546" stroke-width="4" stroke-linejoin="round"/>
+<path d="M410 530 L416 596" stroke="#5B52B0" stroke-width="4" stroke-linecap="round"/>
+${star4(300, 560, 9, '#FFD23F', 10)}${star4(346, 580, 7, '#BCB2FF', -12)}${star4(486, 552, 8, '#A5EFFA', 20)}${star4(534, 578, 7, '#FFD23F', -6)}
+${star4(276, 588, 6, '#BCB2FF', 16)}${star4(508, 592, 6, '#A5EFFA', 4)}
+${backHairArt(L, 'hg', 'long')}
+<!-- 波浪发丝 + 发顶四色四芒星 -->
+<path d="M300 300 Q282 356 300 412 M500 300 Q518 356 500 412" stroke="#C4BAFF" stroke-width="3.4" fill="none" stroke-linecap="round" opacity=".85"/>
+<path d="M398 104 Q406 46 436 40 Q410 78 412 112 Z" fill="#7B6CF6" stroke="#3A2E8F" stroke-width="4" stroke-linejoin="round"/>
+${gemstar(402, 62, 1.05)}
+<!-- 白色星空上衣 -->
+<path d="M304 426 Q400 398 496 426 L506 508 Q400 536 294 508 Z" fill="#EDEBFF" stroke="#3A2E8F" stroke-width="5" stroke-linejoin="round"/>
+${star4(352, 470, 8, '#7B6CF6', 12)}${star4(448, 462, 7, '#4285F4', -14)}${star4(400, 496, 6, '#EA4335', 20)}
+<circle cx="${HX}" cy="${HY}" r="112" fill="${SKIN}" stroke="#E0A98F" stroke-width="4"/>
+${bangsArt(L, '#C4BAFF', true)}
+${faceArt(HX, HY, '#7B6CF6', '#332878', 'owl')}
+${armsArt('#D9D4FF', SKIN, '#C9917A')}`
+  return sceneWrap(defs, deco + mini + main)
+}
+
 const HERO_ART = {
   'claude-girl': heroClaude,
   'codex-girl': heroCodex,
   'opencode-girl': heroOpenCode,
   'deepseek-girl': heroDeepSeek,
+  'zcode-girl': heroZcode,
+  'ark-girl': heroArk,
+  'dsh-girl': heroDsh,
+  'gemini-girl': heroGemini,
 }
 
 // ─── Chrome CDP（与 pet-assets-generate.mjs 同款无头渲染） ───────────────────
