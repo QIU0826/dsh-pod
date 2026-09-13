@@ -17,12 +17,15 @@ import { bearerTokenEquals, hasAllowedLoopbackOrigin, isLocalHostHeader, isLoopb
 import { PodService } from '../pod-service.js'
 import { PairingStore } from '../core/pairing.js'
 import { lanIPv4Addresses, type NetInfo } from '../core/net-info.js'
+import type { WorkerBackend } from '../core/types.js'
 import { makePodRoutes } from '../routes.js'
 import { createMcpHttpServer, type McpHttpHandle } from '../mcp-http.js'
 import { ClaudeHeadlessBackend } from '../workers/claude-headless.js'
 import { CodexHeadlessBackend, codexBinaryCandidates } from '../workers/codex-headless.js'
 import { OpenCodeHeadlessBackend, opencodeBinaryCandidates } from '../workers/opencode-headless.js'
 import { ArkBackend } from '../workers/ark-headless.js'
+import { GrokBackend } from '../workers/grok-backend.js'
+import { KimiBackend } from '../workers/kimi-backend.js'
 import { DemoBackend } from '../workers/demo-backend.js'
 import { STANDALONE_SHELL_HTML } from '../web/standalone-shell.js'
 import { execFileSync } from 'node:child_process'
@@ -43,6 +46,16 @@ function makeArkBackend(): ArkBackend | undefined {
   } catch {
     return undefined
   }
+}
+
+/** Grok / Kimi 后端装配（Berd-G：OpenAI 兼容 native adapter）——仅环境变量取 key，无 key 不注册。 */
+function openAiCompatBackendsFromEnv(): Record<string, WorkerBackend> {
+  const out: Record<string, WorkerBackend> = {}
+  const grokKey = (process.env.XAI_API_KEY ?? '').trim()
+  if (grokKey.length > 0) out.grok = new GrokBackend({ apiKey: grokKey })
+  const kimiKey = (process.env.MOONSHOT_API_KEY ?? '').trim()
+  if (kimiKey.length > 0) out.kimi = new KimiBackend({ apiKey: kimiKey })
+  return out
 }
 
 export interface StandaloneOptions {
@@ -334,6 +347,8 @@ export function createStandaloneServer(options: StandaloneOptions = {}): Standal
           opencode: new OpenCodeHeadlessBackend({ binary: opencodeBin ?? 'opencode' }),
           // ark：补 standalone 缺失（v5 实证「no backend registered for vendor ark」）
           ...(arkBackend !== undefined ? { ark: arkBackend } : {}),
+          // grok / kimi：OpenAI 兼容 native adapter（有 key 才注册）
+          ...openAiCompatBackendsFromEnv(),
         },
   })
   // 员工侧 MCP HTTP 端点（/mcp）：pod_mem_* 三件套宿主面。token 与主面同源（guard 先行）。

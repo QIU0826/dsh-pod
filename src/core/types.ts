@@ -11,7 +11,7 @@ import type { WorkerErrorEnvelope } from './error-envelope.js'
  * 以字符串通过——类型上仍是 Vendor，编排/存储/事件面零改动。接入路径见
  * docs/harness-接入指南.md。
  */
-export const BUILT_IN_VENDORS = ['dsh', 'claude', 'codex', 'ark', 'opencode'] as const
+export const BUILT_IN_VENDORS = ['dsh', 'claude', 'codex', 'ark', 'opencode', 'grok', 'kimi'] as const
 export type BuiltInVendor = (typeof BUILT_IN_VENDORS)[number]
 export type Vendor = BuiltInVendor | (string & {})
 

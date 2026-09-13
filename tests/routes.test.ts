@@ -129,8 +129,14 @@ describe('validateLaunch（Team Builder 提交校验）', () => {
 
   it('缺 goal / 未知 vendor / 空 slots → 422 校验失败', () => {
     expect(validateLaunch({ name: 'm', cwd: 'x', slots: [] }).ok).toBe(false)
-    expect(validateLaunch({ name: 'm', goal: 'g', cwd: 'x', slots: [{ id: 's', vendor: 'grok', role: 'r' }] }).ok).toBe(false)
+    expect(validateLaunch({ name: 'm', goal: 'g', cwd: 'x', slots: [{ id: 's', vendor: 'nope-vendor', role: 'r' }] }).ok).toBe(false)
     expect(validateLaunch({ name: 'm', goal: 'g', cwd: 'x' }).ok).toBe(false)
+  })
+
+  it('新接入的内置厂商 grok / kimi → 校验通过（2026-09-13 适配器切片）', () => {
+    for (const vendor of ['grok', 'kimi']) {
+      expect(validateLaunch({ name: 'm', goal: 'g', cwd: 'x', slots: [{ id: 's', vendor, role: 'r' }] }).ok, vendor).toBe(true)
+    }
   })
 })
 

@@ -33,6 +33,8 @@ export interface WorkerProtocol {
 | ark | native | kill ✗ / session_persist ✗ / structured_output ✓ / usage_audit ✗ | 火山方舟 Agent Plan OpenAI 兼容端点（/api/plan/v3）；同步 completion **无工具执行能力**（不能写文件/跑测试）——适合文本生成/记忆验收类任务；usage 缺省标 unavailable（D7） |
 | remote（satellite） | remote | kill ✓ / session_persist ✗ / structured_output ✓ / usage_audit ✓ | 多机 satellite（CR-30）：`RemoteBackend` 代理到卫星 HTTP 端点（src/workers/remote-backend.ts）；vendor=被代理底层的 vendor；能力位继承自卫星实现，usage 来自卫星回传（诚实化 D7） |
 | opencode | headless-cli | kill ✓ / session_persist ✗ / structured_output ✗ / usage_audit ✗ | `opencode run`（sst/opencode，stdin 注入 prompt 规避 Windows 引号破坏 CR-02）；纯文本 stdout → extractReport 平衡扫描；usage 无结构化上报 → unavailable（D7）；**本机未装，契约按公开文档 + fake 测试锁定，真机首验清单见 adapter 头注释** |
+| grok | native | kill ✗ / session_persist ✗ / structured_output ✓ / usage_audit ✓ | xAI OpenAI 兼容 `/v1/chat/completions`（`src/workers/grok-backend.ts`，基类 `openai-compat-backend.ts`）；同步 completion 无工具执行能力（与 ark 同类，适合文本生成/记忆验收）；usage 按 OpenAI 契约解析、缺则 unavailable（D7）；**本机无 key，契约按公开文档 + fake 测试锁定，真机首验清单见 adapter 头注释** |
+| kimi | native | kill ✗ / session_persist ✗ / structured_output ✓ / usage_audit ✓ | Moonshot OpenAI 兼容 `/v1/chat/completions`（`src/workers/kimi-backend.ts`，同一基类）；其余同 grok。**本机无 key，契约按公开文档 + fake 测试锁定** |
 
 **沙箱语义（2026-09-08 修复）**：codex 启动沙箱按任务类型选择，不再一律 `read-only`。
 `implement`/`test` 用 `-s workspace-write`（必须写工作区产物并在 worktree 内 `git add+commit`，报告 verifier 按 `commit_sha` 验收）；`review`/`plan`/`doc`/`research` 保持 `-s read-only`（只读履约）。
@@ -60,5 +62,8 @@ export interface WorkerProtocol {
 
 ## 6. 边界
 
-- 本切片（v0.2 前置）：只加 `protocol` 元数据 + 文档 + 单测；**不新增任何 adapter 实现**（Grok/Kimi/ACP 均属 v0.3，未提前实现，方案书 983/1005 行如实留白）。
+- 本切片（v0.2 前置）：只加 `protocol` 元数据 + 文档 + 单测；**不新增任何 adapter 实现**（方案书 983/1005 行如实留白）。
+- **2026-09-13 更新**：Grok / Kimi 已按本文件 §4 流程落地（`openai-compat-backend.ts` 基类 + 两个薄子类，
+  `registerVendor` 内置项同步；单测 `tests/grok-kimi.test.ts`）。ACP 仍**不排期**（§5 重估结论：现成 adapter 已由
+  Zed/JetBrains 内置，无真实场景需求前不投入）。
 - 能力位是声明不是断言：编排层仍以实际行为为准（如 codex usage_audit=false → ledger 标 unavailable，诚实化 D7）。

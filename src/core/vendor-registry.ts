@@ -38,6 +38,8 @@ const BUILT_IN_DESCRIPTORS: VendorDescriptor[] = [
   { id: 'dsh', label: 'DSH', backend: 'native', sessionTier: 'transient' },
   { id: 'ark', label: 'Ark', backend: 'headless-cli', sessionTier: 'transient' },
   { id: 'opencode', label: 'OpenCode', backend: 'headless-cli', sessionTier: 'transient' },
+  { id: 'grok', label: 'Grok', backend: 'native', sessionTier: 'transient' },
+  { id: 'kimi', label: 'Kimi', backend: 'native', sessionTier: 'transient' },
 ]
 
 export function isSafeVendorId(id: string): boolean {
@@ -46,7 +48,7 @@ export function isSafeVendorId(id: string): boolean {
 
 /**
  * 注册外部 harness 厂商。重复注册覆盖（同 id 重启/HMR 友好）；
- * 内置五家不可覆盖（防钓鱼厂商劫持内置语义）。
+ * 内置厂商不可覆盖（防钓鱼厂商劫持内置语义）。
  */
 export function registerVendor(descriptor: VendorDescriptor): void {
   if (!isSafeVendorId(descriptor.id)) {
