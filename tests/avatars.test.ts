@@ -79,12 +79,12 @@ describe('Q 版娘化形象', () => {
     expect(isChibi('')).toBe(false)
   })
 
-  it('点选词表包含全部 6 个 Q 版娘和 8 个经典动物', () => {
+  it('点选词表包含全部 7 个 Q 版娘和 8 个经典动物', () => {
     const ids = AVATAR_OPTIONS.map((a) => a.id)
     for (const id of ['cat', 'fox', 'owl', 'bear', 'rabbit', 'wolf', 'frog', 'deer']) {
       expect(ids).toContain(id)
     }
-    for (const id of ['claude', 'gpt', 'codex', 'opencode', 'ark', 'dsh']) {
+    for (const id of ['claude', 'gpt', 'codex', 'opencode', 'ark', 'dsh', 'deepseek']) {
       expect(ids).toContain(id)
     }
   })
@@ -96,11 +96,12 @@ describe('Q 版娘化形象', () => {
     expect(avatarLabel('opencode')).toBe('OpenCode 娘')
     expect(avatarLabel('ark')).toBe('ARK 娘')
     expect(avatarLabel('dsh')).toBe('DSH 娘')
+    expect(avatarLabel('deepseek')).toBe('DeepSeek 娘')
   })
 
   it('渲染出的 SVG 包含 chibi 标记、状态动作类、状态色与分层部位', () => {
     const statuses = ['idle', 'working', 'dispatched', 'negotiating', 'accepted', 'waiting_approval', 'error', 'rejected', 'paused', 'rate_limited', 'done'] as const
-    for (const id of ['claude', 'gpt', 'codex', 'opencode', 'ark', 'dsh']) {
+    for (const id of ['claude', 'gpt', 'codex', 'opencode', 'ark', 'dsh', 'deepseek']) {
       for (const status of statuses) {
         const el = Avatar(id, status, 32, true)
         const svg = renderToStaticMarkup(el)
@@ -123,7 +124,7 @@ describe('Q 版娘化形象', () => {
 })
 
 describe('Q 版娘化小尺寸降级（审计 P2：<28px 只渲染头部可读层）', () => {
-  const CHIBI_IDS = ['claude', 'gpt', 'codex', 'opencode', 'ark', 'dsh'] as const
+  const CHIBI_IDS = ['claude', 'gpt', 'codex', 'opencode', 'ark', 'dsh', 'deepseek'] as const
 
   it('小尺寸（<28px）只保留头发+脸+五官，丢弃身体/四肢/腿/道具/星', () => {
     for (const id of CHIBI_IDS) {
@@ -144,13 +145,19 @@ describe('Q 版娘化小尺寸降级（审计 P2：<28px 只渲染头部可读�
     expect(svg).not.toContain('chi-tail')
   })
 
-  it('大尺寸（≥28px）仍渲染整身', () => {
+  it('大尺寸（≥28px）仍渲染整身（deepseek 鲸娘下身是鲸尾 chi-tail 而非腿）', () => {
     for (const id of CHIBI_IDS) {
       const svg = renderToStaticMarkup(Avatar(id, 'idle', 32, false))
-      for (const part of ['chi-body', 'chi-arm-l', 'chi-leg-l']) {
+      const lowerBody = id === 'deepseek' ? 'chi-tail' : 'chi-leg-l'
+      for (const part of ['chi-body', 'chi-arm-l', lowerBody]) {
         expect(svg, `${id} 整身含 ${part}`).toContain(part)
       }
     }
+  })
+
+  it('小尺寸下 deepseek 的鲸尾也被丢弃（同属噪音层）', () => {
+    const svg = renderToStaticMarkup(Avatar('deepseek', 'idle', 18, false))
+    expect(svg).not.toContain('chi-tail')
   })
 
   it('阈值边界：28px 整身，27px 降级为头部', () => {

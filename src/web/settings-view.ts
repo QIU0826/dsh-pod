@@ -460,7 +460,7 @@ export function SettingsView(props: SettingsViewProps): ReactElement {
             createElement('span', { className: 'dsh-card-title' }, '默认员工名册'),
             createElement('button', {
               className: 'dsh-btn sm', type: 'button',
-              onClick: () => patchRoster((roster) => [...roster, { vendor: 'claude', role: 'implementer', capabilities: ['编码'], avatar: 'bear' }]),
+              onClick: () => patchRoster((roster) => [...roster, { vendor: 'claude', role: 'implementer', capabilities: ['编码'], avatar: 'claude' }]),
             }, Icon('plus', 13), '添加员工')),
           createElement('table', { className: 'dsh-roster-table', 'aria-label': '员工槽位列表' },
             createElement('thead', null,

@@ -13,7 +13,7 @@
  *   - 帧图按轨道惰性加载（miku 单轨道 4-10 帧 × ~150KB），播过的轨道进缓存。
  */
 
-import { createElement, useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react'
+import { createElement, useEffect, useRef, type CSSProperties, type ReactElement } from 'react'
 
 /** 生态资产基址（raw.githubusercontent 直读；中国大陆可达性由部署侧镜像/覆盖解决）。 */
 export const DEFAULT_PET_ASSETS_BASE =
@@ -209,8 +209,10 @@ export function preloadTrack(manifest: Frames2dManifest, track: string): void {
 }
 
 /**
- * frames2d 桌宠组件：堆叠 <img> 按 rAF 推进切换可见性（与 pet-sprite 同款零依赖方案，
- * 不用 Canvas）。轨道切换时惰性预加载。manifest 为 undefined 时不渲染（调用方回落）。
+ * frames2d 桌宠组件：单个稳定 <img>，rAF 循环里直接改写 src（零 React 重渲染/帧）。
+ * 轨道切换时惰性预加载新轨道；非循环轨道（success/fail/angry）开始播放时
+ * 同步预加载其 fallback（缺省 idle），消除播完回落的顿卡。
+ * manifest 为 undefined 时不渲染（调用方回落）。
  */
 export function Frames2dPet(props: {
   manifest: Frames2dManifest | undefined
@@ -223,9 +225,10 @@ export function Frames2dPet(props: {
 }): ReactElement | null {
   const { manifest, phase, sizePx, flip = false, shaking = false, className, style } = props
   const stateRef = useRef<Frames2dState>({ track: 'idle', index: 0, elapsed: 0, phase })
-  const [, setTick] = useState(0)
+  const imgRef = useRef<HTMLImageElement | null>(null)
   const phaseRef = useRef(phase)
   phaseRef.current = phase
+  const lastTrackRef = useRef('')
 
   useEffect(() => {
     if (manifest === undefined) return
@@ -235,9 +238,23 @@ export function Frames2dPet(props: {
       const delta = Math.min(now - last, 250)
       last = now
       const next = advanceFrames2d(stateRef.current, delta, manifest, phaseRef.current)
-      const changed = next.track !== stateRef.current.track || next.index !== stateRef.current.index
       stateRef.current = { track: next.track, index: next.index, elapsed: next.elapsed, phase: next.phase }
-      if (changed) setTick((t: number) => t + 1)
+      const track = manifest.tracks[next.track] !== undefined ? next.track : 'idle'
+      const def = manifest.tracks[track]
+      const frame = def !== undefined ? Math.min(next.index, def.frames.length - 1) : 0
+      const url = frameUrl(manifest, track, frame)
+      const img = imgRef.current
+      if (img !== null && img.getAttribute('src') !== url) {
+        if (track !== lastTrackRef.current) {
+          preloadTrack(manifest, track)
+          if (def !== undefined && def.loop === false) {
+            const fb = def.fallback !== undefined && manifest.tracks[def.fallback] !== undefined ? def.fallback : 'idle'
+            if (fb !== track) preloadTrack(manifest, fb)
+          }
+          lastTrackRef.current = track
+        }
+        img.src = url
+      }
       raf = requestAnimationFrame(step)
     }
     raf = requestAnimationFrame(step)
@@ -253,9 +270,11 @@ export function Frames2dPet(props: {
   return createElement(
     'img',
     {
+      ref: imgRef,
       src: url,
       alt: manifest.displayName,
       draggable: false,
+      decoding: 'async',
       className: (shaking ? 'dsh-pet-frames2d dsh-pet-shaking' : 'dsh-pet-frames2d') + (className !== undefined ? ' ' + className : ''),
       style: {
         width: sizePx,
