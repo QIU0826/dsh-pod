@@ -334,6 +334,7 @@ export function PetRoomView(props: PetRoomViewProps): ReactElement {
   const charVersion = usePetCharacterVersion()
   const progress = latestProgressByTask(events)
   const duels = status !== null ? reviewDuels(status) : new Map<string, 'reviewer' | 'implementer'>()
+  const assetsBase = usePetAssetsBase()
 
   // 焦点管理：开卡 → 输入框；关卡 → 焦点归还触发开卡的站位
   useEffect(() => {
@@ -439,6 +440,19 @@ export function PetRoomView(props: PetRoomViewProps): ReactElement {
       ),
     ),
     empty.length > 0 ? createElement('div', { className: 'dsh-pet-room-empty' }, empty) : null,
+    // 空房间 = 角色预告橱窗：先把「会入住哪些桌宠」亮出来（填满空间 + 秀美术 + 讲清概念）
+    // 用 idle 首帧（透明底）而非 hero.webp（白底，放深色房间会成一格格白块）
+    status !== null && status.slots.length === 0
+      ? createElement('div', { className: 'dsh-pet-showcase' },
+          ...LOCAL_PET_CATALOG.map((c) => createElement('figure', { className: 'dsh-pet-showcase-item', key: c.id },
+            createElement('img', {
+              src: assetsBase + '/' + c.id + '/idle/' + c.id.replace(/-girl$/, '') + '-pet-idle1.webp',
+              alt: c.displayName,
+              loading: 'lazy',
+            }),
+            createElement('figcaption', null, c.displayName),
+          )))
+      : null,
     createElement(
       'div',
       { className: 'dsh-pet-room-footer' },
