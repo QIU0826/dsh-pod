@@ -1,0 +1,122 @@
+{
+  "petManifestVersion": 2,
+  "id": "claude-girl",
+  "displayName": "Claude 娘",
+  "author": "dsh-pod 桌宠贴纸线",
+  "license": "MIT",
+  "renderer": "frames2d",
+  "description": "Claude 专属猫头鹰娘：橙→珊瑚粉渐变长发、头顶两根猫头鹰羽冠、棕色翅状耳、背后小翅膀与蓬松橙尾羽，深棕吊带连体衣，趴在写满笔记的硬皮本上托腮沉思；迷你分身站羽毛上挥手，黄四角星与橙羽毛环绕。",
+  "frames2d": {
+    "dir": ".",
+    "defaultFrameMs": 200,
+    "phases": {
+      "idle": "idle",
+      "thinking": "work",
+      "tool": "drag",
+      "review": "work",
+      "waiting": "idle",
+      "done": "success",
+      "failed": "fail"
+    },
+    "tracks": {
+      "idle": {
+        "frames": [
+          "claude-pet-idle1.webp",
+          "claude-pet-idle2.webp",
+          "claude-pet-idle3.webp",
+          "claude-pet-idle4.webp"
+        ],
+        "frameMs": [
+          420,
+          160,
+          420,
+          260
+        ]
+      },
+      "work": {
+        "frames": [
+          "claude-pet-work1.webp",
+          "claude-pet-work2.webp",
+          "claude-pet-work3.webp",
+          "claude-pet-work4.webp"
+        ],
+        "frameMs": [
+          200,
+          200,
+          200,
+          220
+        ]
+      },
+      "drag": {
+        "frames": [
+          "claude-pet-drag1.webp",
+          "claude-pet-drag2.webp",
+          "claude-pet-drag3.webp",
+          "claude-pet-drag4.webp"
+        ],
+        "frameMs": [
+          150,
+          170,
+          150,
+          170
+        ]
+      },
+      "success": {
+        "frames": [
+          "claude-pet-success1.webp",
+          "claude-pet-success2.webp",
+          "claude-pet-success3.webp"
+        ],
+        "frameMs": [
+          150,
+          280,
+          240
+        ],
+        "loop": false,
+        "fallback": "idle"
+      },
+      "fail": {
+        "frames": [
+          "claude-pet-fail1.webp",
+          "claude-pet-fail2.webp",
+          "claude-pet-fail3.webp"
+        ],
+        "frameMs": [
+          220,
+          320,
+          280
+        ],
+        "loop": false,
+        "fallback": "idle"
+      },
+      "angry": {
+        "frames": [
+          "claude-pet-angry1.webp",
+          "claude-pet-angry2.webp",
+          "claude-pet-angry3.webp"
+        ],
+        "frameMs": [
+          170,
+          150,
+          240
+        ],
+        "loop": false,
+        "fallback": "idle"
+      }
+    }
+  },
+  "x_dsh_pod": {
+    "generatedBy": "scripts/pet-assets-sticker.mjs",
+    "generatedAt": "2026-09-13T10:41:54.441Z",
+    "hero": "hero.webp",
+    "brand": {
+      "primary": "#F0784D",
+      "soft": "#FFB199",
+      "hud": "#FFB088",
+      "stars": [
+        "#FFD23F",
+        "#FF8A5C"
+      ]
+    }
+  }
+}

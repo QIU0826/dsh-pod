@@ -99,24 +99,35 @@ const PET_ASSET_MIME: Record<string, string> = {
   '.json': 'application/json; charset=utf-8',
 }
 
-/** 桌宠资产静态面：pet-assets/<character>/**（dataDir 内，防穿越；不存在 → 404 由回落机制兜底）。 */
-function servePetAsset(res: ServerResponse, petRoot: string, relPath: string): void {
+/**
+ * 桌宠资产目录候选（按优先级）：`<dataDir>/pet-assets`（用户覆盖）优先，
+ * 其次**随包发布的内置角色包** `<pkg>/assets/pet`（dist 的上一级 = 包根，开发态/安装态都成立）。
+ * 这是「全新 clone 也能看到品牌娘」的落点——资产入库在 assets/ 而非被 ignore 的 demo-data/。
+ */
+function petAssetRoots(dataDir: string, staticDir: string): string[] {
+  return [join(dataDir, 'pet-assets'), join(staticDir, '..', '..', 'assets', 'pet')]
+}
+
+/** 桌宠资产静态面：pet-assets/<character>/**（多级根按优先级回退；全不存在 → 404 由回落机制兜底）。 */
+function servePetAsset(res: ServerResponse, petRoots: readonly string[], relPath: string): void {
   const safe = relPath.split('/').filter((seg) => seg.length > 0 && seg !== '.' && seg !== '..')
   if (safe.length === 0) {
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
     res.end('not found')
     return
   }
-  const p = join(petRoot, ...safe)
   try {
-    if (!existsSync(p) || !statSync(p).isFile()) {
-      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
-      res.end('not found')
-      return
+    for (const root of petRoots) {
+      const p = join(root, ...safe)
+      if (existsSync(p) && statSync(p).isFile()) {
+        const ext = p.slice(p.lastIndexOf('.')).toLowerCase()
+        res.writeHead(200, { 'content-type': PET_ASSET_MIME[ext] ?? 'application/octet-stream', 'cache-control': 'no-store' })
+        res.end(readFileSync(p))
+        return
+      }
     }
-    const ext = p.slice(p.lastIndexOf('.')).toLowerCase()
-    res.writeHead(200, { 'content-type': PET_ASSET_MIME[ext] ?? 'application/octet-stream', 'cache-control': 'no-store' })
-    res.end(readFileSync(p))
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+    res.end('not found')
   } catch {
     res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
     res.end('internal error')
@@ -380,10 +391,11 @@ export function createStandaloneServer(options: StandaloneOptions = {}): Standal
       serveStatic(res, pathname, staticDir)
       return
     }
-    // 桌宠角色资产静态面（2026-09-05 多角色切片）：<dataDir>/pet-assets/<character>/**。
+    // 桌宠角色资产静态面（2026-09-05 多角色切片；2026-09-13 加随包内置根）：
+    // 解析顺序 <dataDir>/pet-assets（用户覆盖）→ <pkg>/assets/pet（随包发布的角色包）。
     // 客户端同源优先加载（生态 raw.githubusercontent 在部分网络不可达）；路径穿越有守卫。
     if (pathname.startsWith('/pet-assets/')) {
-      servePetAsset(res, join(runtime.dataDir, 'pet-assets'), pathname.slice('/pet-assets/'.length))
+      servePetAsset(res, petAssetRoots(runtime.dataDir, staticDir), pathname.slice('/pet-assets/'.length))
       return
     }
     // 员工侧 MCP 端点（2026-09-03）：pod_* 工具面（含 pod_mem_* 三件套）经 streamable HTTP

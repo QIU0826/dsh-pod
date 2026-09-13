@@ -1,0 +1,122 @@
+{
+  "petManifestVersion": 2,
+  "id": "dsh-girl",
+  "displayName": "DSH 娘",
+  "author": "dsh-pod 桌宠贴纸线",
+  "license": "MIT",
+  "renderer": "frames2d",
+  "description": "DSH 专属鲸群娘：青色渐变长发、鲸鱼鳍状小耳、发顶六边形光环，深青吊带连体衣，趴在六边形数据面板上；迷你分身趴在小鲸鱼上挥手，黄四角星与青色六边形环绕。",
+  "frames2d": {
+    "dir": ".",
+    "defaultFrameMs": 200,
+    "phases": {
+      "idle": "idle",
+      "thinking": "work",
+      "tool": "drag",
+      "review": "work",
+      "waiting": "idle",
+      "done": "success",
+      "failed": "fail"
+    },
+    "tracks": {
+      "idle": {
+        "frames": [
+          "dsh-pet-idle1.webp",
+          "dsh-pet-idle2.webp",
+          "dsh-pet-idle3.webp",
+          "dsh-pet-idle4.webp"
+        ],
+        "frameMs": [
+          420,
+          160,
+          420,
+          260
+        ]
+      },
+      "work": {
+        "frames": [
+          "dsh-pet-work1.webp",
+          "dsh-pet-work2.webp",
+          "dsh-pet-work3.webp",
+          "dsh-pet-work4.webp"
+        ],
+        "frameMs": [
+          200,
+          200,
+          200,
+          220
+        ]
+      },
+      "drag": {
+        "frames": [
+          "dsh-pet-drag1.webp",
+          "dsh-pet-drag2.webp",
+          "dsh-pet-drag3.webp",
+          "dsh-pet-drag4.webp"
+        ],
+        "frameMs": [
+          150,
+          170,
+          150,
+          170
+        ]
+      },
+      "success": {
+        "frames": [
+          "dsh-pet-success1.webp",
+          "dsh-pet-success2.webp",
+          "dsh-pet-success3.webp"
+        ],
+        "frameMs": [
+          150,
+          280,
+          240
+        ],
+        "loop": false,
+        "fallback": "idle"
+      },
+      "fail": {
+        "frames": [
+          "dsh-pet-fail1.webp",
+          "dsh-pet-fail2.webp",
+          "dsh-pet-fail3.webp"
+        ],
+        "frameMs": [
+          220,
+          320,
+          280
+        ],
+        "loop": false,
+        "fallback": "idle"
+      },
+      "angry": {
+        "frames": [
+          "dsh-pet-angry1.webp",
+          "dsh-pet-angry2.webp",
+          "dsh-pet-angry3.webp"
+        ],
+        "frameMs": [
+          170,
+          150,
+          240
+        ],
+        "loop": false,
+        "fallback": "idle"
+      }
+    }
+  },
+  "x_dsh_pod": {
+    "generatedBy": "scripts/pet-assets-sticker.mjs",
+    "generatedAt": "2026-09-13T10:41:57.423Z",
+    "hero": "hero.webp",
+    "brand": {
+      "primary": "#22D3EE",
+      "soft": "#A5EFFA",
+      "hud": "#8FE9F5",
+      "stars": [
+        "#FFD23F",
+        "#22D3EE"
+      ]
+    }
+  }
+}

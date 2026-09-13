@@ -1,0 +1,122 @@
+{
+  "petManifestVersion": 2,
+  "id": "opencode-girl",
+  "displayName": "OpenCode 娘",
+  "author": "dsh-pod 桌宠贴纸线",
+  "license": "MIT",
+  "renderer": "frames2d",
+  "description": "OpenCode 专属狐娘：深紫→靛蓝渐变长发、一根卷曲呆毛、紫色狐狸耳浅紫内耳、紫罗兰大眼半睁、蓬松紫色大尾巴白尾尖，脖子挂六边形开源徽章吊饰，黑色短款连帽衫，趴在带多个标签页的黑色终端窗口上，紫色命令行提示符与彩色输出；迷你分身从终端弹窗探头举着 >_ 小牌，黄四角星与紫色 ~/| 符号环绕。",
+  "frames2d": {
+    "dir": ".",
+    "defaultFrameMs": 200,
+    "phases": {
+      "idle": "idle",
+      "thinking": "work",
+      "tool": "drag",
+      "review": "work",
+      "waiting": "idle",
+      "done": "success",
+      "failed": "fail"
+    },
+    "tracks": {
+      "idle": {
+        "frames": [
+          "opencode-pet-idle1.webp",
+          "opencode-pet-idle2.webp",
+          "opencode-pet-idle3.webp",
+          "opencode-pet-idle4.webp"
+        ],
+        "frameMs": [
+          420,
+          160,
+          420,
+          260
+        ]
+      },
+      "work": {
+        "frames": [
+          "opencode-pet-work1.webp",
+          "opencode-pet-work2.webp",
+          "opencode-pet-work3.webp",
+          "opencode-pet-work4.webp"
+        ],
+        "frameMs": [
+          200,
+          200,
+          200,
+          220
+        ]
+      },
+      "drag": {
+        "frames": [
+          "opencode-pet-drag1.webp",
+          "opencode-pet-drag2.webp",
+          "opencode-pet-drag3.webp",
+          "opencode-pet-drag4.webp"
+        ],
+        "frameMs": [
+          150,
+          170,
+          150,
+          170
+        ]
+      },
+      "success": {
+        "frames": [
+          "opencode-pet-success1.webp",
+          "opencode-pet-success2.webp",
+          "opencode-pet-success3.webp"
+        ],
+        "frameMs": [
+          150,
+          280,
+          240
+        ],
+        "loop": false,
+        "fallback": "idle"
+      },
+      "fail": {
+        "frames": [
+          "opencode-pet-fail1.webp",
+          "opencode-pet-fail2.webp",
+          "opencode-pet-fail3.webp"
+        ],
+        "frameMs": [
+          220,
+          320,
+          280
+        ],
+        "loop": false,
+        "fallback": "idle"
+      },
+      "angry": {
+        "frames": [
+          "opencode-pet-angry1.webp",
+          "opencode-pet-angry2.webp",
+          "opencode-pet-angry3.webp"
+        ],
+        "frameMs": [
+          170,
+          150,
+          240
+        ],
+        "loop": false,
+        "fallback": "idle"
+      }
+    }
+  },
+  "x_dsh_pod": {
+    "generatedBy": "scripts/pet-assets-sticker.mjs",
+    "generatedAt": "2026-09-13T10:41:55.473Z",
+    "hero": "hero.webp",
+    "brand": {
+      "primary": "#7C5CFC",
+      "soft": "#B3A6FF",
+      "hud": "#B7A8FF",
+      "stars": [
+        "#FFD23F",
+        "#9B8CFF"
+      ]
+    }
+  }
+}

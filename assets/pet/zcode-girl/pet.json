@@ -1,0 +1,122 @@
+{
+  "petManifestVersion": 2,
+  "id": "zcode-girl",
+  "displayName": "Zcode 娘",
+  "author": "dsh-pod 桌宠贴纸线",
+  "license": "MIT",
+  "renderer": "frames2d",
+  "description": "Zcode/GLM 专属终端娘：智谱蓝渐变长发、一根呆毛、左侧终端窗口发饰，深蓝科技上衣，趴在黑色终端窗口上（蓝色提示符与彩色输出）；迷你分身戴圆框眼镜坐在终端窗口里探头，黄四角星与蓝色 {;} >_ 符号环绕。",
+  "frames2d": {
+    "dir": ".",
+    "defaultFrameMs": 200,
+    "phases": {
+      "idle": "idle",
+      "thinking": "work",
+      "tool": "drag",
+      "review": "work",
+      "waiting": "idle",
+      "done": "success",
+      "failed": "fail"
+    },
+    "tracks": {
+      "idle": {
+        "frames": [
+          "zcode-pet-idle1.webp",
+          "zcode-pet-idle2.webp",
+          "zcode-pet-idle3.webp",
+          "zcode-pet-idle4.webp"
+        ],
+        "frameMs": [
+          420,
+          160,
+          420,
+          260
+        ]
+      },
+      "work": {
+        "frames": [
+          "zcode-pet-work1.webp",
+          "zcode-pet-work2.webp",
+          "zcode-pet-work3.webp",
+          "zcode-pet-work4.webp"
+        ],
+        "frameMs": [
+          200,
+          200,
+          200,
+          220
+        ]
+      },
+      "drag": {
+        "frames": [
+          "zcode-pet-drag1.webp",
+          "zcode-pet-drag2.webp",
+          "zcode-pet-drag3.webp",
+          "zcode-pet-drag4.webp"
+        ],
+        "frameMs": [
+          150,
+          170,
+          150,
+          170
+        ]
+      },
+      "success": {
+        "frames": [
+          "zcode-pet-success1.webp",
+          "zcode-pet-success2.webp",
+          "zcode-pet-success3.webp"
+        ],
+        "frameMs": [
+          150,
+          280,
+          240
+        ],
+        "loop": false,
+        "fallback": "idle"
+      },
+      "fail": {
+        "frames": [
+          "zcode-pet-fail1.webp",
+          "zcode-pet-fail2.webp",
+          "zcode-pet-fail3.webp"
+        ],
+        "frameMs": [
+          220,
+          320,
+          280
+        ],
+        "loop": false,
+        "fallback": "idle"
+      },
+      "angry": {
+        "frames": [
+          "zcode-pet-angry1.webp",
+          "zcode-pet-angry2.webp",
+          "zcode-pet-angry3.webp"
+        ],
+        "frameMs": [
+          170,
+          150,
+          240
+        ],
+        "loop": false,
+        "fallback": "idle"
+      }
+    }
+  },
+  "x_dsh_pod": {
+    "generatedBy": "scripts/pet-assets-sticker.mjs",
+    "generatedAt": "2026-09-13T10:41:56.259Z",
+    "hero": "hero.webp",
+    "brand": {
+      "primary": "#2E6BE6",
+      "soft": "#8FC0FF",
+      "hud": "#9BC4FF",
+      "stars": [
+        "#FFD23F",
+        "#5C9BFF"
+      ]
+    }
+  }
+}

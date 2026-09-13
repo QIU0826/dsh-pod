@@ -34,7 +34,7 @@ import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 
-const OUT = process.env.POD_PET_ASSETS_OUT ?? 'demo-data/pet-assets'
+const OUT = process.env.POD_PET_ASSETS_OUT ?? 'assets/pet'
 const SRC = process.env.POD_PET_HERO_SRC ?? join(tmpdir(), 'dsh-pod-pet-heroes')
 const IMG_API = 'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt='
 const STYLE_TAIL =
