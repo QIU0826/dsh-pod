@@ -305,23 +305,30 @@ ${oneEye(LX, 1)}${oneEye(RX, -1)}
 <ellipse cx="${cx}" cy="${cy + 69}" rx="11.5" ry="9" fill="#A84A52"/>
 <ellipse cx="${cx + 1}" cy="${cy + 73}" rx="6.5" ry="3.8" fill="#F0879A"/>`
 }
-/** 托腮双手：袖管 + 前臂 + 拳头（下巴正下方）。 */
+/** 袖口/拳头暗部（托腮双手：袖管 + 前臂 + 拳头）。 */
 function armsArt(sleeve, skin = SKIN, line = '#B98A75') {
   return `
 <path d="M326 492 Q336 456 352 436" stroke="${sleeve}" stroke-width="26" fill="none" stroke-linecap="round"/>
 <path d="M474 492 Q464 456 448 436" stroke="${sleeve}" stroke-width="26" fill="none" stroke-linecap="round"/>
+<path d="M326 492 Q336 456 352 436" stroke="#000000" stroke-width="26" fill="none" stroke-linecap="round" opacity=".12" transform="translate(9 0)"/>
+<path d="M474 492 Q464 456 448 436" stroke="#000000" stroke-width="26" fill="none" stroke-linecap="round" opacity=".12" transform="translate(-9 0)"/>
 <path d="M340 470 Q346 448 354 436" stroke="${skin}" stroke-width="17" fill="none" stroke-linecap="round"/>
 <path d="M460 470 Q454 448 446 436" stroke="${skin}" stroke-width="17" fill="none" stroke-linecap="round"/>
 <circle cx="352" cy="430" r="23" fill="${skin}" stroke="${line}" stroke-width="3.5"/>
 <circle cx="448" cy="430" r="23" fill="${skin}" stroke="${line}" stroke-width="3.5"/>
-<path d="M343 422 Q350 418 358 421 M442 421 Q450 418 457 422" stroke="${line}" stroke-width="2.6" fill="none" stroke-linecap="round" opacity=".7"/>`
+<path d="M343 422 Q350 418 358 421 M442 421 Q450 418 457 422" stroke="${line}" stroke-width="2.6" fill="none" stroke-linecap="round" opacity=".7"/>
+<path d="M340 444 Q352 452 364 444 M436 444 Q448 452 460 444" stroke="${line}" stroke-width="2.4" fill="none" stroke-linecap="round" opacity=".45"/>`
 }
-/** 长发后背（len=long 垂到道具）/短发（codex）。 */
+/** 长发后背（len=long 垂到道具）/短发（codex）。带一道柔和高光——平涂加质感而不脏。 */
 function backHairArt(line, gradId, len) {
+  const glossLong = `<path d="M338 206 Q320 292 342 396" stroke="#FFFFFF" stroke-width="16" fill="none" stroke-linecap="round" opacity=".2"/>
+<path d="M462 206 Q480 292 458 396" stroke="#FFFFFF" stroke-width="16" fill="none" stroke-linecap="round" opacity=".2"/>`
+  const glossShort = `<path d="M340 214 Q328 268 344 316" stroke="#FFFFFF" stroke-width="13" fill="none" stroke-linecap="round" opacity=".2"/>
+<path d="M460 214 Q472 268 456 316" stroke="#FFFFFF" stroke-width="13" fill="none" stroke-linecap="round" opacity=".2"/>`
   if (len === 'short') {
-    return `<path d="M288 212 Q286 128 400 108 Q514 128 512 212 Q540 282 518 352 Q480 330 400 330 Q320 330 282 352 Q260 282 288 212 Z" fill="url(#${gradId})" stroke="${line}" stroke-width="5" stroke-linejoin="round"/>`
+    return `<path d="M288 212 Q286 128 400 108 Q514 128 512 212 Q540 282 518 352 Q480 330 400 330 Q320 330 282 352 Q260 282 288 212 Z" fill="url(#${gradId})" stroke="${line}" stroke-width="5" stroke-linejoin="round"/>${glossShort}`
   }
-  return `<path d="M302 214 Q300 128 400 108 Q500 128 498 214 Q538 296 526 394 Q516 468 400 476 Q284 468 274 394 Q262 296 302 214 Z" fill="url(#${gradId})" fill-opacity=".96" stroke="${line}" stroke-width="5" stroke-linejoin="round"/>`
+  return `<path d="M302 214 Q300 128 400 108 Q500 128 498 214 Q538 296 526 394 Q516 468 400 476 Q284 468 274 394 Q262 296 302 214 Z" fill="url(#${gradId})" fill-opacity=".96" stroke="${line}" stroke-width="5" stroke-linejoin="round"/>${glossLong}`
 }
 function bangsArt(line, fill, longLocks = true) {
   const locks = longLocks
@@ -330,6 +337,7 @@ function bangsArt(line, fill, longLocks = true) {
     : ''
   return `
 <path d="M290 242 Q286 206 318 192 Q342 222 368 196 Q388 220 406 196 Q428 224 450 196 Q480 226 508 196 Q518 220 510 252 Q472 238 442 252 Q412 232 382 254 Q352 238 322 254 Q306 254 290 242 Z" fill="${fill}" stroke="${line}" stroke-width="5" stroke-linejoin="round"/>
+<path d="M292 246 Q400 270 508 246 L508 259 Q400 284 292 259 Z" fill="#000000" opacity=".07"/>
 ${locks}`
 }
 function sceneWrap(defs, inner) {
