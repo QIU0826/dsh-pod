@@ -15,3 +15,7 @@ _real_e2e.log
 
 # hidden A/B judge (added for harness experiment)
 .csv-abi-oracle/
+
+# memory smoke 临时数据（scripts/memory-ollama-smoke.mjs；Windows 句柄延迟释放时残留）
+.mem-smoke-*/
+.mem-test-data/
